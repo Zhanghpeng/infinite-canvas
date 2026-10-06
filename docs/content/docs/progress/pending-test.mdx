@@ -8,12 +8,14 @@ description: Implemented changes that still need manual verification
 The current release needs manual verification in these areas:
 
 - MiniMax H3 Video Face Refine Workflow Verification (MiniMax H3 视频人脸修复工作流验证):
-  - **Toolbar Entry & Node Derivation (悬浮工具栏入口与节点派生)**:
-    - 鼠标悬停在已包含视频的节点上，验证工具栏中出现「人脸修复」按钮（图标为 SmilePlus）；
-    - 点击「人脸修复」，验证在原视频右侧派生出新视频节点，标题为 `人脸修复 - 原视频名称`，并建立指向新节点的连线；
-  - **Complete State Auto-Execution (完备状态自动生成验证)**:
-    - 原视频已连接角色参考图片且包含提示词时点击「人脸修复」；
-    - 验证新节点自动建立与参考图的输入连线，新节点进入 Loading 态并直接在后台发起 ComfyUI 异步生成；
+  - **Toolbar Entry & Host Channel Selection (悬浮工具栏入口与执行主机选择)**:
+    - 鼠标悬停在已包含视频的节点上，点击工具栏中的「人脸修复」按钮（SmilePlus 图标）；
+    - 验证弹出「视频人脸修复」模态框，展示「执行主机（渠道）」下拉框（包含主机名、ComfyUI 服务地址及当前默认标记）；
+    - 验证支持选择工作流（默认选中该渠道的人脸修复工作流），展示「角色参考图」关联状态与提示词编辑框；
+    - 切换执行主机后，工作流列表动态联动刷新；点击「开始人脸修复」提交执行。
+  - **Node Derivation & Execution Flow (节点派生与执行流)**:
+    - 确认弹窗后，验证在原视频右侧派生出新视频节点，标题为 `人脸修复 - 原视频名称`，绑定的 channelId 与 workflowId 严格遵循弹窗所选；
+    - 原视频已连接角色参考图片且包含提示词时，新节点自动进入 Loading 态并在后台向选定主机发起 ComfyUI 异步生成；
     - 任务完成后视频正常播放并展示修复结果；
   - **Missing State Guidance & Manual Trigger (缺失状态引导与手动触发验证)**:
     - 原视频未连接参考图片或无提示词时点击「人脸修复」；

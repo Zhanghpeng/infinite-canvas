@@ -30,6 +30,7 @@ import { CanvasNodeCropDialog, type CanvasImageCropRect } from "@/components/can
 import { CanvasNodeMaskEditDialog, type CanvasImageMaskEditPayload } from "@/components/canvas/canvas-node-mask-edit-dialog";
 import { CanvasNodeSplitDialog, type CanvasImageSplitParams } from "@/components/canvas/canvas-node-split-dialog";
 import { CanvasNodeUpscaleDialog, type CanvasImageUpscaleParams } from "@/components/canvas/canvas-node-upscale-dialog";
+import { CanvasFaceRefineModal } from "@/components/canvas/canvas-face-refine-modal";
 import { buildNodeGenerationContext, buildNodeGenerationInputs, buildNodeResponseMessages, hydrateNodeGenerationContext, type NodeGenerationContext, type NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import { CanvasNodeHoverToolbar, CanvasNodeInfoModal } from "@/components/canvas/canvas-node-hover-toolbar";
 import { InfiniteCanvas } from "@/components/canvas/infinite-canvas";
@@ -267,6 +268,7 @@ function InfiniteCanvasPage() {
     const [maskEditNodeId, setMaskEditNodeId] = useState<string | null>(null);
     const [splitNodeId, setSplitNodeId] = useState<string | null>(null);
     const [upscaleNodeId, setUpscaleNodeId] = useState<string | null>(null);
+    const [faceRefineNode, setFaceRefineNode] = useState<CanvasNodeData | null>(null);
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
     const [previewImageId, setPreviewImageId] = useState<string | null>(null);
     const [titleEditing, setTitleEditing] = useState(false);
@@ -2141,8 +2143,40 @@ function InfiniteCanvasPage() {
         [effectiveConfig.model, effectiveConfig.textModel, message, t],
     );
 
-    const handleVideoFaceRefine = useCallback(
-        async (node: CanvasNodeData) => {
+    const faceRefineUpstreamImages = useMemo(() => {
+        if (!faceRefineNode) return [];
+        const directImageNodes = connectionsRef.current
+            .filter((conn) => conn.toNodeId === faceRefineNode.id && (conn.kind === "input" || conn.kind === "lineage"))
+            .map((conn) => nodesRef.current.find((n) => n.id === conn.fromNodeId))
+            .filter((n): n is CanvasNodeData => Boolean(n && n.type === CanvasNodeType.Image && n.metadata?.content));
+
+        const lineageParentNodes = connectionsRef.current
+            .filter((conn) => conn.toNodeId === faceRefineNode.id && conn.kind === "lineage")
+            .map((conn) => nodesRef.current.find((n) => n.id === conn.fromNodeId))
+            .filter((n): n is CanvasNodeData => Boolean(n));
+
+        const parentImageNodes: CanvasNodeData[] = [];
+        for (const parent of lineageParentNodes) {
+            const imgs = connectionsRef.current
+                .filter((conn) => conn.toNodeId === parent.id && (conn.kind === "input" || conn.kind === "lineage"))
+                .map((conn) => nodesRef.current.find((n) => n.id === conn.fromNodeId))
+                .filter((n): n is CanvasNodeData => Boolean(n && n.type === CanvasNodeType.Image && n.metadata?.content));
+            parentImageNodes.push(...imgs);
+        }
+
+        const seen = new Set<string>();
+        const list: CanvasNodeData[] = [];
+        for (const img of [...directImageNodes, ...parentImageNodes]) {
+            if (!seen.has(img.id)) {
+                seen.add(img.id);
+                list.push(img);
+            }
+        }
+        return list;
+    }, [faceRefineNode]);
+
+    const handleOpenFaceRefineModal = useCallback(
+        (node: CanvasNodeData) => {
             setToolbarNodeId(null);
             setHoveredNodeId(null);
             setContextMenu(null);
@@ -2152,16 +2186,14 @@ function InfiniteCanvasPage() {
                 return;
             }
 
-            const channel = resolveModelChannel(effectiveConfig, node.metadata?.model || effectiveConfig.videoModel || effectiveConfig.model);
-            const faceRefineWorkflow = getDefaultWorkflow(channel, "faceRefine") || getDefaultComfyWorkflowItems(channel).find((w) => w.category === "faceRefine");
-            if (!faceRefineWorkflow) {
-                message.warning("当前渠道未配置人脸修复工作流，请在渠道设置中配置");
-                return;
-            }
-            const channelId = channel.id;
-            const workflowId = faceRefineWorkflow.id;
+            setFaceRefineNode(node);
+        },
+        [message],
+    );
 
-            const prompt = (node.metadata?.prompt || node.metadata?.effectivePrompt || "").trim();
+    const handleExecuteFaceRefine = useCallback(
+        async (node: CanvasNodeData, options: { channelId: string; workflowId: string; prompt: string }) => {
+            const { channelId, workflowId, prompt } = options;
 
             // 1. 直连到当前视频节点的图片节点
             const directImageNodes = connectionsRef.current
@@ -4220,7 +4252,7 @@ function InfiniteCanvasPage() {
                     onUpscale={(node) => setUpscaleNodeId(node.id)}
                     onViewImage={handleNodeViewImage}
                     onReversePrompt={createImageReversePromptNodes}
-                    onFaceRefine={handleVideoFaceRefine}
+                    onFaceRefine={handleOpenFaceRefineModal}
                     onRetry={handleNodeRetry}
                     onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}
                     onDelete={(node) => deleteNodes(new Set([node.id]))}
@@ -4330,6 +4362,18 @@ function InfiniteCanvasPage() {
                 {upscaleNode?.metadata?.content ? (
                     <CanvasNodeUpscaleDialog dataUrl={upscaleNode.metadata.content} open={Boolean(upscaleNode)} onClose={() => setUpscaleNodeId(null)} onConfirm={(params) => void upscaleImageNode(upscaleNode!, params)} />
                 ) : null}
+
+                <CanvasFaceRefineModal
+                    open={Boolean(faceRefineNode)}
+                    node={faceRefineNode}
+                    upstreamImageNodes={faceRefineUpstreamImages}
+                    onClose={() => setFaceRefineNode(null)}
+                    onConfirm={(payload) => {
+                        if (faceRefineNode) {
+                            void handleExecuteFaceRefine(faceRefineNode, payload);
+                        }
+                    }}
+                />
 
                 <Modal
                     title={previewNode?.type === CanvasNodeType.Video ? t("canvas.projectPage.videoDetails") : t("canvas.projectPage.imageDetails")}
