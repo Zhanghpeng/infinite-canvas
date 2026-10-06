@@ -77,6 +77,7 @@ export function CanvasNodeHoverToolbar({
     onAngle,
     onViewImage,
     onReversePrompt,
+    onFaceRefine,
     onRetry,
     onToggleFreeResize,
     onDelete,

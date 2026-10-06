@@ -9,7 +9,7 @@ import { requestEdit, requestGeneration, requestImageQuestion } from "@/services
 import { generateRandomSeed, requestComfyuiImage } from "@/services/api/comfyui";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
-import { defaultConfig, findWorkflow, getDefaultWorkflow, inpaintModelOptions, resolveModelChannel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, findWorkflow, getDefaultComfyWorkflowItems, getDefaultWorkflow, inpaintModelOptions, resolveModelChannel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { uploadImage } from "@/services/image-storage";
 import { uploadMediaFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
@@ -2143,24 +2143,59 @@ function InfiniteCanvasPage() {
 
     const handleVideoFaceRefine = useCallback(
         async (node: CanvasNodeData) => {
+            setToolbarNodeId(null);
+            setHoveredNodeId(null);
+            setContextMenu(null);
+
             if (node.type !== CanvasNodeType.Video || !node.metadata?.content) {
                 message.warning("请选择已包含有效视频的视频节点");
                 return;
             }
 
             const channel = resolveModelChannel(effectiveConfig, node.metadata?.model || effectiveConfig.videoModel || effectiveConfig.model);
-            const faceRefineWorkflow = getDefaultWorkflow(channel, "faceRefine");
+            const faceRefineWorkflow = getDefaultWorkflow(channel, "faceRefine") || getDefaultComfyWorkflowItems(channel).find((w) => w.category === "faceRefine");
+            if (!faceRefineWorkflow) {
+                message.warning("当前渠道未配置人脸修复工作流，请在渠道设置中配置");
+                return;
+            }
             const channelId = channel.id;
-            const workflowId = faceRefineWorkflow?.id;
+            const workflowId = faceRefineWorkflow.id;
 
             const prompt = (node.metadata?.prompt || node.metadata?.effectivePrompt || "").trim();
 
-            const upstreamImageNodes = connectionsRef.current
+            // 1. 直连到当前视频节点的图片节点
+            const directImageNodes = connectionsRef.current
                 .filter((conn) => conn.toNodeId === node.id && (conn.kind === "input" || conn.kind === "lineage"))
                 .map((conn) => nodesRef.current.find((n) => n.id === conn.fromNodeId))
                 .filter((n): n is CanvasNodeData => Boolean(n && n.type === CanvasNodeType.Image && n.metadata?.content));
 
-            const hasReferences = upstreamImageNodes.length > 0 || (Array.isArray(node.metadata?.references) && node.metadata.references.length > 0);
+            // 2. 当前视频的上游来源节点（如生成该视频的 ConfigNode）所连接的图片节点
+            const lineageParentNodes = connectionsRef.current
+                .filter((conn) => conn.toNodeId === node.id && conn.kind === "lineage")
+                .map((conn) => nodesRef.current.find((n) => n.id === conn.fromNodeId))
+                .filter((n): n is CanvasNodeData => Boolean(n));
+
+            const parentImageNodes: CanvasNodeData[] = [];
+            for (const parent of lineageParentNodes) {
+                const imgs = connectionsRef.current
+                    .filter((conn) => conn.toNodeId === parent.id && (conn.kind === "input" || conn.kind === "lineage"))
+                    .map((conn) => nodesRef.current.find((n) => n.id === conn.fromNodeId))
+                    .filter((n): n is CanvasNodeData => Boolean(n && n.type === CanvasNodeType.Image && n.metadata?.content));
+                parentImageNodes.push(...imgs);
+            }
+
+            // 合并去重图片节点
+            const seenImageNodeIds = new Set<string>();
+            const upstreamImageNodes: CanvasNodeData[] = [];
+            for (const img of [...directImageNodes, ...parentImageNodes]) {
+                if (!seenImageNodeIds.has(img.id)) {
+                    seenImageNodeIds.add(img.id);
+                    upstreamImageNodes.push(img);
+                }
+            }
+
+            const metadataReferences = Array.isArray(node.metadata?.references) ? node.metadata.references : [];
+            const hasReferences = upstreamImageNodes.length > 0 || metadataReferences.length > 0;
             const isComplete = Boolean(hasReferences && prompt);
 
             const childId = nanoid();
@@ -2196,17 +2231,30 @@ function InfiniteCanvasPage() {
                 newConnections.push({ id: nanoid(), fromNodeId: imgNode.id, toNodeId: childId, kind: "input" });
             }
 
-            setNodes((prev) => [...prev, newVideoNode]);
-            setConnections((prev) => [...prev, ...newConnections]);
+            const nextNodes = [...nodesRef.current, newVideoNode];
+            const nextConnections = [...connectionsRef.current, ...newConnections];
+            nodesRef.current = nextNodes;
+            connectionsRef.current = nextConnections;
+
+            setNodes(nextNodes);
+            setConnections(nextConnections);
             setSelectedNodeIds(new Set([childId]));
             setSelectedConnectionId(null);
+            focusNode(childId);
 
             if (!isComplete) {
-                message.info("已创建人脸修复节点，请连接角色参考图片并完善提示词");
+                if (!prompt && !hasReferences) {
+                    message.info("已创建人脸修复节点，请连接角色参考图片并完善提示词");
+                } else if (!hasReferences) {
+                    message.info("已创建人脸修复节点，请连接角色参考图片");
+                } else {
+                    message.info("已创建人脸修复节点，请完善提示词");
+                }
                 setDialogNodeId(childId);
                 return;
             }
 
+            message.loading({ content: "正在提交 MiniMax H3 人脸修复任务...", key: `face-refine-${childId}`, duration: 2 });
             const controller = startGenerationRequest(childId, node.id, childId);
             try {
                 let referenceImages: ReferenceImage[] = [];
@@ -2220,8 +2268,8 @@ function InfiniteCanvasPage() {
                         dataUrl: imgNode.metadata?.content || "",
                         url: imgNode.metadata?.content || "",
                     }));
-                } else if (Array.isArray(node.metadata?.references)) {
-                    referenceImages = node.metadata.references.map((ref: any, idx: number) => ({
+                } else if (metadataReferences.length > 0) {
+                    referenceImages = metadataReferences.map((ref: any, idx: number) => ({
                         id: ref?.id || nanoid(),
                         name: ref?.name || `ref_${idx + 1}.png`,
                         type: "image/png",
@@ -2276,10 +2324,11 @@ function InfiniteCanvasPage() {
                             : item,
                     ),
                 );
+                message.success({ content: "人脸修复生成完成", key: `face-refine-${childId}` });
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "人脸修复生成失败";
-                message.error(errorDetails);
+                message.error({ content: errorDetails, key: `face-refine-${childId}` });
                 setNodes((prev) =>
                     prev.map((item) =>
                         item.id === childId
@@ -2291,7 +2340,7 @@ function InfiniteCanvasPage() {
                 finishGenerationRequest(childId, controller);
             }
         },
-        [effectiveConfig, finishGenerationRequest, message, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, focusNode, message, startGenerationRequest],
     );
 
     const cropImageNode = useCallback(async (node: CanvasNodeData, crop: CanvasImageCropRect) => {

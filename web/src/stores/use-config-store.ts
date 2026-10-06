@@ -553,9 +553,20 @@ export function getChannelWorkflows(channel?: ModelChannel | null, category?: Wo
     return list.filter((wf) => wf.category === category);
 }
 
+export { getDefaultComfyWorkflowItems } from "@/services/api/comfyui-default-workflows";
+
 export function getDefaultWorkflow(channel?: ModelChannel | null, category?: WorkflowCategory | WorkflowCategory[]): ComfyWorkflowItem | undefined {
     const list = getChannelWorkflows(channel, category);
-    return list.find((wf) => wf.isDefault) || list[0];
+    const item = list.find((wf) => wf.isDefault) || list[0];
+    if (item) return item;
+    if (category) {
+        const defaults = getDefaultComfyWorkflowItems(channel);
+        if (Array.isArray(category)) {
+            return defaults.find((wf) => category.includes(wf.category));
+        }
+        return defaults.find((wf) => wf.category === category);
+    }
+    return undefined;
 }
 
 export function findWorkflow(config: AiConfig, channelId?: string, workflowId?: string, category?: WorkflowCategory | WorkflowCategory[]): ComfyWorkflowItem | undefined {
@@ -565,6 +576,8 @@ export function findWorkflow(config: AiConfig, channelId?: string, workflowId?: 
     if (workflowId) {
         const found = list.find((wf) => wf.id === workflowId);
         if (found) return found;
+        const defaultFallback = getDefaultComfyWorkflowItems(channel).find((wf) => wf.id === workflowId);
+        if (defaultFallback) return defaultFallback;
     }
     if (category) {
         return getDefaultWorkflow(channel, category);
