@@ -2081,14 +2081,41 @@ export function applyVideoBindings(
         }
     }
 
+    const hasExternalLiveConsumers = (targetId: string, currentRemoved: Set<string>): boolean => {
+        for (const [otherId, otherNode] of Object.entries(cloned)) {
+            if (currentRemoved.has(otherId)) continue;
+            if (typeof otherNode !== "object" || otherNode === null) continue;
+            const otherRec = otherNode as NodeRecord;
+            for (const val of Object.values(otherRec.inputs || {})) {
+                if (Array.isArray(val) && String(val[0]) === targetId) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
     // Pass 2: 按主节点输入键名（ref_images.ref_image_N / ref_videos.ref_video_N / ref_audios.ref_audio_N）
     // 反向追溯未指派插槽的上游节点，解决 LoadVideo/LoadAudio 无 ref 标题无法被 Pass 1 捕获的问题
-    for (const node of Object.values(cloned)) {
+    for (const [consumerId, node] of Object.entries(cloned)) {
+        if (removedNodeIds.has(consumerId)) continue;
         if (typeof node !== "object" || node === null) continue;
         const record = node as NodeRecord;
         if (!record.inputs) continue;
         for (const [inputKey, val] of Object.entries(record.inputs)) {
             if (!Array.isArray(val)) continue;
+            const upstreamId = String(val[0]);
+            const upstreamNode = cloned[upstreamId] as NodeRecord | undefined;
+            if (!upstreamNode) continue;
+
+            // 若上游是 GetVideoComponents 且其输入的视频节点存活有效，则属于有效视频的组件提取，绝不抹除
+            if (upstreamNode.class_type === "GetVideoComponents") {
+                const videoInput = upstreamNode.inputs?.video;
+                if (Array.isArray(videoInput) && !removedNodeIds.has(String(videoInput[0]))) {
+                    continue;
+                }
+            }
+
             let shouldPrune = false;
             const imgIn = /^ref_images\.ref_image_(\d+)$/.exec(inputKey);
             if (imgIn && Number(imgIn[1]) >= assignedImageCount) shouldPrune = true;
@@ -2096,7 +2123,13 @@ export function applyVideoBindings(
             if (vidIn && Number(vidIn[1]) >= assignedVideoCount) shouldPrune = true;
             const audIn = /^ref_audios\.ref_audio_(\d+)$/.exec(inputKey);
             if (audIn && Number(audIn[1]) >= assignedAudioCount) shouldPrune = true;
-            if (shouldPrune) removedNodeIds.add(String(val[0]));
+
+            if (shouldPrune) {
+                delete record.inputs[inputKey];
+                if (!hasExternalLiveConsumers(upstreamId, removedNodeIds)) {
+                    removedNodeIds.add(upstreamId);
+                }
+            }
         }
     }
 
