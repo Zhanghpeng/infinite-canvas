@@ -496,6 +496,8 @@ export default {
             i2iWorkflowDesc: "在画布连入参考图进行单图编辑、风格参考或多图融合时调用此工作流。",
             inpaintWorkflowTitle: "局部编辑工作流 (Inpaint)",
             inpaintWorkflowDesc: "在画布涂抹蒙版遮罩并点击「AI 修改」时调用此工作流。",
+            faceRefineWorkflowTitle: "视频人脸修复工作流 (Face Refine)",
+            faceRefineWorkflowDesc: "基于角色参考图对视频进行人脸/小脸追踪精修时调用此工作流。",
             textWorkflowTitle: "文本生成 / 反推工作流 (LLM)",
             textWorkflowDesc: "在画布进行文本生成或从图片反推提示词时调用此工作流。",
             videoWorkflowTitle: "全能参考视频工作流 (Video / Omni)",

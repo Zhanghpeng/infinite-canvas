@@ -6,10 +6,10 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
-import { requestComfyuiImage } from "@/services/api/comfyui";
+import { generateRandomSeed, requestComfyuiImage } from "@/services/api/comfyui";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
-import { defaultConfig, findWorkflow, inpaintModelOptions, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { defaultConfig, findWorkflow, getDefaultWorkflow, inpaintModelOptions, resolveModelChannel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { uploadImage } from "@/services/image-storage";
 import { uploadMediaFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
@@ -2141,6 +2141,159 @@ function InfiniteCanvasPage() {
         [effectiveConfig.model, effectiveConfig.textModel, message, t],
     );
 
+    const handleVideoFaceRefine = useCallback(
+        async (node: CanvasNodeData) => {
+            if (node.type !== CanvasNodeType.Video || !node.metadata?.content) {
+                message.warning("请选择已包含有效视频的视频节点");
+                return;
+            }
+
+            const channel = resolveModelChannel(effectiveConfig, node.metadata?.model || effectiveConfig.videoModel || effectiveConfig.model);
+            const faceRefineWorkflow = getDefaultWorkflow(channel, "faceRefine");
+            const channelId = channel.id;
+            const workflowId = faceRefineWorkflow?.id;
+
+            const prompt = (node.metadata?.prompt || node.metadata?.effectivePrompt || "").trim();
+
+            const upstreamImageNodes = connectionsRef.current
+                .filter((conn) => conn.toNodeId === node.id && (conn.kind === "input" || conn.kind === "lineage"))
+                .map((conn) => nodesRef.current.find((n) => n.id === conn.fromNodeId))
+                .filter((n): n is CanvasNodeData => Boolean(n && n.type === CanvasNodeType.Image && n.metadata?.content));
+
+            const hasReferences = upstreamImageNodes.length > 0 || (Array.isArray(node.metadata?.references) && node.metadata.references.length > 0);
+            const isComplete = Boolean(hasReferences && prompt);
+
+            const childId = nanoid();
+            const childTitle = `人脸修复 - ${node.title || "视频"}`;
+            const childPos = { x: node.position.x + node.width + 96, y: node.position.y };
+
+            const newVideoNode: CanvasNodeData = {
+                id: childId,
+                type: CanvasNodeType.Video,
+                title: childTitle,
+                position: childPos,
+                width: node.width,
+                height: node.height,
+                metadata: {
+                    ...cloneNodeMetadata(node.metadata),
+                    status: isComplete ? NODE_STATUS_LOADING : undefined,
+                    prompt,
+                    effectivePrompt: prompt,
+                    channelId,
+                    workflowId,
+                    content: undefined,
+                    storageKey: undefined,
+                    jobId: undefined,
+                    isTimeout: undefined,
+                    errorDetails: undefined,
+                },
+            };
+
+            const newConnections: CanvasConnection[] = [
+                { id: nanoid(), fromNodeId: node.id, toNodeId: childId, kind: "lineage" },
+            ];
+            for (const imgNode of upstreamImageNodes) {
+                newConnections.push({ id: nanoid(), fromNodeId: imgNode.id, toNodeId: childId, kind: "input" });
+            }
+
+            setNodes((prev) => [...prev, newVideoNode]);
+            setConnections((prev) => [...prev, ...newConnections]);
+            setSelectedNodeIds(new Set([childId]));
+            setSelectedConnectionId(null);
+
+            if (!isComplete) {
+                message.info("已创建人脸修复节点，请连接角色参考图片并完善提示词");
+                setDialogNodeId(childId);
+                return;
+            }
+
+            const controller = startGenerationRequest(childId, node.id, childId);
+            try {
+                let referenceImages: ReferenceImage[] = [];
+                if (upstreamImageNodes.length > 0) {
+                    referenceImages = upstreamImageNodes.map((imgNode) => ({
+                        id: imgNode.id,
+                        name: imgNode.title || "image.png",
+                        type: "image/png",
+                        width: imgNode.width,
+                        height: imgNode.height,
+                        dataUrl: imgNode.metadata?.content || "",
+                        url: imgNode.metadata?.content || "",
+                    }));
+                } else if (Array.isArray(node.metadata?.references)) {
+                    referenceImages = node.metadata.references.map((ref: any, idx: number) => ({
+                        id: ref?.id || nanoid(),
+                        name: ref?.name || `ref_${idx + 1}.png`,
+                        type: "image/png",
+                        dataUrl: typeof ref === "string" ? ref : ref?.dataUrl || ref?.url || "",
+                        url: typeof ref === "string" ? ref : ref?.url || ref?.dataUrl || "",
+                    }));
+                }
+
+                const generationConfig: AiConfig = {
+                    ...effectiveConfig,
+                    channelId,
+                    workflowId,
+                };
+
+                const videoResult = await requestVideoGeneration(
+                    generationConfig,
+                    prompt,
+                    referenceImages,
+                    {
+                        signal: controller.signal,
+                        referenceVideos: [{ id: node.id, url: node.metadata.content }],
+                        workflowId,
+                        channelId,
+                        seed: generateRandomSeed(),
+                        onProgress: (status, detail) => {
+                            if (status === "submitted" && detail?.jobId) {
+                                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, jobId: detail.jobId } } : item)));
+                            }
+                        },
+                    },
+                );
+
+                const video = await storeGeneratedVideo(videoResult);
+                const videoSize = fitNodeSize(video.width || node.width, video.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                setNodes((prev) =>
+                    prev.map((item) =>
+                        item.id === childId
+                            ? {
+                                  ...item,
+                                  width: videoSize.width,
+                                  height: videoSize.height,
+                                  position: { x: item.position.x + item.width / 2 - videoSize.width / 2, y: item.position.y + item.height / 2 - videoSize.height / 2 },
+                                  metadata: {
+                                      ...item.metadata,
+                                      ...videoMetadata(video),
+                                      status: NODE_STATUS_SUCCESS,
+                                      prompt,
+                                      effectivePrompt: prompt,
+                                      errorDetails: undefined,
+                                  },
+                              }
+                            : item,
+                    ),
+                );
+            } catch (error) {
+                if (isGenerationCanceled(error)) return;
+                const errorDetails = error instanceof Error ? error.message : "人脸修复生成失败";
+                message.error(errorDetails);
+                setNodes((prev) =>
+                    prev.map((item) =>
+                        item.id === childId
+                            ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } }
+                            : item,
+                    ),
+                );
+            } finally {
+                finishGenerationRequest(childId, controller);
+            }
+        },
+        [effectiveConfig, finishGenerationRequest, message, startGenerationRequest],
+    );
+
     const cropImageNode = useCallback(async (node: CanvasNodeData, crop: CanvasImageCropRect) => {
         if (!node.metadata?.content) return;
         const cropped = await cropDataUrl(node.metadata.content, crop);
@@ -4015,6 +4168,7 @@ function InfiniteCanvasPage() {
                     onUpscale={(node) => setUpscaleNodeId(node.id)}
                     onViewImage={handleNodeViewImage}
                     onReversePrompt={createImageReversePromptNodes}
+                    onFaceRefine={handleVideoFaceRefine}
                     onRetry={handleNodeRetry}
                     onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}
                     onDelete={(node) => deleteNodes(new Set([node.id]))}

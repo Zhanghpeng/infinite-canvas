@@ -2149,8 +2149,8 @@
       "id": 122,
       "type": "LoadImage",
       "pos": [
-        -3168.343087882751,
-        328.348133179192
+        -3147.0360378824907,
+        345.0422378428219
       ],
       "size": [
         336.30625,
@@ -2174,7 +2174,7 @@
           "links": []
         }
       ],
-      "title": "ref_image_08",
+      "title": "ref_image_09",
       "properties": {
         "Node name for S&R": "LoadImage"
       },
@@ -2218,7 +2218,7 @@
           "links": []
         }
       ],
-      "title": "ref_image_07",
+      "title": "ref_image_08",
       "properties": {
         "Node name for S&R": "LoadImage"
       },
@@ -2262,7 +2262,7 @@
           "links": []
         }
       ],
-      "title": "ref_image_06",
+      "title": "ref_image_07",
       "properties": {
         "Node name for S&R": "LoadImage"
       },
@@ -2809,10 +2809,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.27941459537662483,
+      "scale": 0.3073560549142889,
       "offset": [
-        7255.736846823388,
-        1703.3057310241609
+        6167.303474193623,
+        1318.0132880144454
       ]
     },
     "ue_links": [],

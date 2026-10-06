@@ -7,6 +7,22 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- MiniMax H3 Video Face Refine Workflow Verification (MiniMax H3 视频人脸修复工作流验证):
+  - **Toolbar Entry & Node Derivation (悬浮工具栏入口与节点派生)**:
+    - 鼠标悬停在已包含视频的节点上，验证工具栏中出现「人脸修复」按钮（图标为 SmilePlus）；
+    - 点击「人脸修复」，验证在原视频右侧派生出新视频节点，标题为 `人脸修复 - 原视频名称`，并建立指向新节点的连线；
+  - **Complete State Auto-Execution (完备状态自动生成验证)**:
+    - 原视频已连接角色参考图片且包含提示词时点击「人脸修复」；
+    - 验证新节点自动建立与参考图的输入连线，新节点进入 Loading 态并直接在后台发起 ComfyUI 异步生成；
+    - 任务完成后视频正常播放并展示修复结果；
+  - **Missing State Guidance & Manual Trigger (缺失状态引导与手动触发验证)**:
+    - 原视频未连接参考图片或无提示词时点击「人脸修复」；
+    - 验证弹出提示「已创建人脸修复节点，请连接角色参考图片并完善提示词」，新节点自动打开编辑面板；
+    - 手动连接角色参考图并补充提示词后点击生成，验证能正常调用人脸修复工作流完成生成；
+  - **Channel Management Workflow Registration (渠道管理与工作流注册验证)**:
+    - 打开「渠道管理」设置抽屉与渠道详情弹窗，验证「工具增强工作流」分组下包含「视频人脸修复工作流 (`faceRefine`)」；
+    - 验证系统内置该工作流为默认启用，且可正常导入自定义人脸修复工作流（严格校验 `ref_video_01`、`prompt` 与 `output_video` 槽位）。
+
 - Pricing Page Free Cloud Mirror Tier Verification (价格方案页 0 元极速体验包与云镜像引导验证):
   - **Price Display & Strike-through (价格展示与原价划线)**:
     - 访问 `/pricing` 页面，验证「极速自助体验包」价格高亮显示为「¥0.00」，并附带「原价 ¥19.9」划线及「限时0.00元」绿色标签；

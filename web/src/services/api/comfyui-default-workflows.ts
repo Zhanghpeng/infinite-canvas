@@ -13,8 +13,15 @@ import frameVideoBf16TurboJson from "@/assets/workflows/video_minimax_h3_frame_b
 import frameVideoBf1620StepJson from "@/assets/workflows/video_minimax_h3_frame_bf16_20step_api.json";
 import qwenImage21Json from "@/assets/workflows/qwen_image_21_api.json";
 import audioMinimaxMusic3Json from "@/assets/workflows/audio_minimax_music_3_api.json";
+import videoH3FaceRefineJson from "@/assets/workflows/video_h3_face_refine_api.json";
 
 // Built-in single workflow definitions
+export const DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW: ComfyuiWorkflow = {
+    name: "MiniMax H3 人脸修复",
+    json: videoH3FaceRefineJson as Record<string, unknown>,
+    createdAt: 0,
+    isBuiltin: true,
+};
 export const DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW: ComfyuiWorkflow = {
     name: "Qwen-Image-2.1 全能生图",
     json: qwenImage21Json as Record<string, unknown>,
@@ -106,6 +113,7 @@ export const DEFAULT_COMFYUI_TEXT_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_TEXT_WORKFL
 export const DEFAULT_COMFYUI_VIDEO_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_VIDEO_WORKFLOW;
 export const DEFAULT_COMFYUI_FRAME_VIDEO_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_WORKFLOW;
 export const DEFAULT_COMFYUI_AUDIO_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_AUDIO_WORKFLOW;
+export const DEFAULT_COMFYUI_FACE_REFINE_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW;
 
 // Backward-compatible local aliases
 export const DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_T2I_WORKFLOW;
@@ -131,6 +139,7 @@ export type ComfyuiWorkflowBundle = {
     video: ComfyuiWorkflow;
     frameVideo: ComfyuiWorkflow;
     audio: ComfyuiWorkflow;
+    faceRefine?: ComfyuiWorkflow;
 };
 
 export const DEFAULT_BUILTIN_COMFYUI_WORKFLOWS: ComfyuiWorkflowBundle = {
@@ -141,6 +150,7 @@ export const DEFAULT_BUILTIN_COMFYUI_WORKFLOWS: ComfyuiWorkflowBundle = {
     video: DEFAULT_BUILTIN_COMFYUI_VIDEO_WORKFLOW,
     frameVideo: DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_WORKFLOW,
     audio: DEFAULT_BUILTIN_COMFYUI_AUDIO_WORKFLOW,
+    faceRefine: DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW,
 };
 
 export const DEFAULT_LOCAL_COMFYUI_WORKFLOWS = DEFAULT_BUILTIN_COMFYUI_WORKFLOWS;
@@ -291,6 +301,16 @@ export function getDefaultComfyWorkflowItems(channel?: { id?: string; name?: str
             isBuiltin: true,
             isDefault: true,
             description: "MiniMax Music 03 扩散音乐大模型 (支持最长 5 分钟完整歌曲与纯伴奏)",
+        },
+        {
+            id: `${prefix}-tool-face-refine-h3`,
+            name: "MiniMax H3 人脸修复",
+            category: "faceRefine",
+            json: DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW.json,
+            createdAt: 0,
+            isBuiltin: true,
+            isDefault: true,
+            description: "MiniMax H3 视频人脸/小脸追踪精修工作流 (支持最多 9 张角色参考图与原视频局部脸部增强)",
         },
     ];
 }

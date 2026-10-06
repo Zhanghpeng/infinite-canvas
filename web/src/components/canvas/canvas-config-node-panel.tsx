@@ -112,12 +112,12 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                         mode === "image"
                             ? (inputSummary.imageCount > 0 ? "i2i" : "t2i")
                             : mode === "video"
-                            ? ["omniVideo", "frameVideo"]
+                            ? ["omniVideo", "frameVideo", "faceRefine"]
                             : mode === "audio"
                             ? "audio"
                             : "text"
                     }
-                    preferredCategory={mode === "video" ? (config.videoMode === "frame" ? "frameVideo" : "omniVideo") : undefined}
+                    preferredCategory={mode === "video" ? (findWorkflow(globalConfig, node.metadata?.channelId, node.metadata?.workflowId)?.category || (config.videoMode === "frame" ? "frameVideo" : "omniVideo")) : undefined}
                     channelId={node.metadata?.channelId}
                     workflowId={node.metadata?.workflowId}
                     onChange={(channelId, workflowId, workflow) => {

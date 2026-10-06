@@ -24,6 +24,7 @@ const CORE_WORKFLOW_CATEGORIES: Array<{ key: WorkflowCategory; title: string; de
 
 const TOOL_WORKFLOW_CATEGORIES: Array<{ key: WorkflowCategory; title: string; desc: string }> = [
     { key: "inpaint", title: "局部编辑工作流", desc: "遮罩重绘修图（必标 ref_image_01、ref_mask、output_image）" },
+    { key: "faceRefine", title: "视频人脸修复工作流", desc: "视频人脸/小脸追踪精修（必标 ref_video_01、prompt、output_video）" },
 ];
 
 function formatWorkflowSize(json: Record<string, unknown>) {
@@ -175,6 +176,7 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
         const videoDef = savedWorkflows.find((w) => w.category === "omniVideo" && w.isDefault) || savedWorkflows.find((w) => w.category === "omniVideo");
         const frameDef = savedWorkflows.find((w) => w.category === "frameVideo" && w.isDefault) || savedWorkflows.find((w) => w.category === "frameVideo");
         const audioDef = savedWorkflows.find((w) => w.category === "audio" && w.isDefault) || savedWorkflows.find((w) => w.category === "audio");
+        const faceRefineDef = savedWorkflows.find((w) => w.category === "faceRefine" && w.isDefault) || savedWorkflows.find((w) => w.category === "faceRefine");
 
         onSave({
             ...draft,
@@ -189,6 +191,7 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
             comfyuiVideoWorkflow: videoDef ? { name: videoDef.name, json: videoDef.json, createdAt: videoDef.createdAt, isBuiltin: videoDef.isBuiltin } : undefined,
             comfyuiFrameVideoWorkflow: frameDef ? { name: frameDef.name, json: frameDef.json, createdAt: frameDef.createdAt, isBuiltin: frameDef.isBuiltin } : undefined,
             comfyuiAudioWorkflow: audioDef ? { name: audioDef.name, json: audioDef.json, createdAt: audioDef.createdAt, isBuiltin: audioDef.isBuiltin } : undefined,
+            comfyuiFaceRefineWorkflow: faceRefineDef ? { name: faceRefineDef.name, json: faceRefineDef.json, createdAt: faceRefineDef.createdAt, isBuiltin: faceRefineDef.isBuiltin } : undefined,
         });
         onClose();
     };

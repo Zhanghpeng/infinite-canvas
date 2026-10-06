@@ -151,8 +151,8 @@ export function CanvasNodePromptPanel({
                     ) : mode === "video" ? (
                         <>
                             <ChannelWorkflowPicker
-                                category={["omniVideo", "frameVideo"]}
-                                preferredCategory={config.videoMode === "frame" ? "frameVideo" : "omniVideo"}
+                                category={["omniVideo", "frameVideo", "faceRefine"]}
+                                preferredCategory={findWorkflow(globalConfig, node.metadata?.channelId, node.metadata?.workflowId)?.category || (config.videoMode === "frame" ? "frameVideo" : "omniVideo")}
                                 channelId={node.metadata?.channelId}
                                 workflowId={node.metadata?.workflowId}
                                 onChange={(channelId, workflowId, workflow) => {

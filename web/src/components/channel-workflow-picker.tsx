@@ -107,6 +107,7 @@ export function ChannelWorkflowPicker({
         const categoryLabels: Record<string, string> = {
             omniVideo: "全能参考视频",
             frameVideo: "首尾帧视频",
+            faceRefine: "视频人脸修复",
             t2i: "文生图",
             i2i: "参考图生图",
             inpaint: "局部重绘",

@@ -496,6 +496,8 @@ export default {
             i2iWorkflowDesc: "Invoked when connecting reference images for single-image editing or multi-image fusion on canvas.",
             inpaintWorkflowTitle: "Inpaint Workflow (Local Edit)",
             inpaintWorkflowDesc: "Invoked when painting a mask on the canvas and clicking Edit with AI.",
+            faceRefineWorkflowTitle: "Video Face Refine Workflow (Face Refine)",
+            faceRefineWorkflowDesc: "Invoked when refining video faces or small faces using character reference images.",
             textWorkflowTitle: "Text Generation / Reverse Prompt Workflow (LLM)",
             textWorkflowDesc: "Invoked when generating text or inferring reverse prompts from images on canvas.",
             videoWorkflowTitle: "Video Generation Workflow (Video / Omni)",

@@ -26,6 +26,7 @@ import {
     DEFAULT_LOCAL_COMFYUI_TEXT_WORKFLOW,
     DEFAULT_LOCAL_COMFYUI_VIDEO_WORKFLOW,
     DEFAULT_BUILTIN_COMFYUI_AUDIO_WORKFLOW,
+    DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW,
     getDefaultComfyuiWorkflows,
     getDefaultComfyWorkflowItems,
 } from "@/services/api/comfyui-default-workflows";
@@ -35,7 +36,7 @@ export type ApiCallFormat = "openai" | "gemini" | "comfyui";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 
-export type WorkflowCategory = "t2i" | "i2i" | "inpaint" | "text" | "omniVideo" | "frameVideo" | "superResolve" | "angle" | "upscale" | "audio";
+export type WorkflowCategory = "t2i" | "i2i" | "inpaint" | "text" | "omniVideo" | "frameVideo" | "audio" | "faceRefine" | "superResolve" | "angle" | "upscale";
 
 export type ToolbarConfig = {
     ids: string[];
@@ -87,6 +88,7 @@ export type ModelChannel = {
     comfyuiAngleWorkflow?: ComfyuiWorkflow;
     comfyuiUpscaleWorkflow?: ComfyuiWorkflow;
     comfyuiAudioWorkflow?: ComfyuiWorkflow;
+    comfyuiFaceRefineWorkflow?: ComfyuiWorkflow;
 };
 
 export type AiConfig = {
@@ -181,6 +183,7 @@ export const defaultConfig: AiConfig = {
             comfyuiVideoWorkflow: DEFAULT_BUILTIN_COMFYUI_VIDEO_WORKFLOW,
             comfyuiFrameVideoWorkflow: DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_WORKFLOW,
             comfyuiAudioWorkflow: DEFAULT_BUILTIN_COMFYUI_AUDIO_WORKFLOW,
+            comfyuiFaceRefineWorkflow: DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW,
             models: COMFYUI_BUILTIN_DEFAULT_MODELS,
         },
     ],
@@ -535,6 +538,7 @@ export function createModelChannel(channel?: Partial<ModelChannel>, options?: { 
         comfyuiVideoWorkflow: channel?.comfyuiVideoWorkflow !== undefined ? channel.comfyuiVideoWorkflow : workflows.video,
         comfyuiFrameVideoWorkflow: channel?.comfyuiFrameVideoWorkflow !== undefined ? channel.comfyuiFrameVideoWorkflow : workflows.frameVideo,
         comfyuiAudioWorkflow: channel?.comfyuiAudioWorkflow !== undefined ? channel.comfyuiAudioWorkflow : workflows.audio,
+        comfyuiFaceRefineWorkflow: channel?.comfyuiFaceRefineWorkflow !== undefined ? channel.comfyuiFaceRefineWorkflow : workflows.faceRefine,
     };
     return result;
 }

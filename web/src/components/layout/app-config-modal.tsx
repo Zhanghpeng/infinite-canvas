@@ -222,6 +222,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                         const audioItem = getDefaultWorkflow(channel, "audio");
 
                                         const inpaintItem = getDefaultWorkflow(channel, "inpaint");
+                                        const faceRefineItem = getDefaultWorkflow(channel, "faceRefine");
 
                                         return (
                                             <div key={channel.id} className="rounded-lg border border-stone-200 p-4 dark:border-stone-800">
@@ -349,7 +350,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                             {/* 工具增强工作流 */}
                                                             <div className="space-y-2">
                                                                 <div className="text-xs font-semibold text-stone-700 dark:text-stone-300">
-                                                                    工具增强工作流（局部编辑）
+                                                                    工具增强工作流（局部编辑 / 人脸修复）
                                                                 </div>
                                                                 <div className="space-y-2">
                                                                     <div>
@@ -362,6 +363,20 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                                 value={inpaintItem || channel.comfyuiInpaintWorkflow || defaultWorkflows.inpaint}
                                                                                 defaultWorkflow={defaultWorkflows.inpaint}
                                                                                 isBuiltin={inpaintItem ? Boolean(inpaintItem.isBuiltin) : undefined}
+                                                                            />
+                                                                        </div>
+                                                                    </div>
+
+                                                                    <div>
+                                                                        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                                                                            <span className="text-xs font-medium text-stone-600 dark:text-stone-400">{t("config.channelEditor.faceRefineWorkflowTitle")}</span>
+                                                                            <span className="text-[11px] text-stone-400">{t("config.channelEditor.faceRefineWorkflowDesc")}</span>
+                                                                        </div>
+                                                                        <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
+                                                                            <ComfyuiWorkflowEditor
+                                                                                value={faceRefineItem || channel.comfyuiFaceRefineWorkflow || defaultWorkflows.faceRefine}
+                                                                                defaultWorkflow={defaultWorkflows.faceRefine}
+                                                                                isBuiltin={faceRefineItem ? Boolean(faceRefineItem.isBuiltin) : undefined}
                                                                             />
                                                                         </div>
                                                                     </div>

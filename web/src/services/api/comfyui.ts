@@ -160,12 +160,12 @@ export function validateComfyuiWorkflow(
         if (hasOutputVideo || hasOutputText || hasOutputAudio) {
             return { ok: false, error: "生图工作流不得包含 output_video、output_text 或 output_audio 标记" };
         }
-    } else if (category === "omniVideo" || category === "frameVideo") {
+    } else if (category === "omniVideo" || category === "frameVideo" || category === "faceRefine") {
         if (!hasOutputVideo) {
-            return { ok: false, error: "生视频工作流缺少 \"output_video\" 标记（请在 SaveVideo 或 VHS_VideoCombine 保存节点上标记 _meta.title 为 output_video）" };
+            return { ok: false, error: "生视频/人脸修复工作流缺少 \"output_video\" 标记（请在 SaveVideo 或 VHS_VideoCombine 保存节点上标记 _meta.title 为 output_video）" };
         }
         if (hasOutputImage || hasOutputText || hasOutputAudio) {
-            return { ok: false, error: "生视频工作流不得包含 output_image、output_text 或 output_audio 标记" };
+            return { ok: false, error: "视频/人脸修复工作流不得包含 output_image、output_text 或 output_audio 标记" };
         }
     } else if (category === "text") {
         if (!hasOutputText) {
@@ -285,6 +285,15 @@ export function validateComfyuiWorkflow(
         case "audio":
             if (!hasPrompt && !hasCaption && !hasLyrics) {
                 return { ok: false, error: "音频工作流缺少提示词槽位（请标记 prompt、caption 或 lyrics 之一）" };
+            }
+            break;
+
+        case "faceRefine":
+            if (!hasRefVideo) {
+                return { ok: false, error: "视频人脸修复工作流缺少待修复视频输入槽位（必须标记 \"ref_video_01\" 槽位节点）" };
+            }
+            if (!hasPrompt) {
+                return { ok: false, error: "视频人脸修复工作流缺少 \"prompt\" 提示词槽位节点" };
             }
             break;
     }
