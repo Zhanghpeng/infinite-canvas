@@ -2216,6 +2216,7 @@ function InfiniteCanvasPage() {
                     effectivePrompt: prompt,
                     channelId,
                     workflowId,
+                    videoMode: "omni",
                     content: undefined,
                     storageKey: undefined,
                     jobId: undefined,
@@ -2225,7 +2226,7 @@ function InfiniteCanvasPage() {
             };
 
             const newConnections: CanvasConnection[] = [
-                { id: nanoid(), fromNodeId: node.id, toNodeId: childId, kind: "lineage" },
+                { id: nanoid(), fromNodeId: node.id, toNodeId: childId, kind: "input" },
             ];
             for (const imgNode of upstreamImageNodes) {
                 newConnections.push({ id: nanoid(), fromNodeId: imgNode.id, toNodeId: childId, kind: "input" });
@@ -2280,6 +2281,7 @@ function InfiniteCanvasPage() {
 
                 const generationConfig: AiConfig = {
                     ...effectiveConfig,
+                    videoMode: "omni",
                     channelId,
                     workflowId,
                 };
@@ -2290,6 +2292,7 @@ function InfiniteCanvasPage() {
                     referenceImages,
                     {
                         signal: controller.signal,
+                        videoMode: "omni",
                         referenceVideos: [{ id: node.id, url: node.metadata.content }],
                         workflowId,
                         channelId,

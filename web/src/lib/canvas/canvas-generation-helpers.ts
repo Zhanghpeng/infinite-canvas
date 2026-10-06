@@ -140,7 +140,10 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
     if (mode === "video" && workflowId) {
         const wf = findWorkflow(config, channelId, workflowId);
         if (wf?.category === "frameVideo") videoMode = "frame";
-        else if (wf?.category === "omniVideo") videoMode = "omni";
+        else if (wf?.category === "omniVideo" || wf?.category === "faceRefine") videoMode = "omni";
+    }
+    if (videoMode === "frame" && (workflowId ? findWorkflow(config, channelId, workflowId)?.category === "faceRefine" : false)) {
+        videoMode = "omni";
     }
     if (!videoMode) {
         videoMode = config.videoMode || defaultConfig.videoMode || "omni";
