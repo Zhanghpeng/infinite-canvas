@@ -4,7 +4,7 @@ import { Brush, Camera, Copy, FileText, Grid2x2, Lock, LockOpen, Maximize2, Scis
 import type { CanvasNodeData } from "@/types/canvas";
 import i18n from "@/i18n";
 
-export type ImageNodeActionToolId = "copyPrompt" | "reversePrompt" | "replace" | "resize" | "maskEdit" | "crop" | "split" | "upscale" | "superResolve" | "angle" | "view";
+export type ImageNodeActionToolId = "copyPrompt" | "reversePrompt" | "replace" | "resize" | "maskEdit" | "crop" | "split" | "upscale" | "view";
 export type ImageQuickToolId = "info" | "delete" | "saveAsset" | "download" | ImageNodeActionToolId;
 
 export type ImageToolHandlers = {
@@ -14,8 +14,6 @@ export type ImageToolHandlers = {
     onCrop: (node: CanvasNodeData) => void;
     onSplit: (node: CanvasNodeData) => void;
     onUpscale: (node: CanvasNodeData) => void;
-    onSuperResolve: (node: CanvasNodeData) => void;
-    onAngle: (node: CanvasNodeData) => void;
     onViewImage: (node: CanvasNodeData) => void;
     onCopyPrompt: (node: CanvasNodeData) => void;
     onReversePrompt: (node: CanvasNodeData) => void;
@@ -105,22 +103,6 @@ export const imageToolDefinitions: ImageToolDefinition[] = [
         title: () => i18n.t("canvas.imageTools.upscaleTitle"),
         icon: () => <ZoomIn className="size-4" />,
         run: (node, handlers) => handlers.onUpscale(node),
-    },
-    {
-        id: "superResolve",
-        defaultVisible: false,
-        label: () => i18n.t("canvas.imageTools.superResolve"),
-        title: () => i18n.t("canvas.imageTools.superResolveTitle"),
-        icon: () => <Sparkles className="size-4" />,
-        run: (node, handlers) => handlers.onSuperResolve(node),
-    },
-    {
-        id: "angle",
-        defaultVisible: false,
-        label: () => i18n.t("canvas.imageTools.angle"),
-        title: () => i18n.t("canvas.imageTools.angleTitle"),
-        icon: () => <Camera className="size-4" />,
-        run: (node, handlers) => handlers.onAngle(node),
     },
     {
         id: "view",

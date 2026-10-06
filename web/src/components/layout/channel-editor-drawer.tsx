@@ -24,9 +24,6 @@ const CORE_WORKFLOW_CATEGORIES: Array<{ key: WorkflowCategory; title: string; de
 
 const TOOL_WORKFLOW_CATEGORIES: Array<{ key: WorkflowCategory; title: string; desc: string }> = [
     { key: "inpaint", title: "局部编辑工作流", desc: "遮罩重绘修图（必标 ref_image_01、ref_mask、output_image）" },
-    { key: "superResolve", title: "AI 超分工作流", desc: "画质高精重建（必标 ref_image_01、output_image）" },
-    { key: "angle", title: "多角度生成工作流", desc: "相机视角环绕生成（必标 ref_image_01、prompt、output_image）" },
-    { key: "upscale", title: "高清放大工作流", desc: "潜空间/Tile高清放大（必标 ref_image_01、output_image）" },
 ];
 
 function formatWorkflowSize(json: Record<string, unknown>) {
@@ -178,9 +175,6 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
         const videoDef = savedWorkflows.find((w) => w.category === "omniVideo" && w.isDefault) || savedWorkflows.find((w) => w.category === "omniVideo");
         const frameDef = savedWorkflows.find((w) => w.category === "frameVideo" && w.isDefault) || savedWorkflows.find((w) => w.category === "frameVideo");
         const audioDef = savedWorkflows.find((w) => w.category === "audio" && w.isDefault) || savedWorkflows.find((w) => w.category === "audio");
-        const superResolveDef = savedWorkflows.find((w) => w.category === "superResolve" && w.isDefault) || savedWorkflows.find((w) => w.category === "superResolve");
-        const angleDef = savedWorkflows.find((w) => w.category === "angle" && w.isDefault) || savedWorkflows.find((w) => w.category === "angle");
-        const upscaleDef = savedWorkflows.find((w) => w.category === "upscale" && w.isDefault) || savedWorkflows.find((w) => w.category === "upscale");
 
         onSave({
             ...draft,
@@ -195,9 +189,6 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
             comfyuiVideoWorkflow: videoDef ? { name: videoDef.name, json: videoDef.json, createdAt: videoDef.createdAt, isBuiltin: videoDef.isBuiltin } : undefined,
             comfyuiFrameVideoWorkflow: frameDef ? { name: frameDef.name, json: frameDef.json, createdAt: frameDef.createdAt, isBuiltin: frameDef.isBuiltin } : undefined,
             comfyuiAudioWorkflow: audioDef ? { name: audioDef.name, json: audioDef.json, createdAt: audioDef.createdAt, isBuiltin: audioDef.isBuiltin } : undefined,
-            comfyuiSuperResolveWorkflow: superResolveDef ? { name: superResolveDef.name, json: superResolveDef.json, createdAt: superResolveDef.createdAt, isBuiltin: superResolveDef.isBuiltin } : undefined,
-            comfyuiAngleWorkflow: angleDef ? { name: angleDef.name, json: angleDef.json, createdAt: angleDef.createdAt, isBuiltin: angleDef.isBuiltin } : undefined,
-            comfyuiUpscaleWorkflow: upscaleDef ? { name: upscaleDef.name, json: upscaleDef.json, createdAt: upscaleDef.createdAt, isBuiltin: upscaleDef.isBuiltin } : undefined,
         });
         onClose();
     };
@@ -396,7 +387,7 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
 
                             <div className="space-y-2.5">
                                 <div className="text-xs font-semibold tracking-wide text-stone-500">
-                                    工具增强工作流（局部编辑 / 超分 / 多角度 / 高清放大）
+                                    工具增强工作流（局部编辑）
                                 </div>
                                 <div className="space-y-3">
                                     {TOOL_WORKFLOW_CATEGORIES.map(renderWorkflowCategory)}

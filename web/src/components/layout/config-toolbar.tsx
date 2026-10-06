@@ -39,7 +39,7 @@ type FrontendToolItem = {
 };
 
 type AiToolItem = {
-    id: "maskEdit" | "reversePrompt" | "superResolve" | "angle" | "upscale";
+    id: "maskEdit" | "reversePrompt";
     category: WorkflowCategory;
     title: string;
     desc: string;
@@ -56,6 +56,7 @@ const FRONTEND_TOOLS: FrontendToolItem[] = [
     { id: "resize", title: "锁比例 / 自由比例", desc: "切换节点自由拉伸缩放或强制锁定原图等比宽高缩放", icon: <Lock className="size-4" /> },
     { id: "crop", title: "裁剪", desc: "前端选区自由/等比裁剪图片，并在右侧生成衍生图片节点", icon: <Scissors className="size-4" /> },
     { id: "split", title: "切图", desc: "按行列网格切分图片，批量生成矩阵子图片节点", icon: <Grid2x2 className="size-4" /> },
+    { id: "upscale", title: "放大", desc: "前端算法快速等比放大图片分辨率 (2x / 4x)", icon: <ZoomIn className="size-4" /> },
     { id: "view", title: "查看大图", desc: "全屏居中放大浏览原图细节，自动暂停背景视频", icon: <Maximize2 className="size-4" /> },
 ];
 
@@ -73,27 +74,6 @@ const AI_TOOLS: AiToolItem[] = [
         title: "反推提示词 (Text / VLM)",
         desc: "调用视觉大语言模型深度理解原图，自动生成反推提示词文本节点管线",
         icon: <Wrench className="size-4 text-blue-500" />,
-    },
-    {
-        id: "superResolve",
-        category: "superResolve",
-        title: "AI 超分 (Super Resolution)",
-        desc: "通过 ComfyUI 超分辨率生成模型，大幅提升画面分辨率与微观纹理质量",
-        icon: <Sparkles className="size-4 text-purple-500" />,
-    },
-    {
-        id: "angle",
-        category: "angle",
-        title: "多角度生成 (Multi-Angle)",
-        desc: "通过相机环绕方位角与俯仰视角参数，生成主体多视角衍生图片",
-        icon: <Camera className="size-4 text-amber-500" />,
-    },
-    {
-        id: "upscale",
-        category: "upscale",
-        title: "高清放大 (Upscale)",
-        desc: "支持基于前端 Canvas 算法快速插值或调用 ComfyUI 模型进行高清放大",
-        icon: <ZoomIn className="size-4 text-cyan-500" />,
     },
 ];
 
