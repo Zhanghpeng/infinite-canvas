@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
-import { applyBindings, cancelJob, ComfyuiAbortedError, ComfyuiApiError, ComfyuiJobError, ComfyuiNoWorkflowError, ComfyuiTimeoutError, downloadAsset, generateRandomSeed, parseSize, pollComfyuiVideoJob, pollJob, requestComfyuiImage, submitComfyuiVideoJob, submitJob, validateComfyuiWorkflow } from "@/services/api/comfyui";
+import { adaptWorkflowModelPaths, applyBindings, cancelJob, ComfyuiAbortedError, ComfyuiApiError, ComfyuiJobError, ComfyuiNoWorkflowError, ComfyuiTimeoutError, downloadAsset, generateRandomSeed, parseSize, pollComfyuiVideoJob, pollJob, requestComfyuiImage, submitComfyuiVideoJob, submitJob, validateComfyuiWorkflow } from "@/services/api/comfyui";
 import type { ComfyuiWorkflowJson } from "@/services/api/comfyui";
 import { defaultConfig, findWorkflow, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW, DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW } from "@/services/api/comfyui-default-workflows";
@@ -897,6 +897,33 @@ describe("Qwen-Image-2.1 and submitJob validation", () => {
     it("rejects empty workflow in submitJob", async () => {
         await expect(submitJob({}, "http://127.0.0.1:8188")).rejects.toThrow(ComfyuiNoWorkflowError);
     });
+
+    it("adapts model paths to Windows backslashes and Linux forward slashes", () => {
+        const testWorkflow: ComfyuiWorkflowJson = {
+            "2": {
+                class_type: "H3FaceTrackCrop",
+                inputs: {
+                    detector: "segm/person_yolov8m-seg.pt",
+                    fallback_detector: "bbox/face_yolov8m.pt",
+                    confidence: 0.35,
+                    prompt: "a smiling person",
+                },
+            },
+        };
+
+        // 转为 Windows 路径
+        const winWf = adaptWorkflowModelPaths(testWorkflow, "windows");
+        expect((winWf["2"]?.inputs as Record<string, unknown>)?.detector).toBe("segm\\person_yolov8m-seg.pt");
+        expect((winWf["2"]?.inputs as Record<string, unknown>)?.fallback_detector).toBe("bbox\\face_yolov8m.pt");
+        expect((winWf["2"]?.inputs as Record<string, unknown>)?.prompt).toBe("a smiling person");
+
+        // 从 Windows 路径转回 Linux 路径
+        const linuxWf = adaptWorkflowModelPaths(winWf, "linux");
+        expect((linuxWf["2"]?.inputs as Record<string, unknown>)?.detector).toBe("segm/person_yolov8m-seg.pt");
+        expect((linuxWf["2"]?.inputs as Record<string, unknown>)?.fallback_detector).toBe("bbox/face_yolov8m.pt");
+        expect((linuxWf["2"]?.inputs as Record<string, unknown>)?.prompt).toBe("a smiling person");
+    });
 });
+
 
 

@@ -37,6 +37,10 @@ The current release needs manual verification in these areas:
   - **Channel Management Workflow Registration (渠道管理与工作流注册验证)**:
     - 打开「渠道管理」设置抽屉与渠道详情弹窗，验证「工具增强工作流」分组下包含「视频人脸修复工作流 (`faceRefine`)」；
     - 验证系统内置该工作流为默认启用，且可正常导入自定义人脸修复工作流（严格校验 `ref_video_01`、`prompt` 与 `output_video` 槽位）。
+  - **Cross-Platform YOLO Model Path Adaptation (Windows 与 Linux 检测器模型路径跨平台适配验证)**:
+    - 验证无论在本地 Windows ComfyUI（下拉菜单为反斜杠 `segm\person_yolov8m-seg.pt`、`bbox\face_yolov8m.pt`）还是云端 Linux ComfyUI（正斜杠 `segm/person_yolov8m-seg.pt`、`bbox/face_yolov8m.pt`），提交任务均能成功无报错；
+    - 验证前端基于 `/system_stats` 自动探测并缓存目标系统类型，自动动态完成反斜杠与正斜杠转换；
+    - 验证极端校验异常情况下，前端具备自动反向翻转斜杠重新提交的自动兜底能力。
 
 - Pricing Page Free Cloud Mirror Tier Verification (价格方案页 0 元极速体验包与云镜像引导验证):
   - **Price Display & Strike-through (价格展示与原价划线)**:

@@ -630,13 +630,70 @@ function normalizeBaseUrl(baseUrl: string) {
     return baseUrl.trim().replace(/\/+$/, "");
 }
 
+const comfyHostOsCache = new Map<string, "windows" | "linux">();
+
 /**
- * Submit a bound workflow to ComfyUI's /prompt endpoint; returns prompt_id as jobId.
+ * 探测目标 ComfyUI 主机的操作系统（Windows 或 Linux/POSIX），结果在内存缓存
  */
-export async function submitJob(workflow: ComfyuiWorkflowJson, baseUrl: string, token?: string): Promise<string> {
-    if (!workflow || typeof workflow !== "object" || Object.keys(workflow).length === 0) {
-        throw new ComfyuiNoWorkflowError("工作流拓扑为空，请检查当前渠道工作流配置或重新选择有效的工作流");
+export async function detectComfyuiHostOs(baseUrl: string, token?: string): Promise<"windows" | "linux"> {
+    const normalized = normalizeBaseUrl(baseUrl);
+    const cached = comfyHostOsCache.get(normalized);
+    if (cached) return cached;
+
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    try {
+        const res = await comfyuiFetch(`${normalized}/system_stats`, { headers }, baseUrl);
+        if (res.ok) {
+            const data = (await res.json()) as { system?: { os?: string } };
+            const osName = (data?.system?.os || "").toLowerCase();
+            const osType = osName === "nt" ? "windows" : "linux";
+            comfyHostOsCache.set(normalized, osType);
+            return osType;
+        }
+    } catch {
+        // ignore probe error
     }
+
+    return "linux";
+}
+
+/**
+ * 针对跨平台（Windows 反斜杠与 Linux 正斜杠）差异，动态转换工作流中包含 segm/xxx 与 bbox/xxx 的模型路径
+ */
+export function adaptWorkflowModelPaths(
+    workflow: ComfyuiWorkflowJson,
+    targetOs: "windows" | "linux",
+): ComfyuiWorkflowJson {
+    if (!workflow || typeof workflow !== "object") return workflow;
+
+    let modified = false;
+    const cloned: ComfyuiWorkflowJson = JSON.parse(JSON.stringify(workflow));
+
+    for (const node of Object.values(cloned)) {
+        if (!node || typeof node !== "object" || !node.inputs || typeof node.inputs !== "object") {
+            continue;
+        }
+        for (const [key, val] of Object.entries(node.inputs)) {
+            if (typeof val === "string") {
+                // 匹配形如 segm/...、bbox/... 等检测器模型路径
+                const isPathWithBboxOrSegm = /(?:^|[\\/])(bbox|segm)[\\/]/i.test(val);
+                if (isPathWithBboxOrSegm) {
+                    const nextVal = targetOs === "windows" ? val.replace(/\//g, "\\") : val.replace(/\\/g, "/");
+                    if (nextVal !== val) {
+                        node.inputs[key] = nextVal;
+                        modified = true;
+                    }
+                }
+            }
+        }
+    }
+
+    return modified ? cloned : workflow;
+}
+
+async function submitJobInternal(workflow: ComfyuiWorkflowJson, baseUrl: string, token?: string): Promise<string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
     const clientId = nanoid();
@@ -665,6 +722,48 @@ export async function submitJob(workflow: ComfyuiWorkflowJson, baseUrl: string, 
     }
     if (typeof data?.prompt_id !== "string") throw new ComfyuiApiError("ComfyUI /prompt 响应未返回 prompt_id");
     return data.prompt_id;
+}
+
+/**
+ * Submit a bound workflow to ComfyUI's /prompt endpoint; returns prompt_id as jobId.
+ * 自动识别目标主机操作系统（Windows 或 Linux）并适配 bbox / segm 等模型路径分隔符；失败时具备反向翻转重试兜底机制。
+ */
+export async function submitJob(workflow: ComfyuiWorkflowJson, baseUrl: string, token?: string): Promise<string> {
+    if (!workflow || typeof workflow !== "object" || Object.keys(workflow).length === 0) {
+        throw new ComfyuiNoWorkflowError("工作流拓扑为空，请检查当前渠道工作流配置或重新选择有效的工作流");
+    }
+
+    // 1. 探测主机操作系统并自适应转换路径
+    const targetOs = await detectComfyuiHostOs(baseUrl, token);
+    const adaptedWorkflow = adaptWorkflowModelPaths(workflow, targetOs);
+
+    try {
+        return await submitJobInternal(adaptedWorkflow, baseUrl, token);
+    } catch (error) {
+        // 2. 兜底重试：检查是否因模型路径格式/校验引起的错误，自动翻转斜杠方向重试
+        const errMsg = error instanceof Error ? error.message : String(error);
+        const hasPathMismatchError =
+            errMsg.includes("Value not in list") ||
+            errMsg.includes("bbox") ||
+            errMsg.includes("segm") ||
+            errMsg.includes("FileNotFoundError") ||
+            errMsg.includes("required_input_missing");
+
+        if (hasPathMismatchError) {
+            const flippedOs = targetOs === "windows" ? "linux" : "windows";
+            const flippedWorkflow = adaptWorkflowModelPaths(workflow, flippedOs);
+            if (flippedWorkflow !== adaptedWorkflow) {
+                try {
+                    const retryJobId = await submitJobInternal(flippedWorkflow, baseUrl, token);
+                    comfyHostOsCache.set(normalizeBaseUrl(baseUrl), flippedOs);
+                    return retryJobId;
+                } catch {
+                    // 若翻转重试依旧失败，抛出原异常
+                }
+            }
+        }
+        throw error;
+    }
 }
 
 /** How often the job status is polled while the job is pending or in progress. */
@@ -2621,7 +2720,16 @@ export async function checkComfyuiConnection(baseUrl: string, token?: string): P
     if (token) headers.Authorization = `Bearer ${token}`;
     try {
         const res = await comfyuiFetch(`${normalizeBaseUrl(baseUrl)}/system_stats`, { headers }, baseUrl);
-        if (res.ok) return { ok: true };
+        if (res.ok) {
+            try {
+                const data = (await res.json()) as { system?: { os?: string } };
+                const osName = (data?.system?.os || "").toLowerCase();
+                comfyHostOsCache.set(normalizeBaseUrl(baseUrl), osName === "nt" ? "windows" : "linux");
+            } catch {
+                // ignore
+            }
+            return { ok: true };
+        }
         return { ok: false, error: `HTTP ${res.status}` };
     } catch (error) {
         if (error instanceof ComfyuiMixedContentError) {

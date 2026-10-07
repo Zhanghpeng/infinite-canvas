@@ -53,7 +53,8 @@
 >         │   └── person_yolov8m-seg.pt
 >         └── 📂 bbox/
 >             └── face_yolov8m.pt
-> ```
+> **跨平台兼容性提示**：
+> 工作流标准统一使用正斜杠格式（`segm/person_yolov8m-seg.pt` 与 `bbox/face_yolov8m.pt`）。画布系统在向 ComfyUI 提交任务时，会自动探查目标主机系统类型（Windows 或 Linux），并在 Windows (`\`) 与 Linux (`/`) 之间全自动无感转换，同时内置异常翻转重试兜底机制，无论本地 Windows 还是云端 Linux 环境均可开箱即用。
 
 ---
 
