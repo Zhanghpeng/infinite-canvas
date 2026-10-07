@@ -13,6 +13,10 @@ The current release needs manual verification in these areas:
     - 验证 4 步采样调度下音画联合生成输出，多参考图、视频与音频插槽解析与映射无缺损；
   - **Frame Video 4-Step PDMD (`minimax_h3_fl2va_fp8_4step_pdmd_api.json`)**:
     - 检查首尾帧工作流加载与执行情况：验证 `first_frame` 与 `last_frame` 正确锚定，4 步采样下平滑插值过渡无伪影；
+  - **Frontend UI & Store Sync (前端工作流选择与配置同步)**:
+    - 检查画布视频节点与设置抽屉：切换到全能视频与首尾帧视频时，工作流下拉列表中正确显示「MiniMax H3 全能视频 (FP8 4步 PDMD)」与「MiniMax H3 首尾帧视频 (FP8 4步 PDMD)」；
+    - 验证默认仍选中原「FP8 20步」工作流（`isDefault: false`），手动切换至 4 步 PDMD 工作流后能正常保存并生效；
+    - 检查已有浏览器持久化缓存加载时，内置渠道自动补全这两项最新工作流；
   - **Documentation Consistency (文档全景对照)**:
     - 检查 `5_omni_video/README.md`、`6_frame_video/README.md` 与根目录 `Comfy-Api/README.md` 中关于 PDMD 4 步工作流、LoRA 模型、EasyCache 说明及文件链接正确有效。
 

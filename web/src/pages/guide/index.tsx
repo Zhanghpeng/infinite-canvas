@@ -196,11 +196,12 @@ const WORKFLOWS: WorkflowItem[] = [
             },
         ],
         models: [
+            { category: "LoRA", folder: "models/loras/", files: ["minimax_h3_pdmd_4step_lora_avg_rank_57_bf16.safetensors"] },
             { category: "VAE", folder: "models/vae/", files: ["minimax_h3_video_vae_fp16.safetensors", "minimax_h3_audio_vae_fp32.safetensors"] },
             { category: "扩散模型", folder: "models/diffusion_models/", files: ["minimax_h3_fl2va_pruned_fp8_scaled.safetensors"] },
             { category: "文本编码器", folder: "models/text_encoders/", files: ["qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"] },
         ],
-        tips: "包含视频与音频双 VAE；视频分辨率硬件对齐锁定，支持 16:9 与 9:16 画幅；依赖 ComfyLiterals 节点。",
+        tips: "包含视频与音频双 VAE；视频分辨率硬件对齐锁定，支持 16:9 与 9:16 画幅；支持 4 步 PDMD 极速出片；依赖 ComfyLiterals 节点。",
     },
     {
         id: "ref_video",
@@ -222,7 +223,7 @@ const WORKFLOWS: WorkflowItem[] = [
             },
         ],
         models: [
-            { category: "LoRA", folder: "models/loras/", files: ["minimax_h3_ref2v_lightx2v_turbo_4step_v0.1_resized_avg_rank_20_bf16.safetensors"] },
+            { category: "LoRA", folder: "models/loras/", files: ["minimax_h3_pdmd_4step_lora_avg_rank_57_bf16.safetensors", "minimax_h3_ref2v_lightx2v_turbo_4step_v0.1_resized_avg_rank_20_bf16.safetensors"] },
             { category: "VAE", folder: "models/vae/", files: ["minimax_h3_video_vae_fp16.safetensors", "minimax_h3_audio_vae_fp32.safetensors"] },
             { category: "扩散模型", folder: "models/diffusion_models/", files: ["minimax_h3_ref2va_pruned_fp8_scaled.safetensors"] },
             { category: "文本编码器", folder: "models/text_encoders/", files: ["qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"] },

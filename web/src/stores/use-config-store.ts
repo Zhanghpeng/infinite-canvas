@@ -515,6 +515,20 @@ export function createCloudModelChannel(overrides?: Partial<ModelChannel>): Mode
     });
 }
 
+function mergeBuiltinWorkflows(existingWorkflows: ComfyWorkflowItem[] | undefined, defaultWorkflows: ComfyWorkflowItem[]): ComfyWorkflowItem[] {
+    if (!Array.isArray(existingWorkflows) || existingWorkflows.length === 0) {
+        return defaultWorkflows;
+    }
+    const result = [...existingWorkflows];
+    for (const defWf of defaultWorkflows) {
+        const exists = result.some((wf) => wf.id === defWf.id || (wf.category === defWf.category && wf.name === defWf.name));
+        if (!exists) {
+            result.push(defWf);
+        }
+    }
+    return result;
+}
+
 export function createModelChannel(channel?: Partial<ModelChannel>, options?: { preprovisionComfyuiModels?: boolean }): ModelChannel {
     const isCloud = isCloudChannel(channel);
     const workflows = getDefaultComfyuiWorkflows(channel);
@@ -530,7 +544,7 @@ export function createModelChannel(channel?: Partial<ModelChannel>, options?: { 
         models: models.length ? models : options?.preprovisionComfyuiModels !== false ? [...defaultModels] : [],
         comfyuiProxyUrl: channel?.comfyuiProxyUrl !== undefined ? channel.comfyuiProxyUrl : isCloud ? "" : "http://127.0.0.1:8188",
         comfyuiProxyToken: channel?.comfyuiProxyToken !== undefined ? channel.comfyuiProxyToken : "",
-        workflows: Array.isArray(channel?.workflows) && channel.workflows.length > 0 ? channel.workflows : defaultWorkflowItems,
+        workflows: mergeBuiltinWorkflows(channel?.workflows, defaultWorkflowItems),
         comfyuiT2iWorkflow: channel?.comfyuiT2iWorkflow !== undefined ? channel.comfyuiT2iWorkflow : workflows.t2i,
         comfyuiI2iWorkflow: channel?.comfyuiI2iWorkflow !== undefined ? channel.comfyuiI2iWorkflow : workflows.i2i,
         comfyuiInpaintWorkflow: channel?.comfyuiInpaintWorkflow !== undefined ? channel.comfyuiInpaintWorkflow : workflows.inpaint,
