@@ -7,6 +7,15 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- MiniMax H3 4-Step PDMD Workflow Asset Verification (MiniMax H3 4步 PDMD 极速工作流资产与文档验证):
+  - **Omni Video 4-Step PDMD (`minimax_h3_ref2v_4step_pdmd_api.json`)**:
+    - 检查工作流在 ComfyUI 加载与执行情况：验证 `minimax_h3_pdmd_4step_lora_avg_rank_57_bf16.safetensors` 模型与 `EasyCache` 节点正常识别；
+    - 验证 4 步采样调度下音画联合生成输出，多参考图、视频与音频插槽解析与映射无缺损；
+  - **Frame Video 4-Step PDMD (`minimax_h3_fl2va_fp8_4step_pdmd_api.json`)**:
+    - 检查首尾帧工作流加载与执行情况：验证 `first_frame` 与 `last_frame` 正确锚定，4 步采样下平滑插值过渡无伪影；
+  - **Documentation Consistency (文档全景对照)**:
+    - 检查 `5_omni_video/README.md`、`6_frame_video/README.md` 与根目录 `Comfy-Api/README.md` 中关于 PDMD 4 步工作流、LoRA 模型、EasyCache 说明及文件链接正确有效。
+
 - MiniMax H3 Video Face Refine Workflow Verification (MiniMax H3 视频人脸修复工作流验证):
   - **Toolbar Entry & Host Channel Selection (悬浮工具栏入口与执行主机选择)**:
     - 鼠标悬停在已包含视频的节点上，点击工具栏中的「人脸修复」按钮（SmilePlus 图标）；
