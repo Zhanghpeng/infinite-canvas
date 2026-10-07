@@ -7,6 +7,21 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Guide Page 8-Capability Revamp Verification (使用手册页面 8 大核心能力重构验证):
+  - **Category Filter & 8-Matrix Display (分类筛选与 8 大矩阵展示)**:
+    - 访问 `/guide` 页面，验证顶部分类筛选标签（全部 8、图像生成 3、视频生成 2、音乐音频 1、精修与辅助 2）正常工作；
+    - 验证 8 张核心大卡片完整呈现，卡片头部标题、核心底模与算法说明清晰准确；
+  - **Card Multi-Variant Switcher (卡片内多规格切换联动)**:
+    - 针对文生图、图生图、全能参考视频、首尾帧视频等具备多档规格的卡片，点击顶部 Segmented 切换器；
+    - 验证切换时即时联动刷新：Tag 标签、描述、依赖模型存放路径清单及复制清单内容；
+  - **Dual-Format Download & Full Zip (双格式下载与全套工作流打包)**:
+    - 验证各卡片主按钮「下载工作流」默认触发下载对应规格的 UI 可视化工作流（可拖入本地 ComfyUI 查看节点连线并调试）；
+    - 点击主按钮右侧下拉箭头，验证菜单弹出「下载 UI 可视化工作流」与「下载 API 格式工作流」，点击可精确下载对应 JSON 文件；
+    - 点击页面右上角「打包下载全部工作流 (.zip)」按钮，验证浏览器成功下载包含全部 20+ 个工作流 JSON 与完整 `README_模型与存放目录清单.txt` 的压缩包；
+  - **Layered Plugins & Expanded FAQ (分层插件专区与排错指引)**:
+    - 验证插件专区分为「通用必备 5 大基础插件」与「人脸追踪精修进阶套件」，并分别提供一键克隆命令复制按钮；
+    - 验证 FAQ 包含 YOLO 权重存放路径与跨平台自适应转换、MiniMax Music 03 版本要求 (v0.31.0+) 以及视频生成尺寸硬件严格锁死规则说明。
+
 - MiniMax H3 4-Step PDMD Workflow Asset Verification (MiniMax H3 4步 PDMD 极速工作流资产与文档验证):
   - **Omni Video 4-Step PDMD (`minimax_h3_ref2v_4step_pdmd_api.json`)**:
     - 检查工作流在 ComfyUI 加载与执行情况：验证 `minimax_h3_pdmd_4step_lora_avg_rank_57_bf16.safetensors` 模型与 `EasyCache` 节点正常识别；
