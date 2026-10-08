@@ -7,6 +7,18 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Node Copy Logic Revamp Verification (节点复制逻辑改造验证):
+  - **AI Generative Nodes Copy (AI 生成节点复制验证)**:
+    - 针对已生成完成的图片节点（Image）、视频节点（Video）、音频节点（Audio）及 AI 生成文本节点（Text），通过右键菜单「复制」或快捷键 `Ctrl/Cmd + C` + `Ctrl/Cmd + V` 进行复制；
+    - 验证新节点保持原节点的宽高尺寸，画面/产物内容被清空，重置为待生成占位；
+    - 验证新节点完整继承原节点的提示词（Prompt）、参数配置（模型、工作流、尺寸、时长等）、参考图/音频/文本连线；
+    - 验证新节点自动获得焦点并激活底栏面板，点击「生成」可直接生成新内容；
+  - **User Asset & Manual Text Copy (用户上传素材与手动输入文本复制验证)**:
+    - 针对拖入/上传的本地参考图片、本地参考视频、本地音频及用户手动输入的纯文本节点进行复制；
+    - 验证复制后的新节点完整保留素材文件/图片/视频/音频与手动输入的文本内容。
+  - **Batch Card Extract (多图卡片拆分独立节点验证)**:
+    - 展开多图批次卡片，点击单图卡片中的「创建副本」按钮，验证仍按原逻辑拆分出包含该张图片的独立单图节点。
+
 - Video Duration Slider 1~15s Verification (视频时长滑动条 1~15 秒调节验证):
   - **Slider Range & Interaction (滑动条范围与交互)**:
     - 选中画布视频节点（或配置节点视频模式），打开「视频设置」弹窗；

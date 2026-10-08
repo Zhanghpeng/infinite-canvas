@@ -1129,7 +1129,7 @@ function InfiniteCanvasPage() {
         if (!source) return;
 
         const id = `${source.type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const clonedMetadata = cloneNodeMetadata(source.metadata);
+        const clonedMetadata = cloneNodeMetadata(source.metadata, source.type);
 
         // 如果是 Group 组节点，级联复制组及其包含的所有子节点与内部连线
         if (source.type === CanvasNodeType.Group) {
@@ -1148,7 +1148,7 @@ function InfiniteCanvasPage() {
             const childNextNodes: CanvasNodeData[] = childNodes.map((child, index) => {
                 const childId = `${child.type}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`;
                 idMap.set(child.id, childId);
-                const childMetadata = cloneNodeMetadata(child.metadata);
+                const childMetadata = cloneNodeMetadata(child.metadata, child.type);
                 if (childMetadata) childMetadata.groupId = id;
                 return {
                     ...child,
@@ -1258,7 +1258,7 @@ function InfiniteCanvasPage() {
                     x: node.position.x + dx,
                     y: node.position.y + dy,
                 },
-                metadata: cloneNodeMetadata(node.metadata),
+                metadata: cloneNodeMetadata(node.metadata, node.type),
             };
         });
 
@@ -2242,7 +2242,7 @@ function InfiniteCanvasPage() {
                 width: node.width,
                 height: node.height,
                 metadata: {
-                    ...cloneNodeMetadata(node.metadata),
+                    ...cloneNodeMetadata(node.metadata, node.type),
                     status: isComplete ? NODE_STATUS_LOADING : undefined,
                     prompt,
                     effectivePrompt: prompt,
@@ -2825,7 +2825,7 @@ function InfiniteCanvasPage() {
                         width: isEmptyImageNode ? sourceNode?.width || imageConfig.width : (isRepeat && sourceNode?.width ? sourceNode.width : imageConfig.width),
                         height: isEmptyImageNode ? sourceNode?.height || imageConfig.height : (isRepeat && sourceNode?.height ? sourceNode.height : imageConfig.height),
                         metadata: {
-                            ...(isRepeat && sourceNode?.metadata ? cloneNodeMetadata(sourceNode.metadata) : {}),
+                            ...(isRepeat && sourceNode?.metadata ? cloneNodeMetadata(sourceNode.metadata, sourceNode.type) : {}),
                             prompt,
                             effectivePrompt,
                             channelId: sourceNode?.metadata?.channelId,
@@ -3108,7 +3108,7 @@ function InfiniteCanvasPage() {
                         width: isEmptyVideoNode ? sourceNode.width : (isRepeat && sourceNode?.width ? sourceNode.width : spec.width),
                         height: isEmptyVideoNode ? sourceNode.height : (isRepeat && sourceNode?.height ? sourceNode.height : spec.height),
                         metadata: {
-                            ...(isRepeat && sourceNode?.metadata ? cloneNodeMetadata(sourceNode.metadata) : {}),
+                            ...(isRepeat && sourceNode?.metadata ? cloneNodeMetadata(sourceNode.metadata, sourceNode.type) : {}),
                             prompt,
                             effectivePrompt,
                             channelId: sourceNode?.metadata?.channelId,
@@ -3214,7 +3214,7 @@ function InfiniteCanvasPage() {
                         width: isEmptyAudioNode ? sourceNode.width : (isRepeat && sourceNode?.width ? sourceNode.width : spec.width),
                         height: isEmptyAudioNode ? sourceNode.height : (isRepeat && sourceNode?.height ? sourceNode.height : spec.height),
                         metadata: {
-                            ...(isRepeat && sourceNode?.metadata ? cloneNodeMetadata(sourceNode.metadata) : {}),
+                            ...(isRepeat && sourceNode?.metadata ? cloneNodeMetadata(sourceNode.metadata, sourceNode.type) : {}),
                             prompt,
                             effectivePrompt,
                             channelId: sourceNode?.metadata?.channelId,
@@ -3303,7 +3303,7 @@ function InfiniteCanvasPage() {
                     width: isEmptyTextNode ? sourceNode.width : (isRepeat && sourceNode?.width ? sourceNode.width : textConfig.width),
                     height: isEmptyTextNode ? sourceNode.height : (isRepeat && sourceNode?.height ? sourceNode.height : textConfig.height),
                     metadata: {
-                        ...(isRepeat && sourceNode?.metadata ? cloneNodeMetadata(sourceNode.metadata) : {}),
+                        ...(isRepeat && sourceNode?.metadata ? cloneNodeMetadata(sourceNode.metadata, sourceNode.type) : {}),
                         prompt,
                         effectivePrompt,
                         channelId: sourceNode?.metadata?.channelId,
