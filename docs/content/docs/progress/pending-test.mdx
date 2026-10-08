@@ -7,6 +7,25 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Canvas Interaction & Floating Plus Handle Verification (画布操作模式与连接触点优化验证):
+  - **Canvas Default Mode & Space Pan (默认选择模式与空格平移)**:
+    - 进入画布，验证默认处于选择模式（Select）；左键在空白处按下拖动直接触发矩形框选（多选节点），点击空白处取消选中；
+    - 按住空格键（Space）+ 鼠标左键按下拖动，验证光标呈现抓手态并平滑平移整个画布（即使在节点上方按下空格拖动也可平滑平移画布）；鼠标中键同样支持随时拖动画布。
+  - **Multi-Selection Floating Plus Handle (多选外包围盒与浮动加号触点)**:
+    - 框选或多选多个节点，验证多选节点外层呈现统一的高亮虚线包围盒；
+    - 验证包围盒右边缘呈现放大的圆形加号按钮（+），且加号沿 Y 轴粘性跟随鼠标指针高度浮动；
+    - 单击加号按钮，验证右侧直接弹出创建菜单，选择节点类型后自动生成下游节点并建立全部选中节点的批量连线；
+    - 按住加号按钮拖拽，验证拉出连接所有选中节点的批量虚线，释放到目标节点建立连接，释放到空白处弹出创建菜单。
+  - **Single Node Handle Touch Optimization (单节点触点体验优化)**:
+    - 单选或悬停单个节点，验证右侧输出连接点升级为舒适的加号圆形按钮，支持点击快捷弹出创建菜单及轻松拖拽连线。
+
+- Smart Alignment Snapping & Guides Verification (相邻节点智能对齐磁吸线验证):
+  - **Adjacent Node Snapping & Visual Guides (邻近节点动态对齐与贯穿参考线)**:
+    - 拖拽单个或多个节点，当靠近相邻节点的左/中/右或顶/中/底边界时（阈值约 7px），验证自动产生平滑磁吸对齐效果；
+    - 验证吸附触发时，画布动态显示贯穿移动节点与相邻目标节点的蓝色虚线辅助参考线，松手后参考线即时消失；
+  - **Alt Key Temporary Disable (按住 Alt 临时禁用磁吸)**:
+    - 拖拽节点过程中按住 Alt（Mac 下为 Option）键，验证磁吸与参考线临时禁用，可进行自由像素级微调。
+
 - Node Copy Logic Revamp Verification (节点复制逻辑改造验证):
   - **AI Generative Nodes Copy (AI 生成节点复制验证)**:
     - 针对已生成完成的图片节点（Image）、视频节点（Video）、音频节点（Audio）及 AI 生成文本节点（Text），通过右键菜单「复制」或快捷键 `Ctrl/Cmd + C` + `Ctrl/Cmd + V` 进行复制；

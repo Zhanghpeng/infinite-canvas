@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronRight, Copy, Download, Group, Image as ImageIcon, Music2, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
+import { ChevronRight, Copy, Download, Group, Image as ImageIcon, Music2, Plus, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
@@ -57,6 +57,8 @@ type CanvasNodeProps = {
     onSelectReference?: (nodeId: string) => void;
     onSelectGroupChildren?: (nodeId: string) => void;
     onContextMenu: (event: React.MouseEvent, nodeId: string) => void;
+    onConnectClick?: (event: React.MouseEvent, nodeId: string, handleType: "source") => void;
+    hasMultipleSelected?: boolean;
 };
 
 type NodeContentRendererProps = {
@@ -123,6 +125,8 @@ export const CanvasNode = React.memo(function CanvasNode({
     onSelectReference,
     onSelectGroupChildren,
     onContextMenu,
+    onConnectClick,
+    hasMultipleSelected = false,
 }: CanvasNodeProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { t } = useTranslation();
@@ -450,7 +454,14 @@ export const CanvasNode = React.memo(function CanvasNode({
             </div>
 
             {!referenceSelectionState && !isGroup ? <ConnectionHandleDot side="left" visible={hovered || isSelected || isConnecting} onMouseDown={(event) => onConnectStart(event, data.id, "target")} /> : null}
-            {!referenceSelectionState && (definition?.hasSourceHandle ?? true) && data.type !== CanvasNodeType.Config ? <ConnectionHandleDot side="right" visible={hovered || isSelected || isConnecting} onMouseDown={(event) => onConnectStart(event, data.id, "source")} /> : null}
+            {!referenceSelectionState && (definition?.hasSourceHandle ?? true) && data.type !== CanvasNodeType.Config && !(hasMultipleSelected && isSelected) ? (
+                <ConnectionHandleDot
+                    side="right"
+                    visible={hovered || isSelected || isConnecting}
+                    onMouseDown={(event) => onConnectStart(event, data.id, "source")}
+                    onClick={(event) => onConnectClick?.(event, data.id, "source")}
+                />
+            ) : null}
 
             {showPanel && !isGroup && renderPanel ? <div className="absolute left-1/2 top-full z-[70] w-[720px] -translate-x-1/2 pt-4">{renderPanel(data)}</div> : null}
         </div>
@@ -973,14 +984,65 @@ function ResizeHandle({ corner, onMouseDown }: { corner: ResizeCorner; onMouseDo
     return <div className={`absolute z-50 size-7 ${positionClass}`} onMouseDown={(event) => onMouseDown(event, corner)} />;
 }
 
-function ConnectionHandleDot({ side, visible, onMouseDown }: { side: "left" | "right"; visible: boolean; onMouseDown: (event: React.MouseEvent) => void }) {
+function ConnectionHandleDot({
+    side,
+    visible,
+    onMouseDown,
+    onClick,
+}: {
+    side: "left" | "right";
+    visible: boolean;
+    onMouseDown: (event: React.MouseEvent) => void;
+    onClick?: (event: React.MouseEvent) => void;
+}) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
+
+    const handleMouseDown = (event: React.MouseEvent) => {
+        dragStartPosRef.current = { x: event.clientX, y: event.clientY };
+        onMouseDown(event);
+    };
+
+    const handleClick = (event: React.MouseEvent) => {
+        event.stopPropagation();
+        if (dragStartPosRef.current) {
+            const dx = Math.abs(event.clientX - dragStartPosRef.current.x);
+            const dy = Math.abs(event.clientY - dragStartPosRef.current.y);
+            if (dx > 4 || dy > 4) return;
+        }
+        onClick?.(event);
+    };
+
+    if (side === "right") {
+        return (
+            <div
+                className={`absolute top-1/2 z-30 flex size-12 -translate-y-1/2 cursor-crosshair items-center justify-center transition-opacity duration-150 -right-6 ${
+                    visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+                }`}
+                onMouseDown={handleMouseDown}
+                onClick={handleClick}
+                title="点击快捷创建 / 拖拽连线"
+                aria-label="连接触点"
+            >
+                <div
+                    className="flex size-6.5 items-center justify-center rounded-full border shadow-sm transition-all hover:scale-125 hover:shadow-md"
+                    style={{
+                        background: theme.node.panel,
+                        borderColor: theme.node.activeStroke || theme.node.stroke,
+                        color: theme.node.text,
+                    }}
+                >
+                    <Plus className="size-3.5 stroke-[2.5]" />
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div
-            className={`absolute top-1/2 z-30 flex size-12 -translate-y-1/2 cursor-crosshair items-center justify-center transition-opacity duration-150 ${
-                side === "left" ? "-left-6" : "-right-6"
-            } ${visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}
+            className={`absolute top-1/2 z-30 flex size-12 -translate-y-1/2 cursor-crosshair items-center justify-center transition-opacity duration-150 -left-6 ${
+                visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+            }`}
             onMouseDown={onMouseDown}
         >
             <div className="size-3 rounded-full border-2 transition-all hover:scale-125" style={{ background: theme.node.panel, borderColor: theme.node.muted }} />
