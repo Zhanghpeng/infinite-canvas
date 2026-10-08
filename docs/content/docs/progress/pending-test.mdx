@@ -7,6 +7,15 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Video Duration Slider 1~15s Verification (视频时长滑动条 1~15 秒调节验证):
+  - **Slider Range & Interaction (滑动条范围与交互)**:
+    - 选中画布视频节点（或配置节点视频模式），打开「视频设置」弹窗；
+    - 拖动「视频时长」滑动条，验证可平滑拖动至 1 秒至 15 秒之间的任意整数（步长 1s）；
+    - 验证拖动到 1 秒时，标题显示「视频时长: 1 秒」，外部胶囊按钮显示「... · 1s」；
+    - 点击「5 秒」、「10 秒」、「15 秒」快捷胶囊，验证滑动条与数值对应联动更新；
+  - **Generation Execution with Custom Seconds (不同秒数任务提交验证)**:
+    - 设置为 1~4 秒或 6~9 秒发起生成，验证提交给 ComfyUI 的参数 duration 正确传递所选秒数，且经底模对齐计算后正常出片。
+
 - Guide Page 8-Capability Revamp Verification (使用手册页面 8 大核心能力重构验证):
   - **Category Filter & 8-Matrix Display (分类筛选与 8 大矩阵展示)**:
     - 访问 `/guide` 页面，验证顶部分类筛选标签（全部 8、图像生成 3、视频生成 2、音乐音频 1、精修与辅助 2）正常工作；
