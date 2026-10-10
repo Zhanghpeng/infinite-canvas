@@ -20,6 +20,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
 import { captureVideoFrame, type VideoFramePosition } from "@/lib/canvas/canvas-video-frame";
+import { extractAudioFromVideo } from "@/lib/canvas/canvas-video-audio";
 import { App, Button, Modal } from "antd";
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "@/constant/canvas";
 import { ActiveConnectionPath, ConnectionPath } from "@/components/canvas/canvas-connections";
@@ -2109,6 +2110,56 @@ function InfiniteCanvasPage() {
                 message.success(t("canvas.videoFrames.captured"));
             } catch {
                 message.error(t("canvas.videoFrames.failed"));
+            }
+        },
+        [message, t],
+    );
+
+    const handleSeparateAudio = useCallback(
+        async (node: CanvasNodeData) => {
+            if (node.type !== CanvasNodeType.Video || !node.metadata?.content) {
+                message.warning(t("canvas.videoAudio.noVideo"));
+                return;
+            }
+            const hideLoading = message.loading(t("canvas.videoAudio.separating"), 0);
+            try {
+                const wavBlob = await extractAudioFromVideo(node.metadata.content, node.metadata.storageKey);
+                const audio = await uploadMediaFile(wavBlob, "audio");
+                const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
+                const id = `audio-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                const x = node.position.x + node.width + 96;
+                let y = node.position.y + node.height / 2 - spec.height / 2;
+                while (
+                    nodesRef.current.some(
+                        (item) => item.id !== node.id && item.position.x < x + spec.width && item.position.x + item.width > x && item.position.y < y + spec.height && item.position.y + item.height > y,
+                    )
+                ) {
+                    y += spec.height + 24;
+                }
+                const titleSuffix = t("canvas.videoAudio.audioSuffix");
+                const baseTitle = node.title || t("assets.kinds.video");
+                const child: CanvasNodeData = {
+                    id,
+                    type: CanvasNodeType.Audio,
+                    title: `${baseTitle} - ${titleSuffix}`,
+                    position: { x, y },
+                    width: spec.width,
+                    height: spec.height,
+                    metadata: audioMetadata(audio),
+                };
+                setNodes((prev) => [...prev, child]);
+                setSelectedNodeIds(new Set([id]));
+                setSelectedConnectionId(null);
+                setDialogNodeId(id);
+                message.success(t("canvas.videoAudio.separated"));
+            } catch (error) {
+                if (error instanceof Error && error.message === "NO_AUDIO_TRACK") {
+                    message.warning(t("canvas.videoAudio.noAudioTrack"));
+                } else {
+                    message.error(t("canvas.videoAudio.separateFailed"));
+                }
+            } finally {
+                hideLoading();
             }
         },
         [message, t],
@@ -4334,6 +4385,7 @@ function InfiniteCanvasPage() {
                     onViewImage={handleNodeViewImage}
                     onReversePrompt={createImageReversePromptNodes}
                     onFaceRefine={handleOpenFaceRefineModal}
+                    onSeparateAudio={handleSeparateAudio}
                     onRetry={handleNodeRetry}
                     onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}
                     onDelete={(node) => deleteNodes(new Set([node.id]))}

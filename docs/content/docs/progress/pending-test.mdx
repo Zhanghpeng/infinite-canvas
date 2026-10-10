@@ -7,6 +7,15 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Video Node Audio Separation Verification (视频节点音频分离功能验证):
+  - **Toolbar Entry & Separation (工具栏入口与即时分离)**:
+    - 鼠标悬停在包含视频内容的视频节点上方，验证悬浮工具栏中出现「分离音频」按钮（Music 图标）；
+    - 点击「分离音频」，验证弹出分离中提示，纯前端毫秒级解码并在视频节点右侧（避让重叠节点）生成独立的音频节点（标题为「原视频名称 - 音频」）；
+    - 验证新音频节点不与原视频节点自动连线，且生成后自动高亮选中新节点；
+    - 播放新音频节点，验证能正常播放视频原音。
+  - **Empty/Silent Video Handling (无音轨视频友好提示)**:
+    - 针对无音轨的纯静音视频点击「分离音频」，验证弹出警告提示「该视频未包含音频轨道」，且不生成空节点或损坏节点。
+
 - Canvas Interaction & Floating Plus Handle Verification (画布操作模式与连接触点优化验证):
   - **Canvas Default Mode & Space Pan (默认选择模式与空格平移)**:
     - 进入画布，验证默认处于选择模式（Select）；左键在空白处按下拖动直接触发矩形框选（多选节点），点击空白处取消选中；
