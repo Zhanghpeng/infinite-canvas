@@ -9,7 +9,8 @@ interface CanvasMultiSelectionOverlayProps {
     selectedNodes: CanvasNodeData[];
     mouseWorldY: number | null;
     scale: number;
-    onConnectStart: (event: React.MouseEvent, primaryNodeId: string, handleType: "source") => void;
+    isConnecting?: boolean;
+    onConnectStart: (event: React.MouseEvent | React.PointerEvent, primaryNodeId: string, handleType: "source") => void;
     onClickPlus: (position: Position, primaryNodeId: string, selectedNodeIds: string[]) => void;
 }
 
@@ -17,11 +18,13 @@ export function CanvasMultiSelectionOverlay({
     selectedNodes,
     mouseWorldY,
     scale,
+    isConnecting = false,
     onConnectStart,
     onClickPlus,
 }: CanvasMultiSelectionOverlayProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
+    const frozenYRef = useRef<number | null>(null);
 
     if (selectedNodes.length <= 1) return null;
 
@@ -37,7 +40,13 @@ export function CanvasMultiSelectionOverlay({
     const boxHeight = maxY - minY + padding * 2;
 
     const defaultCenterY = boxTop + boxHeight / 2;
-    const targetY = mouseWorldY !== null ? Math.max(boxTop + 24, Math.min(boxTop + boxHeight - 24, mouseWorldY)) : defaultCenterY;
+    const currentDynamicY = mouseWorldY !== null ? Math.max(boxTop + 24, Math.min(boxTop + boxHeight - 24, mouseWorldY)) : defaultCenterY;
+
+    // When actively connecting/dragging, freeze the plus button position so it stays anchored
+    const targetY = isConnecting ? (frozenYRef.current ?? defaultCenterY) : currentDynamicY;
+    if (!isConnecting) {
+        frozenYRef.current = currentDynamicY;
+    }
 
     const plusX = boxLeft + boxWidth;
     const plusY = targetY;
@@ -45,9 +54,17 @@ export function CanvasMultiSelectionOverlay({
     // The primary node represents the batch root for handle connection
     const primaryNode = selectedNodes[0];
 
+    const handlePointerDown = (event: React.PointerEvent) => {
+        event.stopPropagation();
+        dragStartPosRef.current = { x: event.clientX, y: event.clientY };
+        frozenYRef.current = targetY;
+        onConnectStart(event, primaryNode.id, "source");
+    };
+
     const handleMouseDown = (event: React.MouseEvent) => {
         event.stopPropagation();
         dragStartPosRef.current = { x: event.clientX, y: event.clientY };
+        frozenYRef.current = targetY;
         onConnectStart(event, primaryNode.id, "source");
     };
 
@@ -66,7 +83,7 @@ export function CanvasMultiSelectionOverlay({
     };
 
     return (
-        <div className="pointer-events-none absolute z-30" style={{ left: 0, top: 0 }}>
+        <div data-selection-overlay className="pointer-events-none absolute z-30" style={{ left: 0, top: 0 }}>
             {/* Dashed outer bounding box */}
             <div
                 className="absolute rounded-2xl border border-dashed transition-all duration-100"
@@ -91,6 +108,7 @@ export function CanvasMultiSelectionOverlay({
                 }}
             >
                 <button
+                    data-connection-handle
                     type="button"
                     className="group/plus relative flex size-8 cursor-crosshair items-center justify-center rounded-full border shadow-xl transition-all duration-150 hover:scale-125 hover:shadow-2xl active:scale-95"
                     style={{
@@ -98,6 +116,7 @@ export function CanvasMultiSelectionOverlay({
                         borderColor: theme.node.activeStroke,
                         color: theme.node.text,
                     }}
+                    onPointerDown={handlePointerDown}
                     onMouseDown={handleMouseDown}
                     onClick={handleClick}
                     title="点击快捷创建 / 拖拽批量连线"

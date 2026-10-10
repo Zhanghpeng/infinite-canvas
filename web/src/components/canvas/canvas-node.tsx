@@ -1016,10 +1016,12 @@ function ConnectionHandleDot({
     if (side === "right") {
         return (
             <div
+                data-connection-handle
                 className={`absolute top-1/2 z-30 flex size-12 -translate-y-1/2 cursor-crosshair items-center justify-center transition-opacity duration-150 -right-6 ${
                     visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
                 }`}
                 onMouseDown={handleMouseDown}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={handleClick}
                 title="点击快捷创建 / 拖拽连线"
                 aria-label="连接触点"
@@ -1040,10 +1042,12 @@ function ConnectionHandleDot({
 
     return (
         <div
+            data-connection-handle
             className={`absolute top-1/2 z-30 flex size-12 -translate-y-1/2 cursor-crosshair items-center justify-center transition-opacity duration-150 -left-6 ${
                 visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
             }`}
             onMouseDown={onMouseDown}
+            onPointerDown={(e) => e.stopPropagation()}
         >
             <div className="size-3 rounded-full border-2 transition-all hover:scale-125" style={{ background: theme.node.panel, borderColor: theme.node.muted }} />
         </div>

@@ -1611,7 +1611,7 @@ function InfiniteCanvasPage() {
                 return;
             }
 
-            if (selectedNodeIdsRef.current.size > 1 && !dragRef.current.isDraggingNode) {
+            if (selectedNodeIdsRef.current.size > 1 && !dragRef.current.isDraggingNode && !connectingParamsRef.current) {
                 setMouseWorld(screenToCanvas(event.clientX, event.clientY));
             }
 
@@ -1894,7 +1894,7 @@ function InfiniteCanvasPage() {
     }, [copySelectedNodes, deleteConnection, deleteNodes, pasteCopiedNodes, pasteSystemClipboard, redoCanvas, selectedConnectionId, setConnecting, undoCanvas]);
 
     const handleConnectStart = useCallback(
-        (event: ReactMouseEvent, nodeId: string, handleType: "source" | "target") => {
+        (event: ReactMouseEvent | React.PointerEvent, nodeId: string, handleType: "source" | "target") => {
             event.stopPropagation();
             setMouseWorld(screenToCanvas(event.clientX, event.clientY));
             setConnecting({ nodeId, handleType });
@@ -4331,6 +4331,7 @@ function InfiniteCanvasPage() {
                             selectedNodes={nodes.filter((n) => selectedNodeIds.has(n.id))}
                             mouseWorldY={mouseWorld.y}
                             scale={viewport.k}
+                            isConnecting={Boolean(connectingParams)}
                             onConnectStart={handleConnectStart}
                             onClickPlus={handleMultiSelectClickPlus}
                         />
