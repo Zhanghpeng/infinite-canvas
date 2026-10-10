@@ -4151,7 +4151,7 @@ function InfiniteCanvasPage() {
                     onReorderReferences={reorderNodeReferences}
                     onLocateNode={focusNode}
                     modeOverride={getNodeDefinition(panelNode.type)?.useBuiltinPanel?.mode}
-                    onImageSettingsOpenChange={(open) => {
+                    onSettingsOpenChange={(open) => {
                         setNodeImageSettingsOpen(open);
                         if (open) setToolbarNodeId(null);
                     }}

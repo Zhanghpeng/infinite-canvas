@@ -33,6 +33,7 @@ type CanvasNodePromptPanelProps = {
     onStartReferenceSelection?: (nodeId: string) => void;
     onReorderReferences?: (toNodeId: string, orderedSourceNodeIds: string[]) => void;
     onLocateNode?: (nodeId: string) => void;
+    onSettingsOpenChange?: (open: boolean) => void;
     onImageSettingsOpenChange?: (open: boolean) => void;
     modeOverride?: CanvasNodeGenerationMode; // Plugin nodes set their generation type through useBuiltinPanel.mode.
 };
@@ -51,9 +52,11 @@ export function CanvasNodePromptPanel({
     onStartReferenceSelection,
     onReorderReferences,
     onLocateNode,
+    onSettingsOpenChange,
     onImageSettingsOpenChange,
     modeOverride,
 }: CanvasNodePromptPanelProps) {
+    const handleSettingsOpenChange = onSettingsOpenChange || onImageSettingsOpenChange;
     const { t } = useTranslation();
     const globalConfig = useEffectiveConfig();
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
@@ -145,7 +148,7 @@ export function CanvasNodePromptPanel({
                                 buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
                                 onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })}
                                 onMissingConfig={() => openConfigDialog(true)}
-                                onOpenChange={onImageSettingsOpenChange}
+                                onOpenChange={handleSettingsOpenChange}
                             />
                         </>
                     ) : mode === "video" ? (
@@ -168,6 +171,7 @@ export function CanvasNodePromptPanel({
                                 config={config}
                                 buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
                                 onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value, config))}
+                                onOpenChange={handleSettingsOpenChange}
                             />
                         </>
                     ) : mode === "audio" ? (
@@ -178,7 +182,12 @@ export function CanvasNodePromptPanel({
                                 workflowId={node.metadata?.workflowId}
                                 onChange={(channelId, workflowId) => onConfigChange(node.id, { channelId, workflowId })}
                             />
-                            <CanvasAudioSettingsPopover config={config} buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3" onConfigChange={(key, value) => onConfigChange(node.id, audioConfigPatch(key, value))} />
+                            <CanvasAudioSettingsPopover
+                                config={config}
+                                buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
+                                onConfigChange={(key, value) => onConfigChange(node.id, audioConfigPatch(key, value))}
+                                onOpenChange={handleSettingsOpenChange}
+                            />
                         </>
                     ) : (
                         <>
@@ -188,7 +197,14 @@ export function CanvasNodePromptPanel({
                                 workflowId={node.metadata?.workflowId}
                                 onChange={(channelId, workflowId) => onConfigChange(node.id, { channelId, workflowId })}
                             />
-                            <CanvasTextSettingsPopover config={config} count={node.metadata?.textCount || 1} buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3" onConfigChange={(_, value) => onConfigChange(node.id, { reasoningEffort: value })} onCountChange={(textCount) => onConfigChange(node.id, { textCount })} />
+                            <CanvasTextSettingsPopover
+                                config={config}
+                                count={node.metadata?.textCount || 1}
+                                buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
+                                onConfigChange={(_, value) => onConfigChange(node.id, { reasoningEffort: value })}
+                                onCountChange={(textCount) => onConfigChange(node.id, { textCount })}
+                                onOpenChange={handleSettingsOpenChange}
+                            />
                         </>
                     )}
                 </div>

@@ -7,6 +7,21 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Node Settings Popover Interaction & Auto-Flip Verification (各节点设置弹层交互与自适应防自动隐藏验证):
+  - **Video Node Settings (视频节点设置交互)**:
+    - 选中视频节点（或配置节点视频模式），点击底栏中的视频设置按钮打开「视频设置」弹窗；
+    - 依次点击「全能参考 / 首尾帧」模式切换、「16:9 横屏 / 9:16 竖屏」比例切换、尺寸档位按钮及「5 秒 / 10 秒 / 15 秒」快捷胶囊，验证设置即时生效，且弹层**不会自动关闭或闪退**；
+    - 拖动「视频时长」滑动条并悬停查看 Tooltip，验证滑动条拖拽流畅，Tooltip 提示正常显示，且松手或移动时弹窗不消失；
+  - **Image, Audio, Text & Config Nodes Settings (图片/音频/文本/配置节点设置全量验证)**:
+    - 图片节点：打开图片设置弹窗，切换宽高比、修改自定义宽高数值、调整生成张数，验证弹窗稳定驻留；
+    - 音频节点：打开音频设置弹窗，切换时长快捷胶囊或拖动调节，验证正常驻留；
+    - 文本节点：打开文本设置弹窗，切换推理强度及生成次数，验证正常驻留；
+    - 配置节点：在图片、视频、音频、文本各模式下打开对应设置弹层并交互，验证不触发节点移动与弹层关闭；
+  - **Viewport Auto-Flip & Bounds Safety (视口自适应上下翻转与安全边界)**:
+    - 将节点平移至画布顶部附近时打开设置弹窗，验证当上方空间不足时自动翻转至下方展示，弹窗不会跑出屏幕上方或被截断；
+    - 将节点平移至画布底部附近时打开设置弹窗，验证自适应在上方展示，弹窗内部带滚动条且高度在安全可视范围内；
+    - 验证当设置弹层打开时，鼠标在节点附近移动不会被节点悬浮工具栏遮挡干扰。
+
 - Video Node Audio Separation Verification (视频节点音频分离功能验证):
   - **Toolbar Entry & Separation (工具栏入口与即时分离)**:
     - 鼠标悬停在包含视频内容的视频节点上方，验证悬浮工具栏中出现「分离音频」按钮（Music 图标）；
