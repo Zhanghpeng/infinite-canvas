@@ -39,19 +39,29 @@ export function CanvasAudioSettingsPopover({ config, onConfigChange, onOpenChang
             if (
                 buttonRef.current?.contains(target) ||
                 panelRef.current?.contains(target) ||
-                (target instanceof Element && Boolean(target.closest(".canvas-image-settings-popover,[data-canvas-no-zoom],.ant-tooltip,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown,.ant-modal")))
+                (target instanceof Element && Boolean(target.closest(".ant-tooltip, .ant-popover, .ant-dropdown, .ant-select-dropdown, .ant-picker-dropdown")))
             ) return;
+            if (document.activeElement instanceof HTMLElement && panelRef.current?.contains(document.activeElement)) {
+                document.activeElement.blur();
+            }
             updateOpen(false);
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                updateOpen(false);
+            }
         };
 
         syncPosition();
         window.addEventListener("resize", syncPosition);
         window.addEventListener("scroll", syncPosition, true);
         window.addEventListener("pointerdown", closeOnOutsidePointer, true);
+        window.addEventListener("keydown", handleKeyDown);
         return () => {
             window.removeEventListener("resize", syncPosition);
             window.removeEventListener("scroll", syncPosition, true);
             window.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+            window.removeEventListener("keydown", handleKeyDown);
         };
     }, [open]);
 
