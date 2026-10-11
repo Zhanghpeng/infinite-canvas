@@ -129,7 +129,7 @@
           "links": null
         }
       ],
-      "title": "out_put",
+      "title": "output_video",
       "properties": {
         "Node name for S&R": "SaveVideo"
       },

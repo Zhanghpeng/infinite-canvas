@@ -2165,6 +2165,162 @@ function InfiniteCanvasPage() {
         [message, t],
     );
 
+    const handleConvertDepthVideo = useCallback(
+        async (node: CanvasNodeData) => {
+            setToolbarNodeId(null);
+            setHoveredNodeId(null);
+            setContextMenu(null);
+
+            if (node.type !== CanvasNodeType.Video || !node.metadata?.content) {
+                message.warning(t("canvas.depthVideo.noVideo") || "请选择已包含有效视频的视频节点");
+                return;
+            }
+
+            const channelId = node.metadata?.channelId || effectiveConfig.channelId || effectiveConfig.channels?.[0]?.id;
+            const channel = effectiveConfig.channels?.find((c) => c.id === channelId) || effectiveConfig.channels?.[0];
+            if (!channel) {
+                message.error(t("canvas.depthVideo.noChannel") || "未找到可用的 ComfyUI 渠道");
+                return;
+            }
+
+            const depthWorkflow = getDefaultWorkflow(channel, "depthVideo");
+            if (!depthWorkflow) {
+                message.warning(t("canvas.depthVideo.noWorkflow") || "当前渠道未配置深度视频工作流，请先在渠道设置中配置");
+                return;
+            }
+
+            const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Video];
+            const childId = nanoid();
+            const baseTitle = node.title || t("assets.kinds.video");
+            const childTitle = `${baseTitle} - ${t("canvas.depthVideo.titleSuffix") || "深度"}`;
+            const x = node.position.x + node.width + 96;
+            let y = node.position.y;
+            while (
+                nodesRef.current.some(
+                    (item) => item.id !== node.id && item.position.x < x + (node.width || spec.width) && item.position.x + item.width > x && item.position.y < y + (node.height || spec.height) && item.position.y + item.height > y,
+                )
+            ) {
+                y += (node.height || spec.height) + 24;
+            }
+
+            const newVideoNode: CanvasNodeData = {
+                id: childId,
+                type: CanvasNodeType.Video,
+                title: childTitle,
+                position: { x, y },
+                width: node.width || spec.width,
+                height: node.height || spec.height,
+                metadata: {
+                    ...cloneNodeMetadata(node.metadata, node.type),
+                    status: NODE_STATUS_LOADING,
+                    prompt: "",
+                    effectivePrompt: "",
+                    channelId: channel.id,
+                    workflowId: depthWorkflow.id,
+                    videoMode: "omni",
+                    content: undefined,
+                    storageKey: undefined,
+                    jobId: undefined,
+                    isTimeout: undefined,
+                    errorDetails: undefined,
+                },
+            };
+
+            const newConnection: CanvasConnection = {
+                id: nanoid(),
+                fromNodeId: node.id,
+                toNodeId: childId,
+                kind: "lineage",
+            };
+
+            const nextNodes = [...nodesRef.current, newVideoNode];
+            const nextConnections = [...connectionsRef.current, newConnection];
+            nodesRef.current = nextNodes;
+            connectionsRef.current = nextConnections;
+
+            setNodes(nextNodes);
+            setConnections(nextConnections);
+            setSelectedNodeIds(new Set([childId]));
+            setSelectedConnectionId(null);
+            focusNode(childId);
+
+            message.loading({ content: t("canvas.depthVideo.converting") || "正在提取视频时序深度...", key: `depth-video-${childId}`, duration: 2 });
+            const controller = startGenerationRequest(childId, node.id, childId);
+
+            try {
+                const generationConfig: AiConfig = {
+                    ...effectiveConfig,
+                    videoMode: "omni",
+                    channelId: channel.id,
+                    workflowId: depthWorkflow.id,
+                };
+
+                const videoResult = await requestVideoGeneration(
+                    generationConfig,
+                    "",
+                    [],
+                    {
+                        signal: controller.signal,
+                        videoMode: "omni",
+                        referenceVideos: [{ id: node.id, url: node.metadata.content, storageKey: node.metadata.storageKey }],
+                        workflowId: depthWorkflow.id,
+                        channelId: channel.id,
+                        seed: generateRandomSeed(),
+                        onProgress: (status, detail) => {
+                            if (status === "submitted" && detail?.jobId) {
+                                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, jobId: detail.jobId } } : item)));
+                            }
+                        },
+                    },
+                );
+
+                const video = await storeGeneratedVideo(videoResult);
+                const videoSize = fitNodeSize(video.width || node.width, video.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                setNodes((prev) =>
+                    prev.map((item) =>
+                        item.id === childId
+                            ? {
+                                  ...item,
+                                  width: videoSize.width,
+                                  height: videoSize.height,
+                                  position: { x: item.position.x + item.width / 2 - videoSize.width / 2, y: item.position.y + item.height / 2 - videoSize.height / 2 },
+                                  metadata: {
+                                      ...item.metadata,
+                                      ...videoMetadata(video),
+                                      status: NODE_STATUS_SUCCESS,
+                                      jobId: undefined,
+                                  },
+                              }
+                            : item,
+                    ),
+                );
+                message.success({ content: t("canvas.depthVideo.converted") || "深度视频提取完成", key: `depth-video-${childId}` });
+            } catch (error) {
+                if (controller.signal.aborted) return;
+                const errText = error instanceof Error ? error.message : String(error);
+                setNodes((prev) =>
+                    prev.map((item) =>
+                        item.id === childId
+                            ? {
+                                  ...item,
+                                  metadata: {
+                                      ...item.metadata,
+                                      status: NODE_STATUS_ERROR,
+                                      errorDetails: errText,
+                                      jobId: undefined,
+                                  },
+                              }
+                            : item,
+                    ),
+                );
+                message.error({ content: errText || (t("canvas.depthVideo.convertFailed") || "深度视频提取失败"), key: `depth-video-${childId}` });
+            } finally {
+                finishGenerationRequest(childId, node.id, childId);
+            }
+        },
+        [effectiveConfig, focusNode, message, startGenerationRequest, finishGenerationRequest, t],
+    );
+
     const saveNodeAsset = useCallback(
         async (node: CanvasNodeData) => {
             if (node.type === CanvasNodeType.Text) {
@@ -4386,6 +4542,7 @@ function InfiniteCanvasPage() {
                     onViewImage={handleNodeViewImage}
                     onReversePrompt={createImageReversePromptNodes}
                     onFaceRefine={handleOpenFaceRefineModal}
+                    onDepthVideo={handleConvertDepthVideo}
                     onSeparateAudio={handleSeparateAudio}
                     onRetry={handleNodeRetry}
                     onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}

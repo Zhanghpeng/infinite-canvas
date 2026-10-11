@@ -1264,13 +1264,13 @@ export default function GuidePage() {
                                         onClick={() => setActiveCategory(item.key as CategoryFilter)}
                                         className={`inline-flex cursor-pointer select-none items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition ${
                                             isActive
-                                                ? "bg-stone-900 !text-white shadow-xs dark:bg-stone-100 dark:!text-stone-900"
+                                                ? "bg-stone-900 text-stone-50 shadow-xs dark:bg-stone-100 dark:text-stone-900"
                                                 : "bg-stone-100 text-stone-600 hover:bg-stone-200/80 hover:text-stone-900 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700 dark:hover:text-stone-200"
                                         }`}
                                     >
-                                        <Icon className="size-3 shrink-0" />
-                                        <span>{item.label}</span>
-                                        <span className={`text-[10px] ${isActive ? "opacity-75" : "opacity-60"}`}>({item.count})</span>
+                                        <Icon className={`size-3 shrink-0 ${isActive ? "text-stone-50 dark:text-stone-900" : "text-stone-500 dark:text-stone-400"}`} />
+                                        <span className={isActive ? "text-stone-50 dark:text-stone-900" : "text-stone-700 dark:text-stone-300"}>{item.label}</span>
+                                        <span className={`text-[10px] ${isActive ? "text-stone-300 dark:text-stone-600 font-medium" : "text-stone-400 dark:text-stone-500"}`}>({item.count})</span>
                                     </button>
                                 );
                             })}

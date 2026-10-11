@@ -160,12 +160,12 @@ export function validateComfyuiWorkflow(
         if (hasOutputVideo || hasOutputText || hasOutputAudio) {
             return { ok: false, error: "生图工作流不得包含 output_video、output_text 或 output_audio 标记" };
         }
-    } else if (category === "omniVideo" || category === "frameVideo" || category === "faceRefine") {
+    } else if (category === "omniVideo" || category === "frameVideo" || category === "faceRefine" || category === "depthVideo") {
         if (!hasOutputVideo) {
-            return { ok: false, error: "生视频/人脸修复工作流缺少 \"output_video\" 标记（请在 SaveVideo 或 VHS_VideoCombine 保存节点上标记 _meta.title 为 output_video）" };
+            return { ok: false, error: "生视频/人脸修复/深度视频工作流缺少 \"output_video\" 标记（请在 SaveVideo 或 VHS_VideoCombine 保存节点上标记 _meta.title 为 output_video）" };
         }
         if (hasOutputImage || hasOutputText || hasOutputAudio) {
-            return { ok: false, error: "视频/人脸修复工作流不得包含 output_image、output_text 或 output_audio 标记" };
+            return { ok: false, error: "视频/人脸修复/深度视频工作流不得包含 output_image、output_text 或 output_audio 标记" };
         }
     } else if (category === "text") {
         if (!hasOutputText) {
@@ -294,6 +294,12 @@ export function validateComfyuiWorkflow(
             }
             if (!hasPrompt) {
                 return { ok: false, error: "视频人脸修复工作流缺少 \"prompt\" 提示词槽位节点" };
+            }
+            break;
+
+        case "depthVideo":
+            if (!hasRefVideo) {
+                return { ok: false, error: "深度视频提取工作流缺少待提取视频输入槽位（必须标记 \"ref_video_01\" 槽位节点）" };
             }
             break;
     }
@@ -2310,7 +2316,7 @@ export async function submitComfyuiVideoJob(req: ComfyuiVideoRequest): Promise<{
           ? getDefaultWorkflow(channel, initialVideoMode === "frame" ? "frameVideo" : "omniVideo")
           : undefined;
     const isFrameWorkflow = targetWorkflowItem?.category === "frameVideo";
-    const isOmniOrRefineWorkflow = targetWorkflowItem?.category === "omniVideo" || targetWorkflowItem?.category === "faceRefine";
+    const isOmniOrRefineWorkflow = targetWorkflowItem?.category === "omniVideo" || targetWorkflowItem?.category === "faceRefine" || targetWorkflowItem?.category === "depthVideo";
     const hasReferenceVideos = Boolean(req.referenceVideos && req.referenceVideos.length > 0);
     const videoMode = isFrameWorkflow
         ? "frame"

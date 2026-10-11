@@ -4,7 +4,7 @@ import i18n from "@/i18n";
 import { adaptWorkflowModelPaths, applyBindings, cancelJob, ComfyuiAbortedError, ComfyuiApiError, ComfyuiJobError, ComfyuiNoWorkflowError, ComfyuiTimeoutError, downloadAsset, generateRandomSeed, parseSize, pollComfyuiVideoJob, pollJob, requestComfyuiImage, submitComfyuiVideoJob, submitJob, validateComfyuiWorkflow } from "@/services/api/comfyui";
 import type { ComfyuiWorkflowJson } from "@/services/api/comfyui";
 import { defaultConfig, findWorkflow, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
-import { DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW, DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW } from "@/services/api/comfyui-default-workflows";
+import { DEFAULT_BUILTIN_COMFYUI_DEPTH_VIDEO_WORKFLOW, DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW, DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW } from "@/services/api/comfyui-default-workflows";
 
 // The generation log store the service writes to (same localforage structure as image-storage).
 const { comfyuiLogStore } = vi.hoisted(() => ({
@@ -786,6 +786,20 @@ describe("validateComfyuiWorkflow & findWorkflow", () => {
             "2": { class_type: "VHS_VideoCombine", inputs: {}, _meta: { title: "output_video" } },
         };
         const result = validateComfyuiWorkflow(invalidWf as unknown as ComfyuiWorkflowJson, "faceRefine");
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("ref_video_01");
+    });
+
+    it("validates built-in depthVideo workflow successfully", () => {
+        const result = validateComfyuiWorkflow(DEFAULT_BUILTIN_COMFYUI_DEPTH_VIDEO_WORKFLOW.json, "depthVideo");
+        expect(result.ok).toBe(true);
+    });
+
+    it("rejects depthVideo workflow missing ref_video slot", () => {
+        const invalidWf = {
+            "1": { class_type: "SaveVideo", inputs: {}, _meta: { title: "output_video" } },
+        };
+        const result = validateComfyuiWorkflow(invalidWf as unknown as ComfyuiWorkflowJson, "depthVideo");
         expect(result.ok).toBe(false);
         expect(result.error).toContain("ref_video_01");
     });

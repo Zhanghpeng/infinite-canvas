@@ -36,7 +36,7 @@ export type ApiCallFormat = "openai" | "gemini" | "comfyui";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 
-export type WorkflowCategory = "t2i" | "i2i" | "inpaint" | "text" | "omniVideo" | "frameVideo" | "audio" | "faceRefine" | "superResolve" | "angle" | "upscale";
+export type WorkflowCategory = "t2i" | "i2i" | "inpaint" | "text" | "omniVideo" | "frameVideo" | "audio" | "faceRefine" | "depthVideo" | "superResolve" | "angle" | "upscale";
 
 export type ToolbarConfig = {
     ids: string[];
@@ -89,6 +89,7 @@ export type ModelChannel = {
     comfyuiUpscaleWorkflow?: ComfyuiWorkflow;
     comfyuiAudioWorkflow?: ComfyuiWorkflow;
     comfyuiFaceRefineWorkflow?: ComfyuiWorkflow;
+    comfyuiDepthVideoWorkflow?: ComfyuiWorkflow;
 };
 
 export type AiConfig = {
@@ -553,6 +554,7 @@ export function createModelChannel(channel?: Partial<ModelChannel>, options?: { 
         comfyuiFrameVideoWorkflow: channel?.comfyuiFrameVideoWorkflow !== undefined ? channel.comfyuiFrameVideoWorkflow : workflows.frameVideo,
         comfyuiAudioWorkflow: channel?.comfyuiAudioWorkflow !== undefined ? channel.comfyuiAudioWorkflow : workflows.audio,
         comfyuiFaceRefineWorkflow: channel?.comfyuiFaceRefineWorkflow !== undefined ? channel.comfyuiFaceRefineWorkflow : workflows.faceRefine,
+        comfyuiDepthVideoWorkflow: channel?.comfyuiDepthVideoWorkflow !== undefined ? channel.comfyuiDepthVideoWorkflow : workflows.depthVideo,
     };
     return result;
 }

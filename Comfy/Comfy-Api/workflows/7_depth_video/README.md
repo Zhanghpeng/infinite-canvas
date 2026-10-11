@@ -78,7 +78,7 @@
 | 槽位名 (`_meta.title`) | 节点类别 (`class_type`) | 内部输入/输出名 | 数据流与说明 |
 | :--- | :--- | :--- | :--- |
 | **`ref_video_01`** | `LoadVideo` | `file` | 待提取深度的原始输入视频（支持 MP4、MOV、WebM 等常规视频格式） |
-| **`out_put`** | `SaveVideo` | `video` | 深度视频最终产物输出端口，无声封装导出为 MP4 文件（保存路径前缀：`reshot/depth`） |
+| **`output_video`** | `SaveVideo` | `video` | 深度视频最终产物输出端口，无声封装导出为 MP4 文件（保存路径前缀：`reshot/depth`） |
 
 ---
 

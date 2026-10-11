@@ -7,6 +7,17 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Video Node Depth Video Conversion Verification (视频节点转深度视频功能验证):
+  - **Toolbar Entry & Immediate Dispatch (悬浮工具栏入口与一键派生执行)**:
+    - 鼠标悬停在已包含视频内容的视频节点上方，验证悬浮工具栏中出现「深度视频」按钮（Layers 图标，位于人脸修复之后）；
+    - 点击「深度视频」按钮，验证无需弹窗打扰，直接在原视频右侧避让空位派生标题为「原视频名称 - 深度」的全新视频节点；
+    - 验证新节点与原视频建立 lineage 血缘连线，提示词留空，并立即进入 Loading 状态向当前 ComfyUI 渠道异步提交生成任务；
+    - 生成完成后，验证视频节点正常回显近白远黑的时序灰度深度视频，并可作为下游视频生成的参考视频正常连线使用。
+  - **Channel Management Workflow Binding (渠道管理工作流注册与自定义支持)**:
+    - 打开「渠道与模型配置」抽屉，在「工具增强工作流」分组中验证包含「深度视频提取工作流 (`depthVideo`)」，出厂默认绑定「ReShot 深度视频提取」工作流；
+    - 验证支持上传自定义深度视频工作流，且严格校验必须包含 `ref_video_01` 与 `output_video` 槽位；
+    - 验证当当前渠道未配置该工作流时点击工具栏会弹出友好提示引导配置。
+
 - Guide Page Category Filter Buttons High-Contrast Verification (使用手册分类筛选胶囊高亮反色验证):
   - **Filter Button Active & Hover State (分类按钮选中态与悬停态对比度)**:
     - 访问 `/guide` 页面，向下滚动至「8 大核心能力工作流矩阵专区」；
