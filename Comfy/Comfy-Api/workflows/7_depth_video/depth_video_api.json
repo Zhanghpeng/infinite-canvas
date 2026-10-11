@@ -27,7 +27,7 @@
       "title": "ReShot Depth Video"
     }
   },
-  "3": {
+  "4": {
     "inputs": {
       "filename_prefix": "reshot/depth",
       "format": "auto",
