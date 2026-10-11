@@ -7,6 +7,14 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Guide Page Category Filter Buttons High-Contrast Verification (使用手册分类筛选胶囊高亮反色验证):
+  - **Filter Button Active & Hover State (分类按钮选中态与悬停态对比度)**:
+    - 访问 `/guide` 页面，向下滚动至「8 大核心能力工作流矩阵专区」；
+    - 观察模态分类筛选区域（包含「全部能力」、「图像生成」、「视频生成」、「音乐音频」、「精修与辅助」）；
+    - 分别在浅色模式与深色模式下点击切换各分类筛选按钮；
+    - 验证被选中按钮不仅背景高亮（浅色模式深黑背景、深色模式浅白背景），且内部文字、图标以及数量统计角标均呈现清晰的反色对比，杜绝出现白底白字或黑底黑字的情况；
+    - 验证未选中按钮在鼠标悬停时过渡平滑，点击后即时切换列表过滤结果。
+
 - Node Settings Popover Interaction & Auto-Flip Verification (各节点设置弹层交互与自适应防自动隐藏验证):
   - **Video Node Settings (视频节点设置交互)**:
     - 选中视频节点（或配置节点视频模式），点击底栏中的视频设置按钮打开「视频设置」弹窗；

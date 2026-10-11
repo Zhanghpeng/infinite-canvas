@@ -1014,7 +1014,7 @@ export default function GuidePage() {
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                         <div className="rounded-lg border border-stone-200 bg-card p-4 dark:border-stone-800">
                             <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-stone-500">
-                                <span className="flex size-5 items-center justify-center rounded-full bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900">
+                                <span className="flex size-5 items-center justify-center rounded-full bg-stone-900 !text-white dark:bg-stone-100 dark:!text-stone-900">
                                     1
                                 </span>
                                 启动本地 ComfyUI
@@ -1044,7 +1044,7 @@ export default function GuidePage() {
 
                         <div className="rounded-lg border border-stone-200 bg-card p-4 dark:border-stone-800">
                             <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-stone-500">
-                                <span className="flex size-5 items-center justify-center rounded-full bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900">
+                                <span className="flex size-5 items-center justify-center rounded-full bg-stone-900 !text-white dark:bg-stone-100 dark:!text-stone-900">
                                     2
                                 </span>
                                 下载工作流文件
@@ -1056,7 +1056,7 @@ export default function GuidePage() {
 
                         <div className="rounded-lg border border-stone-200 bg-card p-4 dark:border-stone-800">
                             <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-stone-500">
-                                <span className="flex size-5 items-center justify-center rounded-full bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900">
+                                <span className="flex size-5 items-center justify-center rounded-full bg-stone-900 !text-white dark:bg-stone-100 dark:!text-stone-900">
                                     3
                                 </span>
                                 安装插件与模型
@@ -1068,7 +1068,7 @@ export default function GuidePage() {
 
                         <div className="rounded-lg border border-stone-200 bg-card p-4 dark:border-stone-800">
                             <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-stone-500">
-                                <span className="flex size-5 items-center justify-center rounded-full bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900">
+                                <span className="flex size-5 items-center justify-center rounded-full bg-stone-900 !text-white dark:bg-stone-100 dark:!text-stone-900">
                                     4
                                 </span>
                                 调试成功后即可使用
@@ -1262,15 +1262,15 @@ export default function GuidePage() {
                                         key={item.key}
                                         type="button"
                                         onClick={() => setActiveCategory(item.key as CategoryFilter)}
-                                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition ${
+                                        className={`inline-flex cursor-pointer select-none items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition ${
                                             isActive
-                                                ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
-                                                : "bg-stone-100 text-stone-600 hover:bg-stone-200/80 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700"
+                                                ? "bg-stone-900 !text-white shadow-xs dark:bg-stone-100 dark:!text-stone-900"
+                                                : "bg-stone-100 text-stone-600 hover:bg-stone-200/80 hover:text-stone-900 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700 dark:hover:text-stone-200"
                                         }`}
                                     >
-                                        <Icon className="size-3" />
+                                        <Icon className="size-3 shrink-0" />
                                         <span>{item.label}</span>
-                                        <span className={`text-[10px] opacity-75`}>({item.count})</span>
+                                        <span className={`text-[10px] ${isActive ? "opacity-75" : "opacity-60"}`}>({item.count})</span>
                                     </button>
                                 );
                             })}
