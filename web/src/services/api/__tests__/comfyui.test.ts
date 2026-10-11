@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
-import { adaptWorkflowModelPaths, applyBindings, cancelJob, ComfyuiAbortedError, ComfyuiApiError, ComfyuiJobError, ComfyuiNoWorkflowError, ComfyuiTimeoutError, downloadAsset, generateRandomSeed, parseSize, pollComfyuiVideoJob, pollJob, requestComfyuiImage, submitComfyuiVideoJob, submitJob, validateComfyuiWorkflow } from "@/services/api/comfyui";
+import { adaptWorkflowModelPaths, applyBindings, cancelJob, collectVideoAssetIds, ComfyuiAbortedError, ComfyuiApiError, ComfyuiJobError, ComfyuiNoWorkflowError, ComfyuiTimeoutError, downloadAsset, generateRandomSeed, parseSize, pollComfyuiVideoJob, pollJob, requestComfyuiImage, submitComfyuiVideoJob, submitJob, validateComfyuiWorkflow } from "@/services/api/comfyui";
 import type { ComfyuiWorkflowJson } from "@/services/api/comfyui";
 import { defaultConfig, findWorkflow, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { DEFAULT_BUILTIN_COMFYUI_DEPTH_VIDEO_WORKFLOW, DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW, DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW } from "@/services/api/comfyui-default-workflows";
@@ -766,6 +766,66 @@ describe("native ComfyUI video validation", () => {
         expect(error).toBeInstanceOf(Error);
         expect(error).not.toBeInstanceOf(ComfyuiAbortedError);
         expect((error as Error).message).toBe(i18n.t("comfyui.noVideoOutput"));
+    });
+
+    it("prioritizes type = 'output' when outputs contain both input and output nodes", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url.includes("/history/job_multi")) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({
+                        job_multi: {
+                            status: { status_str: "success", completed: true },
+                            outputs: {
+                                "1": {
+                                    videos: [{ filename: "input_ref.mp4", subfolder: "", type: "input" }],
+                                },
+                                "4": {
+                                    videos: [{ filename: "depth_generated.mp4", subfolder: "reshot", type: "output" }],
+                                },
+                            },
+                        },
+                    }),
+                };
+            }
+            if (url.includes("/view?") || url.includes("/api/view?")) {
+                return {
+                    ok: true,
+                    status: 200,
+                    blob: async () => new Blob(["fake-mp4"], { type: "video/mp4" }),
+                };
+            }
+            return { ok: false, status: 404 };
+        });
+
+        const res = await pollComfyuiVideoJob("job_multi", "http://10.7.8.12:8188");
+        expect(res).toBeDefined();
+        const viewCalls = fetchMock.mock.calls.filter((c: unknown[]) => typeof c[0] === "string" && (c[0].includes("/view?") || c[0].includes("/api/view?")));
+        expect(viewCalls.length).toBeGreaterThan(0);
+        expect(viewCalls[0][0]).toContain("filename=depth_generated.mp4");
+        expect(viewCalls[0][0]).toContain("type=output");
+    });
+});
+
+describe("collectVideoAssetIds prioritization", () => {
+    it("returns output node over input or temp nodes", () => {
+        const outputs = [
+            { id: "/api/view?filename=input.mp4&type=input", output_type: "input", type: "video" },
+            { id: "/api/view?filename=preview.mp4&type=temp", output_type: "temp", type: "video" },
+            { id: "/api/view?filename=result.mp4&type=output", output_type: "output", type: "video" },
+        ];
+        const res = collectVideoAssetIds(outputs);
+        expect(res).toEqual(["/api/view?filename=result.mp4&type=output"]);
+    });
+
+    it("falls back to temp when no output type exists", () => {
+        const outputs = [
+            { id: "/api/view?filename=input.mp4&type=input", output_type: "input", type: "video" },
+            { id: "/api/view?filename=preview.mp4&type=temp", output_type: "temp", type: "video" },
+        ];
+        const res = collectVideoAssetIds(outputs);
+        expect(res).toEqual(["/api/view?filename=preview.mp4&type=temp"]);
     });
 });
 

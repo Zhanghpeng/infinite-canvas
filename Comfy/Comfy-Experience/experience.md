@@ -120,6 +120,25 @@
 
 ---
 
+### 8. 多节点输出与 `type = output` 正式产物优先级
+
+**现象**：
+- 工作流中同时包含输入加载/预览节点（如 `LoadVideo`、`PreviewImage`）和输出保存节点（如 `SaveVideo`、`SaveImage`）时，ComfyUI 的 `/history/{jobId}` 返回的 `outputs` 字典包含多个节点。
+- 由于字典键按键名升序遍历（如节点 `1` 早于节点 `4`），前端简单遍历首个有效条目会错误取到输入参考视频（其在 ComfyUI 内部标识为 `type: "input"` 或 `"temp"`），导致生成结果误展示为原始输入素材。
+
+**根因**：
+- ComfyUI 原生规范中，`SaveImage` / `SaveVideo` / `VHS_VideoCombine` 保存的正式结果项其 `type` 字段为 `"output"`。
+- 输入加载节点或临时预览节点其 `type` 字段为 `"input"` 或 `"temp"`。
+
+**处理方案**：
+- 在 `web/src/services/api/comfyui.ts` 中实现统一的产物优先级分级规则：
+  - `rank 0`：`type === "output"`（最终正式落盘产物，最高优先级）
+  - `rank 1`：`type === "temp"`（临时预览产物，无正式保存节点时的兜底）
+  - `rank 2`：`type === "input"`（输入参考资产，最低优先级，仅作为极端备用）
+- 在 `pollJobRaw` 中对解析出的 `outputs` 列表按该等级稳定排序，并在 `collectVideoAssetIds`、`collectImageAssetIds` 与 `collectAudioAssetIds` 收集器中严格优先返回 `type === "output"` 的条目，彻底杜绝多节点工作流误取输入节点素材的问题。
+
+---
+
 ## 调试方法推荐
 
 1. **直连验证**：
