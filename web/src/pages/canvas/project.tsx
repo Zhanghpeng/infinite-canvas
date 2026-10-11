@@ -32,6 +32,7 @@ import { CanvasNodeMaskEditDialog, type CanvasImageMaskEditPayload } from "@/com
 import { CanvasNodeSplitDialog, type CanvasImageSplitParams } from "@/components/canvas/canvas-node-split-dialog";
 import { CanvasNodeUpscaleDialog, type CanvasImageUpscaleParams } from "@/components/canvas/canvas-node-upscale-dialog";
 import { CanvasFaceRefineModal } from "@/components/canvas/canvas-face-refine-modal";
+import { CanvasDepthVideoModal } from "@/components/canvas/canvas-depth-video-modal";
 import { buildNodeGenerationContext, buildNodeGenerationInputs, buildNodeResponseMessages, hydrateNodeGenerationContext, type NodeGenerationContext, type NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import { CanvasNodeHoverToolbar, CanvasNodeInfoModal } from "@/components/canvas/canvas-node-hover-toolbar";
 import { InfiniteCanvas } from "@/components/canvas/infinite-canvas";
@@ -276,6 +277,7 @@ function InfiniteCanvasPage() {
     const [splitNodeId, setSplitNodeId] = useState<string | null>(null);
     const [upscaleNodeId, setUpscaleNodeId] = useState<string | null>(null);
     const [faceRefineNode, setFaceRefineNode] = useState<CanvasNodeData | null>(null);
+    const [depthVideoNode, setDepthVideoNode] = useState<CanvasNodeData | null>(null);
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
     const [previewImageId, setPreviewImageId] = useState<string | null>(null);
     const [titleEditing, setTitleEditing] = useState(false);
@@ -2165,8 +2167,8 @@ function InfiniteCanvasPage() {
         [message, t],
     );
 
-    const handleConvertDepthVideo = useCallback(
-        async (node: CanvasNodeData) => {
+    const handleOpenDepthVideoModal = useCallback(
+        (node: CanvasNodeData) => {
             setToolbarNodeId(null);
             setHoveredNodeId(null);
             setContextMenu(null);
@@ -2176,16 +2178,17 @@ function InfiniteCanvasPage() {
                 return;
             }
 
-            const channelId = node.metadata?.channelId || effectiveConfig.channelId || effectiveConfig.channels?.[0]?.id;
+            setDepthVideoNode(node);
+        },
+        [message, t],
+    );
+
+    const handleExecuteDepthVideo = useCallback(
+        async (node: CanvasNodeData, options: { channelId: string; workflowId: string }) => {
+            const { channelId, workflowId } = options;
             const channel = effectiveConfig.channels?.find((c) => c.id === channelId) || effectiveConfig.channels?.[0];
             if (!channel) {
                 message.error(t("canvas.depthVideo.noChannel") || "未找到可用的 ComfyUI 渠道");
-                return;
-            }
-
-            const depthWorkflow = getDefaultWorkflow(channel, "depthVideo");
-            if (!depthWorkflow) {
-                message.warning(t("canvas.depthVideo.noWorkflow") || "当前渠道未配置深度视频工作流，请先在渠道设置中配置");
                 return;
             }
 
@@ -2215,8 +2218,8 @@ function InfiniteCanvasPage() {
                     status: NODE_STATUS_LOADING,
                     prompt: "",
                     effectivePrompt: "",
-                    channelId: channel.id,
-                    workflowId: depthWorkflow.id,
+                    channelId,
+                    workflowId,
                     videoMode: "omni",
                     content: undefined,
                     storageKey: undefined,
@@ -2251,8 +2254,8 @@ function InfiniteCanvasPage() {
                 const generationConfig: AiConfig = {
                     ...effectiveConfig,
                     videoMode: "omni",
-                    channelId: channel.id,
-                    workflowId: depthWorkflow.id,
+                    channelId,
+                    workflowId,
                 };
 
                 const videoResult = await requestVideoGeneration(
@@ -2263,8 +2266,8 @@ function InfiniteCanvasPage() {
                         signal: controller.signal,
                         videoMode: "omni",
                         referenceVideos: [{ id: node.id, url: node.metadata.content, storageKey: node.metadata.storageKey }],
-                        workflowId: depthWorkflow.id,
-                        channelId: channel.id,
+                        workflowId,
+                        channelId,
                         seed: generateRandomSeed(),
                         onProgress: (status, detail) => {
                             if (status === "submitted" && detail?.jobId) {
@@ -4542,7 +4545,7 @@ function InfiniteCanvasPage() {
                     onViewImage={handleNodeViewImage}
                     onReversePrompt={createImageReversePromptNodes}
                     onFaceRefine={handleOpenFaceRefineModal}
-                    onDepthVideo={handleConvertDepthVideo}
+                    onDepthVideo={handleOpenDepthVideoModal}
                     onSeparateAudio={handleSeparateAudio}
                     onRetry={handleNodeRetry}
                     onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}
@@ -4662,6 +4665,17 @@ function InfiniteCanvasPage() {
                     onConfirm={(payload) => {
                         if (faceRefineNode) {
                             void handleExecuteFaceRefine(faceRefineNode, payload);
+                        }
+                    }}
+                />
+
+                <CanvasDepthVideoModal
+                    open={Boolean(depthVideoNode)}
+                    node={depthVideoNode}
+                    onClose={() => setDepthVideoNode(null)}
+                    onConfirm={(payload) => {
+                        if (depthVideoNode) {
+                            void handleExecuteDepthVideo(depthVideoNode, payload);
                         }
                     }}
                 />

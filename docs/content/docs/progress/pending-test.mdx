@@ -14,10 +14,12 @@ The current release needs manual verification in these areas:
     - 验证对于包含 `temp` 预览和 `output` 正式保存节点的工作流，产物严格优先呈现 `output` 正式结果。
 
 - Video Node Depth Video Conversion Verification (视频节点转深度视频功能验证):
-  - **Toolbar Entry & Immediate Dispatch (悬浮工具栏入口与一键派生执行)**:
+  - **Toolbar Entry & Host Selection Modal (悬浮工具栏入口与主机选择弹窗)**:
     - 鼠标悬停在已包含视频内容的视频节点上方，验证悬浮工具栏中出现「深度视频」按钮（Layers 图标，位于人脸修复之后）；
-    - 点击「深度视频」按钮，验证无需弹窗打扰，直接在原视频右侧避让空位派生标题为「原视频名称 - 深度」的全新视频节点；
-    - 验证新节点与原视频建立 lineage 血缘连线，提示词留空，并立即进入 Loading 状态向当前 ComfyUI 渠道异步提交生成任务；
+    - 点击「深度视频」按钮，验证弹出「视频深度估计 / 深度视频」专属配置对话框；
+    - 验证弹窗支持选择执行主机 / 渠道（显示主机地址与默认标识，并提供管理渠道入口快捷跳转）；
+    - 验证弹窗支持选择深度视频工作流，默认自动选中出厂内置的「ReShot 深度视频提取」工作流；
+    - 验证检测展示原视频就绪状态，点击「开始提取深度视频」后在原视频右侧派生血缘节点并进入 Loading 状态异步提交；
     - 生成完成后，验证视频节点正常回显近白远黑的时序灰度深度视频，并可作为下游视频生成的参考视频正常连线使用。
   - **Channel Management Workflow Binding (渠道管理工作流注册与自定义支持)**:
     - 打开「渠道与模型配置」抽屉，在「工具增强工作流」分组中验证包含「深度视频提取工作流 (`depthVideo`)」，出厂默认绑定「ReShot 深度视频提取」工作流；
