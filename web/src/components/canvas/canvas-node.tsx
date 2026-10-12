@@ -46,6 +46,7 @@ type CanvasNodeProps = {
     onResizeEnd: (nodeId: string) => void;
     onContentChange: (nodeId: string, content: string) => void;
     onTitleChange: (nodeId: string, title: string) => void;
+    onEditingTitleChange?: (nodeId: string, isEditing: boolean) => void;
     onToggleBatch?: (nodeId: string) => void;
     onSetBatchPrimary?: (nodeId: string, itemId: string) => void;
     onDuplicateBatchImage?: (node: CanvasNodeData, imageId: string) => void;
@@ -114,6 +115,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     onResizeEnd,
     onContentChange,
     onTitleChange,
+    onEditingTitleChange,
     onToggleBatch,
     onSetBatchPrimary,
     onDuplicateBatchImage,
@@ -136,6 +138,13 @@ export const CanvasNode = React.memo(function CanvasNode({
     const [isEditingContent, setIsEditingContent] = useState(false);
     const [isEditingTitle, setIsEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState(data.title || "");
+
+    useEffect(() => {
+        onEditingTitleChange?.(data.id, isEditingTitle);
+        return () => {
+            if (isEditingTitle) onEditingTitleChange?.(data.id, false);
+        };
+    }, [data.id, isEditingTitle, onEditingTitleChange]);
     const hasImageContent = data.type === CanvasNodeType.Image && Boolean(data.metadata?.content || data.metadata?.images?.some((img) => Boolean(img.content)));
     const hasVideoContent = data.type === CanvasNodeType.Video && Boolean(data.metadata?.content);
     const hasAudioContent = data.type === CanvasNodeType.Audio && Boolean(data.metadata?.content);

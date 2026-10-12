@@ -7,6 +7,19 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Canvas Node Hover Toolbar & Title Layout Coordination Verification (画布节点悬浮工具栏与标题布局协调验证):
+  - **Toolbar Lifting & No Title Overlap (工具栏抬高与无标题遮挡)**:
+    - 选中任意节点或鼠标悬停在节点上，观察节点上方的悬浮工具栏与标题栏；
+    - 验证工具栏位于标题上方，两者之间保留舒适的视觉间距，标题文本与重命名下划线完全暴露可见，不再被工具栏遮挡；
+  - **Auto-Flip on Viewport Top Overflow (视口顶部空间不足自动向下翻转)**:
+    - 将节点向上拖拽靠近画布视口顶部，或缩放画布使节点顶部距离视口顶栏小于 60px；
+    - 验证悬浮工具栏自动翻转到节点下方外侧（底部 16px 处）展示，按钮的 Tooltip 提示也自适应朝下方弹出；
+    - 将节点移回视口中央，验证工具栏平滑恢复至节点上方展示；
+  - **Temporary Toolbar Hide on Title Editing (双击编辑标题时自动隐藏工具栏)**:
+    - 双击节点标题进入重命名编辑输入状态；
+    - 验证悬浮工具栏立即自动隐去，避免在打字时产生视觉干扰；
+    - 输入完成按 Enter 键、Escape 键或点击外部失焦，验证标题保存成功且悬浮工具栏平滑恢复显示。
+
 - Guide Page Depth Video Workflow Integration Verification (使用手册接入视频深度估计工作流验证):
   - **9-Matrix Display & Filter Count (9 大能力矩阵与分类筛选计数)**:
     - 访问 `/guide` 页面，验证「全部能力」计数为 9，「视频生成」分类计数由 2 更新为 3；
