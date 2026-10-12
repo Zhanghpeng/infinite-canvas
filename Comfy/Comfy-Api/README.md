@@ -6,7 +6,7 @@
 
 ---
 
-## 6 大核心能力模型对照矩阵
+## 9 大核心能力模型对照矩阵
 
 | 序号 | 业务分类 | 工作流名称 | 模型名称 | 核心模型权重路径（ComfyUI `models/` 目录） | 采样步数 | 推荐显存 | 核心技术特点 |
 | :---: | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
@@ -16,8 +16,9 @@
 | **4** | **文本生成 / 反推 (Text)** | [文本生成工作流](./workflows/4_text/) | `Qwen3.5 4B` | `diffusion_models/qwen3.5_4b_bf16.safetensors` | 自回归 | 4G ~ 6G | 轻量端侧 4B 语言模型、支持提示词自动扩写与图像反推提示词、数据纯本地离线保密 |
 | **5** | **全能参考视频 (Omni Video)** | [全能参考视频工作流](./workflows/5_omni_video/) | `MiniMax H3 ref2va` | **FP8版**: `diffusion_models/minimax_h3_ref2va_pruned_fp8_scaled.safetensors`<br/>**BF16版**: `diffusion_models/minimax_h3_ref2va_bf16.safetensors`<br/>**LoRA**: `loras/minimax_h3_pdmd_4step_lora_avg_rank_57_bf16.safetensors`<br/>`loras/minimax_h3_ref2v_lightx2v_turbo_4step_v0.1...safetensors`<br/>**Text**: `text_encoders/qwen3vl_32b_minimax_h3...safetensors`<br/>**VAE**: `minimax_h3_video_vae_fp16`, `minimax_h3_audio_vae_fp32` | 4步 (PDMD)<br/>20步 (FP8)<br/>8步 (Turbo)<br/>20步 (BF16高精) | 16G ~ 24G+ | 首创多模态参考（最多 9 图 + 3 视频 + 3 音频）、原生音画潜空间联合生成、支持 EasyCache 去噪缓存与 4 步 PDMD 极速出片 |
 | **6** | **首尾帧视频 (Frame Video)** | [首尾帧视频工作流](./workflows/6_frame_video/) | `MiniMax H3 fl2va` | **FP8版**: `diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors`<br/>**BF16版**: `diffusion_models/minimax_h3_fl2va_bf16.safetensors`<br/>**LoRA**: `loras/minimax_h3_pdmd_4step_lora_avg_rank_57_bf16.safetensors`<br/>`loras/minimax_h3_ref2v_lightx2v_turbo_4step_v0.1...safetensors`<br/>辅助模型同全能视频 | 4步 (PDMD)<br/>20步 (FP8)<br/>8步 (Turbo)<br/>20步 (BF16高精) | 16G ~ 24G+ | 精准锚定起始帧与结束帧、运镜与动作平滑插值过渡、支持 4 步 PDMD 极速首尾帧插值、音画同步生成 |
-| **7** | **音乐与音频 (Audio / Music)** | [音频生成工作流](./workflows/10_audio/) | `MiniMax Music 03` | `diffusion_models/minimax_music3_dit_fp16.safetensors`<br/>`text_encoders/minimax_music3_text_encoder_pruned_int8_convrot.safetensors`<br/>`vae/minimax_music3_dav.safetensors` | 30 步 | 8G ~ 16G+ | 扩散音乐模型、双文本驱动（风格三段式 + 结构歌词）、支持最长 5 分钟完整歌曲与纯伴奏 |
-| **8** | **视频人脸精修 (Face Refine)** | [人脸精修工作流](./workflows/11_h3_face_refine/) | `MiniMax H3 ref2va`<br/>+ Turbo LoRA | `diffusion_models/minimax_h3_ref2va_pruned_fp8_scaled.safetensors`<br/>`loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors`<br/>`ultralytics/segm/person_yolov8m-seg.pt` | 8 步 (Turbo) | 16G ~ 24G+ | 针对生成视频远景小脸与微表情崩坏，基于 YOLO 时序追踪裁剪、按帧像素尺寸自适应去噪与原生口型音频锁无缝修复 |
+| **7** | **视频深度估计 (Depth Video)** | [深度估计工作流](./workflows/7_depth_video/) | `Video Depth Anything Small` | `~/.cache/huggingface/hub/models--depth-anything--Video-Depth-Anything-Small/` | 单目时序前向推理 | 3G (Fast) ~ 12G (Full) | 「复制走位与运镜，不复制演员与画风」：时序连续深度视频提取、32帧滑动窗口平滑对齐、居中裁切防黑边、供 H3 或 ControlNet 强结构参考 |
+| **8** | **音乐与音频 (Audio / Music)** | [音频生成工作流](./workflows/10_audio/) | `MiniMax Music 03` | `diffusion_models/minimax_music3_dit_fp16.safetensors`<br/>`text_encoders/minimax_music3_text_encoder_pruned_int8_convrot.safetensors`<br/>`vae/minimax_music3_dav.safetensors` | 30 步 | 8G ~ 16G+ | 扩散音乐模型、双文本驱动（风格三段式 + 结构歌词）、支持最长 5 分钟完整歌曲与纯伴奏 |
+| **9** | **视频人脸精修 (Face Refine)** | [人脸精修工作流](./workflows/11_h3_face_refine/) | `MiniMax H3 ref2va`<br/>+ Turbo LoRA | `diffusion_models/minimax_h3_ref2va_pruned_fp8_scaled.safetensors`<br/>`loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors`<br/>`ultralytics/segm/person_yolov8m-seg.pt` | 8 步 (Turbo) | 16G ~ 24G+ | 针对生成视频远景小脸与微表情崩坏，基于 YOLO 时序追踪裁剪、按帧像素尺寸自适应去噪与原生口型音频锁无缝修复 |
 
 ---
 
@@ -63,11 +64,15 @@ Comfy/Comfy-Api/
     │   ├── minimax_h3_fl2va_bf16_8step_turbo_api.json # 极速 Turbo 8 步
     │   ├── minimax_h3_fl2va_bf16_20step_api.json      # 全量 20 步
     │   └── minimax_h3_fl2va_workflow.json             # UI 工作流
-    ├── 10_audio/                           # 7. 音频与音乐工作流 (Audio / Music)
+    ├── 7_depth_video/                      # 7. 视频深度估计工作流 (Depth Video)
+    │   ├── README.md                       # 说明与参数契约 (ReShotDepthVideo, LoadVideo, SaveVideo)
+    │   ├── depth_video_api.json            # API 格式工作流
+    │   └── depth_video_workflow.json       # UI 可视化工作流
+    ├── 10_audio/                           # 8. 音频与音乐工作流 (Audio / Music)
     │   ├── README.md                       # 说明与插槽契约 (caption, lyrics, duration, seed -> output_audio)
     │   ├── audio_minimax_music_3_api.json  # MiniMax Music 03 API 格式
     │   └── audio_minimax_music_3_workflow.json # UI 工作流
-    └── 11_h3_face_refine/                  # 8. 视频人脸追踪精修工作流 (Face Refine)
+    └── 11_h3_face_refine/                  # 9. 视频人脸追踪精修工作流 (Face Refine)
         ├── README.md                       # 说明与插槽契约 (ref_video_01, ref_image_01..08, prompt -> output)
         ├── H3_Face_Refine_Auto_Select_Api.json      # API 格式工作流
         └── H3_Face_Refine_Auto_Select_workflow.json # UI 可视化工作流
@@ -75,27 +80,42 @@ Comfy/Comfy-Api/
 
 ---
 
-## 运行必备 5 大 ComfyUI 核心插件
+## 运行核心插件清单
 
-运行本项目全部内置工作流，必须在 ComfyUI 的 `custom_nodes/` 目录下安装以下 5 个扩展插件：
+运行本项目内置工作流，建议在 ComfyUI 的 `custom_nodes/` 目录下安装以下扩展插件：
 
+### 通用基础必备插件（5大基础扩展）
 | 序号 | 插件名称 | GitHub 仓库 | 依赖工作流 | 作用说明 |
 | :---: | :--- | :--- | :--- | :--- |
 | 1 | **Comfyui-kktools** | `https://github.com/zhiwendesign/Comfyui-kktools` | 文本生成 / 反推 | 大语言模型文本生成与提示词扩写反推 (`kkSomethingToAny`) |
-| 2 | **ComfyUI-KJNodes** | `https://github.com/kijai/ComfyUI-KJNodes` | 全能参考视频 | 高级控制流与音视频多模态组件解包 (`GetVideoComponents`) |
-| 3 | **ComfyLiterals** | `https://github.com/M1kep/ComfyLiterals` | 首尾帧 / 全能视频 | 基础字面量与尺寸/时长参数动态暴露 (`PrimitiveInt`, `PrimitiveFloat`) |
+| 2 | **ComfyUI-KJNodes** | `https://github.com/kijai/ComfyUI-KJNodes` | 全能参考视频 / 精修 | 高级控制流与音视频多模态组件解包 (`GetVideoComponents`) |
+| 3 | **ComfyLiterals** | `https://github.com/M1kep/ComfyLiterals` | 首尾帧 / 全能视频 / 音乐 | 基础字面量与尺寸/时长参数动态暴露 (`PrimitiveInt`, `PrimitiveFloat`) |
 | 4 | **ComfyUI-UniversalToolkit** | `https://github.com/whmc76/ComfyUI-UniversalToolkit` | 文本生成 / 反推 | 通用多类型转接桥接工具箱 (`ShowAny_UTK`) |
 | 5 | **ComfyUI_LayerStyle** | `https://github.com/chflame163/ComfyUI_LayerStyle` | 局部编辑 (Inpaint) | 图层样式合成与局部遮罩预处理 (`LayerMask: MaskPreview`) |
+
+### 专用与进阶扩展插件
+| 序号 | 插件名称 | GitHub 仓库 | 依赖工作流 | 作用说明 |
+| :---: | :--- | :--- | :--- | :--- |
+| 6 | **ComfyUI-ReShot** | `https://github.com/maosika-ai/ComfyUI-ReShot` | 视频深度估计 | 单目视频深度时序估计、运镜走位提取 (`ReShotDepthVideo`) |
+| 7 | **ComfyUI-MiniMaxH3-Myang** | `https://github.com/civilcoco/ComfyUI-MiniMaxH3-Myang` | 视频人脸追踪精修 | 人脸智能追踪裁剪、潜空间注入、原生口型音频锁与按帧去噪缝合 |
+| 8 | **ComfyUI-VideoHelperSuite** | `https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite` | 视频人脸追踪精修 | 视频流加载与音画组合封装输出节点 (`LoadVideo`, `VHS_VideoCombine`) |
 
 ### 一键克隆命令（在 ComfyUI `custom_nodes/` 目录执行）
 
 ```bash
 cd custom_nodes
+# 基础套件
 git clone https://github.com/zhiwendesign/Comfyui-kktools.git
 git clone https://github.com/kijai/ComfyUI-KJNodes.git
 git clone https://github.com/M1kep/ComfyLiterals.git
 git clone https://github.com/whmc76/ComfyUI-UniversalToolkit.git
 git clone https://github.com/chflame163/ComfyUI_LayerStyle.git
+
+# 进阶与专用套件（按需）
+git clone https://github.com/maosika-ai/ComfyUI-ReShot.git
+python -m pip install -r ComfyUI-ReShot/requirements.txt
+git clone https://github.com/civilcoco/ComfyUI-MiniMaxH3-Myang.git
+git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
 ```
 
 > 详细说明与排错请参考完整指南：[docs/COMFYUI_PLUGINS.md](../../docs/COMFYUI_PLUGINS.md)

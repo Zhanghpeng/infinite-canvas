@@ -73,7 +73,7 @@ export const CORE_PLUGINS = [
     },
 ];
 
-// 人脸追踪精修进阶扩展插件
+// 人脸追踪精修与深度估计等进阶/专用扩展插件
 export const ADVANCED_PLUGINS = [
     {
         name: "ComfyUI-MiniMaxH3-Myang",
@@ -88,6 +88,13 @@ export const ADVANCED_PLUGINS = [
         url: "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
         desc: "视频流加载与音画组合封装输出节点 (LoadVideo, VHS_VideoCombine)",
         usedBy: "视频人脸追踪精修工作流",
+    },
+    {
+        name: "ComfyUI-ReShot",
+        repo: "maosika-ai/ComfyUI-ReShot",
+        url: "https://github.com/maosika-ai/ComfyUI-ReShot",
+        desc: "单目视频深度时序估计、运镜走位提取与结构条件处理 (ReShotDepthVideo)",
+        usedBy: "视频深度估计工作流",
     },
 ];
 
@@ -104,6 +111,8 @@ export const CLONE_ADVANCED_PLUGINS_CMD = [
     "cd custom_nodes",
     "git clone https://github.com/civilcoco/ComfyUI-MiniMaxH3-Myang.git",
     "git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git",
+    "git clone https://github.com/maosika-ai/ComfyUI-ReShot.git",
+    "python -m pip install -r ComfyUI-ReShot/requirements.txt",
 ].join("\n");
 
 type WorkflowModelSpec = {
@@ -485,6 +494,33 @@ const WORKFLOWS: WorkflowItem[] = [
         ],
     },
     {
+        id: "depth_video",
+        name: "视频深度估计工作流 (Depth Video)",
+        category: "video",
+        defaultVariantId: "depth_video_h3",
+        variants: [
+            {
+                id: "depth_video_h3",
+                label: "ReShot 视频深度估计 (VDA-Small)",
+                badge: "深度提取 / 运镜复刻",
+                badgeColor: "cyan",
+                baseModel: "Video Depth Anything Small",
+                description: "「复制走位与运镜，不复制演员与画风」：将输入参考视频转为时序连贯稳定的灰度深度视频（近白远黑），保留人物空间站位、肢体动作与摄像机运镜轨迹，彻底剥离演员外貌与画风，生成的深度视频可无缝作为 MiniMax H3 或 ControlNet 的强结构参考。",
+                uiFileName: "depth_video_workflow.json",
+                uiDownloadUrl: "/workflows/depth_video_workflow.json",
+                apiFileName: "depth_video_api.json",
+                apiDownloadUrl: "/workflows/depth_video_api.json",
+                plugins: [
+                    { name: "ComfyUI-ReShot", url: "https://github.com/maosika-ai/ComfyUI-ReShot" },
+                ],
+                models: [
+                    { category: "深度估计模型", folder: "~/.cache/huggingface/hub/models--depth-anything--Video-Depth-Anything-Small/", files: ["video_depth_anything_vits.pth (约111MB，首次运行自动下载)"] },
+                ],
+                tips: "⚠️ 依赖 ComfyUI-ReShot 插件；权重首次执行自动下载（国内网络可设置 HF_ENDPOINT=https://hf-mirror.com 加速）；输出尺寸自动居中裁切对齐 32 整数倍（杜绝黑边干扰）。",
+            },
+        ],
+    },
+    {
         id: "audio",
         name: "音乐与音频工作流 (Audio / Music)",
         category: "audio",
@@ -717,7 +753,7 @@ export default function GuidePage() {
             const zipFiles: Array<{ name: string; data: BlobPart }> = [];
             const collectedFiles = new Set<string>();
 
-            // 收集所有 8 大能力矩阵下的全部变体文件（包括 UI 与 API 格式）
+            // 收集所有 9 大能力矩阵下的全部变体文件（包括 UI 与 API 格式）
             for (const wf of WORKFLOWS) {
                 for (const variant of wf.variants) {
                     if (!collectedFiles.has(variant.uiFileName)) {
@@ -742,12 +778,12 @@ export default function GuidePage() {
             const readmeContent = [
                 "# Infinite Canvas · ComfyUI 官方全套内置工作流资产包",
                 "",
-                "本压缩包收录了 Infinite Canvas 官方推荐的全部 8 大能力矩阵工作流：",
+                "本压缩包收录了 Infinite Canvas 官方推荐的全部 9 大能力矩阵工作流：",
                 "- ui_workflows/: ComfyUI 可视化工作流（可直接拖拽入本地 ComfyUI Web 界面查看节点连线并调试）",
                 "- api_workflows/: ComfyUI API 格式工作流（用于系统设置内模型渠道绑定与直接调度）",
                 "",
                 "==================================================",
-                "8 大能力矩阵与模型放置清单：",
+                "9 大能力矩阵与模型放置清单：",
                 "==================================================",
                 ...WORKFLOWS.map((wf) => {
                     const variantDetails = wf.variants.map((v) => {
@@ -774,7 +810,7 @@ export default function GuidePage() {
                 "   [一键克隆基础插件命令]：",
                 CLONE_CORE_PLUGINS_CMD,
                 "",
-                "2. 视频人脸追踪精修进阶套件（若使用人脸精修，克隆至 custom_nodes/）：",
+                "2. 视频人脸追踪精修与深度估计进阶套件（克隆至 custom_nodes/ 并安装依赖）：",
                 ...ADVANCED_PLUGINS.map((p, idx) => `   ${idx + 1}. ${p.name} (${p.url}) - ${p.desc} [${p.usedBy}]`),
                 "",
                 "   [一键克隆进阶插件命令]：",
@@ -785,9 +821,10 @@ export default function GuidePage() {
                 "==================================================",
                 `1. 启动本地 ComfyUI 必须开启跨域：例如 \`${LAUNCH_CMD_EXAMPLE}\`；`,
                 "2. 音频生成 (MiniMax Music 03) 依赖 ComfyUI 核心版本 >= v0.31.0+；",
-                "3. 人脸精修 YOLO 权重请放置于 ComfyUI models/ultralytics/ 对应子目录；",
-                "4. 视频生成尺寸严格锁定在 0.2M~0.98M 的 9 档硬件对齐预设中（16:9 与 9:16 对称）；",
-                "5. 将 UI 工作流拖入 ComfyUI 点击 Queue Prompt 测试成功后，回到系统「设置 → 模型渠道」确认服务端口即可畅享创作！",
+                "3. 视频深度估计 (Video Depth Anything) 首次运行自动下载权重（约 111MB，国内可配置 HF_ENDPOINT=https://hf-mirror.com）；",
+                "4. 人脸精修 YOLO 权重请放置于 ComfyUI models/ultralytics/ 对应子目录；",
+                "5. 视频生成尺寸严格锁定在 0.2M~0.98M 的 9 档硬件对齐预设中（16:9 与 9:16 对称）；",
+                "6. 将 UI 工作流拖入 ComfyUI 点击 Queue Prompt 测试成功后，回到系统「设置 → 模型渠道」确认服务端口即可畅享创作！",
             ].join("\n");
 
             zipFiles.push({ name: "README_模型与存放目录清单.txt", data: readmeContent });
@@ -821,7 +858,7 @@ export default function GuidePage() {
                             用户使用手册与工作流下载
                         </h1>
                         <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-500 dark:text-stone-400">
-                            Infinite Canvas 采用纯前端无服务器架构，直连您本机的 ComfyUI（默认端口 8188）。系统内置 8 大核心能力矩阵，涵盖图像、视频、音频及人脸精修。下载并导入下方官方预设工作流，配齐模型并在本地 ComfyUI 调试通过后，即可在无限画布中开展流畅的全流程 AI 创作。
+                            Infinite Canvas 采用纯前端无服务器架构，直连您本机的 ComfyUI（默认端口 8188）。系统内置 9 大核心能力矩阵，涵盖图像、视频、音频、深度估计及人脸精修。下载并导入下方官方预设工作流，配齐模型并在本地 ComfyUI 调试通过后，即可在无限画布中开展流畅的全流程 AI 创作。
                         </p>
                     </div>
 
@@ -1050,7 +1087,7 @@ export default function GuidePage() {
                                 下载工作流文件
                             </div>
                             <p className="text-xs leading-5 text-stone-600 dark:text-stone-400">
-                                点击右上角打包下载全部工作流，或在下方 8 大能力卡片中按需切换规格下载 UI 连线版或 API 格式。
+                                点击右上角打包下载全部工作流，或在下方 9 大能力卡片中按需切换规格下载 UI 连线版或 API 格式。
                             </p>
                         </div>
 
@@ -1155,20 +1192,20 @@ export default function GuidePage() {
                         ))}
                     </div>
 
-                    {/* 人脸追踪精修进阶套件 */}
+                    {/* 进阶与专用扩展套件 */}
                     <div className="mt-6 rounded-lg border border-stone-200/90 bg-stone-50/70 p-4 dark:border-stone-800 dark:bg-stone-900/30">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
                                 <div className="flex items-center gap-2">
                                     <h3 className="text-sm font-bold text-stone-950 dark:text-stone-100">
-                                        人脸追踪精修进阶扩展套件 (可选按需安装)
+                                        进阶与专用扩展套件 (人脸精修 / 视频深度估计)
                                     </h3>
                                     <Tag color="volcano" className="m-0 text-xs">
-                                        精修专用
+                                        按需安装
                                     </Tag>
                                 </div>
                                 <p className="mt-1 text-xs text-stone-500">
-                                    若需使用「视频人脸追踪精修」工作流，需额外克隆以下两个专用插件以支持 YOLO 人脸时序追踪裁剪与视频音画组合封装：
+                                    若需使用「视频人脸追踪精修」或「ReShot 视频深度估计」，需额外克隆以下专用插件以支持 YOLO 人脸追踪、视频音画封装及时序单目深度提取：
                                 </p>
                             </div>
                             <Button
@@ -1180,7 +1217,7 @@ export default function GuidePage() {
                             </Button>
                         </div>
 
-                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                             {ADVANCED_PLUGINS.map((plugin) => (
                                 <div
                                     key={plugin.name}
@@ -1216,16 +1253,16 @@ export default function GuidePage() {
                     </div>
                 </div>
 
-                {/* 8 大核心能力矩阵卡片专区 */}
+                {/* 9 大核心能力矩阵卡片专区 */}
                 <div className="mb-12">
                     <div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
                         <div>
                             <div className="flex items-center gap-2">
                                 <h2 className="text-lg font-bold text-stone-950 dark:text-stone-100">
-                                    官方内置 8 大核心能力工作流矩阵
+                                    官方内置 9 大核心能力工作流矩阵
                                 </h2>
                                 <Tag color="blue" className="m-0 text-xs">
-                                    共 8 大能力
+                                    共 9 大能力
                                 </Tag>
                             </div>
                             <p className="mt-0.5 text-xs text-stone-500">
@@ -1249,9 +1286,9 @@ export default function GuidePage() {
                         <span className="text-xs font-medium text-stone-500">分类筛选：</span>
                         <div className="flex flex-wrap gap-1.5">
                             {[
-                                { key: "all", label: "全部能力", icon: Layers, count: 8 },
+                                { key: "all", label: "全部能力", icon: Layers, count: 9 },
                                 { key: "image", label: "图像生成", icon: Sparkles, count: 3 },
-                                { key: "video", label: "视频生成", icon: Video, count: 2 },
+                                { key: "video", label: "视频生成", icon: Video, count: 3 },
                                 { key: "audio", label: "音乐音频", icon: Music, count: 1 },
                                 { key: "refine", label: "精修与辅助", icon: Wrench, count: 2 },
                             ].map((item) => {
@@ -1276,6 +1313,7 @@ export default function GuidePage() {
                             })}
                         </div>
                     </div>
+
 
                     {/* 卡片网格 */}
                     <div className="grid gap-5 md:grid-cols-2">
@@ -1600,13 +1638,23 @@ export default function GuidePage() {
                             </p>
                         </div>
 
-                        <div className="rounded-lg border border-stone-200 p-4 dark:border-stone-800 md:col-span-2">
+                        <div className="rounded-lg border border-stone-200 p-4 dark:border-stone-800">
                             <h3 className="flex items-center gap-2 text-sm font-semibold text-stone-900 dark:text-stone-100">
                                 <Video className="size-4 text-orange-500" />
                                 7. 视频生成分辨率硬件锁死规则说明？
                             </h3>
                             <p className="mt-2 text-xs leading-5 text-stone-600 dark:text-stone-400">
                                 为保证 MiniMax H3 多模态架构的绝对稳定与不花屏，系统严禁手动输入任意分辨率数字。所有视频生成尺寸均已收敛在 <span className="font-semibold text-stone-800 dark:text-stone-200">0.2M ~ 0.98M 的 9 档硬件对齐预设</span> 中（16:9 与 9:16 画幅对称对调，上限严格锁定在 0.98 MP）。
+                            </p>
+                        </div>
+
+                        <div className="rounded-lg border border-stone-200 p-4 dark:border-stone-800">
+                            <h3 className="flex items-center gap-2 text-sm font-semibold text-stone-900 dark:text-stone-100">
+                                <Sparkles className="size-4 text-cyan-500" />
+                                8. 视频深度估计 (ReShot) 权重下载与加速？
+                            </h3>
+                            <p className="mt-2 text-xs leading-5 text-stone-600 dark:text-stone-400">
+                                首次执行 <code className="font-mono">ReShotDepthVideo</code> 时，插件会自动从 HuggingFace 下载 <code className="font-mono">video_depth_anything_vits.pth</code>（约 111 MB）并常驻内存。国内网络建议启动 ComfyUI 前设置镜像环境变量 <code className="rounded bg-stone-100 px-1 py-0.5 font-mono text-stone-800 dark:bg-stone-800 dark:text-stone-200">HF_ENDPOINT=https://hf-mirror.com</code>，或将权重文件夹完整拷贝至 <code className="font-mono">~/.cache/huggingface/hub/models--depth-anything--Video-Depth-Anything-Small/</code> 离线使用。
                             </p>
                         </div>
                     </div>

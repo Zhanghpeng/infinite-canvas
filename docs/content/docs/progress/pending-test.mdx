@@ -7,6 +7,21 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Guide Page Depth Video Workflow Integration Verification (使用手册接入视频深度估计工作流验证):
+  - **9-Matrix Display & Filter Count (9 大能力矩阵与分类筛选计数)**:
+    - 访问 `/guide` 页面，验证「全部能力」计数为 9，「视频生成」分类计数由 2 更新为 3；
+    - 点击「视频生成」分类筛选，验证列表中正常展示全能参考视频、首尾帧视频以及「视频深度估计工作流 (Depth Video)」；
+  - **Depth Video Card & Download (深度视频卡片与下载格式切换)**:
+    - 验证「视频深度估计工作流」卡片标题、底模（Video Depth Anything Small）、标签（深度提取 / 运镜复刻）展示正确；
+    - 验证模型依赖路径正确指向 `~/.cache/huggingface/hub/models--depth-anything--Video-Depth-Anything-Small/` 并标注首次运行自动下载；
+    - 点击「下载工作流」主按钮，验证触发下载 `depth_video_workflow.json`（UI 连线版）；
+    - 点击主按钮右侧下拉箭头，验证支持选择下载 `depth_video_api.json`（API 格式工作流）；
+  - **Advanced Plugins & Full Zip Packing (进阶扩展套件与全量工作流打包)**:
+    - 验证进阶扩展插件专区新增展示 `ComfyUI-ReShot` 插件卡片与仓库外链，点击复制命令按钮包含 `git clone ...ComfyUI-ReShot.git` 与 `pip install requirements.txt`；
+    - 点击页面右上角「打包下载全部工作流 (.zip)」，验证压缩包解压后包含深度视频的 UI 与 API 格式文件，且 `README_模型与存放目录清单.txt` 包含深度估计模型的完整部署指南；
+  - **FAQ 8 (排错指引第 8 项)**:
+    - 验证 FAQ 网格中新增第 8 项「视频深度估计 (ReShot) 权重下载与加速？」，清晰提示首次运行自动下载及 `HF_ENDPOINT` 国内镜像加速环境变量配置。
+
 - ComfyUI Multi-Node Output Resolution & Type=Output Prioritization Verification (ComfyUI 多节点输出解析与 type=output 优先级验证):
   - **Multi-Node Output Filtering (多节点输出过滤与优先级校验)**:
     - 在包含 `LoadVideo` 输入预览和 `SaveVideo` 保存节点的工作流（如深度视频转换工作流）执行后，检查轮询获取的输出结果；
