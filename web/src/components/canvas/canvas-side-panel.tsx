@@ -108,7 +108,7 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
                 </div>
                 <div className="mt-2 min-h-0 flex-1 overflow-hidden">
                     {tab === "canvas" ? (
-                        <CanvasNodesTab nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={onFocusNode} onPreviewNode={onPreviewNode} onTitleChange={onTitleChange} theme={theme} />
+                        <CanvasNodesTab nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={onFocusNode} onPreviewNode={onPreviewNode} onTitleChange={onTitleChange} projectTitle={projectTitle} theme={theme} />
                     ) : tab === "assets" ? (
                         <CanvasAssetsTab onInsert={onInsertAsset} theme={theme} />
                     ) : (
@@ -147,6 +147,7 @@ function CanvasNodesTab({
     onFocusNode,
     onPreviewNode,
     onTitleChange,
+    projectTitle,
     theme,
 }: {
     nodes: CanvasNodeData[];
@@ -154,6 +155,7 @@ function CanvasNodesTab({
     onFocusNode: (nodeId: string) => void;
     onPreviewNode: (nodeId: string) => void;
     onTitleChange?: (nodeId: string, title: string) => void;
+    projectTitle?: string;
     theme: CanvasTheme;
 }) {
     const { message } = App.useApp();
