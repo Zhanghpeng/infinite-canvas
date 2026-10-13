@@ -7,6 +7,24 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Canvas Asset Insertion & Drag-and-Drop Verification (画布资产插入与拖拽交互验证):
+  - **Asset Store Image Insert Fix (资产库图片点击插入 Bug 修复)**:
+    - 在画布生成图片或将图片节点通过悬浮工具栏「存资产」保存至资产库；
+    - 展开左侧面板「资产」标签页，在图片资产卡片上点击「+」加号按钮；
+    - 验证图片能立即成功插入画布视口中心，图片内容正常加载显示，不再显示空白占位节点；
+    - 打开「选择资产」弹窗（AssetPickerModal），点击图片资产卡片，验证同样能正常插入并正确渲染图片。
+  - **Drag & Drop Insertion onto Canvas (资产与提示词拖拽到画布精准落点)**:
+    - 在左侧面板「资产」标签页，用鼠标按住任意图片、视频、音频或文本资产卡片，拖拽至画布空白区域后松开；
+    - 验证松开鼠标后，能在鼠标释放的精确画布坐标位置直接生成对应的媒体节点；
+    - 在左侧面板「提示词库」标签页，按住任意提示词行直接拖拽到画布释放，验证能精准在鼠标落点生成包含该提示词的文本节点；
+    - 验证操作系统本地文件直接拖拽入画布的原有交互不受影响。
+  - **Audio Asset Full Lifecycle (音频资产保存、展示与插入全流程闭环)**:
+    - 悬停在音频节点上方，点击工具栏「存资产」，验证提示保存成功；
+    - 展开左侧面板「资产」标签页，验证新增「音频」分类分组（带音乐图标与数量统计）；
+    - 验证音频卡片展示正常，点击「+」加号或将其拖拽至画布，能在画布成功生成音频播放器节点并正常播放声音；
+    - 在资产管理弹窗中筛选「音频」，验证支持搜索与点击插入画布。
+
+
 - Canvas Node Hover Toolbar & Title Layout Coordination Verification (画布节点悬浮工具栏与标题布局协调验证):
   - **Toolbar Lifting & No Title Overlap (工具栏抬高与无标题遮挡)**:
     - 选中任意节点或鼠标悬停在节点上，观察节点上方的悬浮工具栏与标题栏；

@@ -10,8 +10,8 @@ import { generateRandomSeed, requestComfyuiImage } from "@/services/api/comfyui"
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { defaultConfig, findWorkflow, getDefaultComfyWorkflowItems, getDefaultWorkflow, inpaintModelOptions, resolveModelChannel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
-import { uploadImage } from "@/services/image-storage";
-import { uploadMediaFile } from "@/services/file-storage";
+import { resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -2348,6 +2348,26 @@ function InfiniteCanvasPage() {
                 message.success(t("common.addedToAssets"));
                 return;
             }
+            if (node.type === CanvasNodeType.Audio) {
+                if (!node.metadata?.content) return message.error(t("canvas.projectPage.noAudioToSave", "没有可保存的音频"));
+                addAsset({
+                    kind: "audio",
+                    title: node.metadata?.prompt?.slice(0, 24) || t("canvas.projectPage.canvasAudio", "画布音频"),
+                    coverUrl: "",
+                    tags: [],
+                    source: "Canvas",
+                    data: {
+                        url: node.metadata.content,
+                        storageKey: node.metadata.storageKey,
+                        durationMs: node.metadata.durationMs,
+                        bytes: node.metadata.bytes || 0,
+                        mimeType: node.metadata.mimeType || "audio/mpeg",
+                    },
+                    metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt },
+                });
+                message.success(t("common.addedToAssets"));
+                return;
+            }
             if (!node.metadata?.content) return message.error(t("canvas.projectPage.noImageToSave"));
             const dataUrl = node.metadata.storageKey ? "" : node.metadata.content;
             addAsset({
@@ -2948,9 +2968,131 @@ function InfiniteCanvasPage() {
         [createAudioFileNode, createImageFileNode, createVideoFileNode, screenToCanvas, size.height, size.width],
     );
 
+    const insertAssistantImage = useCallback(
+        async (image: CanvasAssistantImage, targetPosition?: Position) => {
+            const resolvedUrl = image.storageKey ? await resolveImageUrl(image.storageKey, image.dataUrl) : image.dataUrl;
+            const storedImage = image.storageKey ? { url: resolvedUrl, storageKey: image.storageKey, width: 1, height: 1, bytes: 0, mimeType: "image/png" } : await uploadImage(image.dataUrl);
+            const meta = storedImage.width === 1 && storedImage.height === 1 ? await readImageMeta(storedImage.url) : storedImage;
+            const config = fitNodeSize(meta.width, meta.height);
+            const center = targetPosition ?? screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
+            const id = `image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            const node: CanvasNodeData = {
+                id,
+                type: CanvasNodeType.Image,
+                title: image.prompt.slice(0, 32) || "Generated Image",
+                position: { x: center.x - config.width / 2, y: center.y - config.height / 2 },
+                width: config.width,
+                height: config.height,
+                metadata: { ...imageMetadata({ ...storedImage, url: resolvedUrl, width: meta.width, height: meta.height }), prompt: image.prompt },
+            };
+
+            setNodes((prev) => [...prev, node]);
+            setSelectedNodeIds(new Set([id]));
+            setSelectedConnectionId(null);
+            setDialogNodeId(id);
+        },
+        [screenToCanvas, size.height, size.width],
+    );
+
+    const insertAssistantText = useCallback(
+        (text: string, title?: string, targetPosition?: Position) => {
+            const center = targetPosition ?? screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
+            const node = {
+                ...createCanvasNode(CanvasNodeType.Text, center, { content: text, status: NODE_STATUS_SUCCESS }),
+                title: title || text.slice(0, 32) || "Assistant Text",
+            };
+
+            setNodes((prev) => [...prev, node]);
+            setSelectedNodeIds(new Set([node.id]));
+            setSelectedConnectionId(null);
+        },
+        [screenToCanvas, size.height, size.width],
+    );
+
+    const handleAssetInsert = useCallback(
+        async (payload: InsertAssetPayload, targetPosition?: Position) => {
+            if (payload.kind === "text") {
+                insertAssistantText(payload.content, payload.title, targetPosition);
+            } else if (payload.kind === "video") {
+                const resolvedUrl = payload.storageKey ? await resolveMediaUrl(payload.storageKey, payload.url) : payload.url;
+                const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Video];
+                const center = targetPosition ?? screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
+                const id = `video-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                const nextSize = fitNodeSize(payload.width || spec.width, payload.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                setNodes((prev) => [
+                    ...prev,
+                    {
+                        id,
+                        type: CanvasNodeType.Video,
+                        title: payload.title,
+                        position: { x: center.x - nextSize.width / 2, y: center.y - nextSize.height / 2 },
+                        width: nextSize.width,
+                        height: nextSize.height,
+                        metadata: { content: resolvedUrl, storageKey: payload.storageKey, status: NODE_STATUS_SUCCESS, naturalWidth: payload.width, naturalHeight: payload.height },
+                    },
+                ]);
+                setSelectedNodeIds(new Set([id]));
+                setSelectedConnectionId(null);
+                setDialogNodeId(id);
+            } else if (payload.kind === "audio") {
+                const resolvedUrl = payload.storageKey ? await resolveMediaUrl(payload.storageKey, payload.url) : payload.url;
+                const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
+                const center = targetPosition ?? screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
+                const id = `audio-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                setNodes((prev) => [
+                    ...prev,
+                    {
+                        id,
+                        type: CanvasNodeType.Audio,
+                        title: payload.title,
+                        position: { x: center.x - spec.width / 2, y: center.y - spec.height / 2 },
+                        width: spec.width,
+                        height: spec.height,
+                        metadata: audioMetadata({
+                            url: resolvedUrl,
+                            storageKey: payload.storageKey || "",
+                            bytes: 0,
+                            mimeType: "audio/mpeg",
+                            durationMs: payload.durationMs,
+                        }),
+                    },
+                ]);
+                setSelectedNodeIds(new Set([id]));
+                setSelectedConnectionId(null);
+                setDialogNodeId(id);
+            } else {
+                await insertAssistantImage({ id: `asset-${Date.now()}`, prompt: payload.title, dataUrl: payload.dataUrl, storageKey: payload.storageKey }, targetPosition);
+            }
+            setAssetPickerOpen(false);
+        },
+        [insertAssistantImage, insertAssistantText, screenToCanvas, size.height, size.width],
+    );
+
     const handleDrop = useCallback(
         (event: ReactDragEvent<HTMLDivElement>) => {
             event.preventDefault();
+            const assetJson = event.dataTransfer.getData("application/infinite-canvas-asset");
+            if (assetJson) {
+                try {
+                    const raw = JSON.parse(assetJson);
+                    const payload: InsertAssetPayload =
+                        raw.kind === "image" && raw.data
+                            ? { kind: "image", dataUrl: raw.data.dataUrl, storageKey: raw.data.storageKey, title: raw.title }
+                            : raw.kind === "video" && raw.data
+                              ? { kind: "video", url: raw.data.url, storageKey: raw.data.storageKey, title: raw.title, width: raw.data.width, height: raw.data.height }
+                              : raw.kind === "audio" && raw.data
+                                ? { kind: "audio", url: raw.data.url, storageKey: raw.data.storageKey, title: raw.title, durationMs: raw.data.durationMs }
+                                : raw.kind === "text" && raw.data
+                                  ? { kind: "text", content: raw.data.content, title: raw.title }
+                                  : (raw as InsertAssetPayload);
+                    const dropPos = screenToCanvas(event.clientX, event.clientY);
+                    void handleAssetInsert(payload, dropPos);
+                    return;
+                } catch (e) {
+                    console.error("Failed to parse dropped asset:", e);
+                }
+            }
+
             const files = Array.from(event.dataTransfer.files).filter(
                 (item) => item.type.startsWith("image/") || item.type.startsWith("video/") || isAudioFile(item),
             );
@@ -2970,7 +3112,7 @@ function InfiniteCanvasPage() {
                 }
             }
         },
-        [createAudioFileNode, createImageFileNode, createVideoFileNode, screenToCanvas],
+        [createAudioFileNode, createImageFileNode, createVideoFileNode, handleAssetInsert, screenToCanvas],
     );
 
     const startTitleEditing = useCallback(() => {
@@ -4167,75 +4309,6 @@ function InfiniteCanvasPage() {
         [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message, t],
     );
 
-    const insertAssistantImage = useCallback(
-        async (image: CanvasAssistantImage) => {
-            const storedImage = image.storageKey ? { url: image.dataUrl, storageKey: image.storageKey, width: 1, height: 1, bytes: 0, mimeType: "image/png" } : await uploadImage(image.dataUrl);
-            const meta = storedImage.width === 1 && storedImage.height === 1 ? await readImageMeta(storedImage.url) : storedImage;
-            const config = fitNodeSize(meta.width, meta.height);
-            const center = screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
-            const id = `image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-            const node: CanvasNodeData = {
-                id,
-                type: CanvasNodeType.Image,
-                title: image.prompt.slice(0, 32) || "Generated Image",
-                position: { x: center.x - config.width / 2, y: center.y - config.height / 2 },
-                width: config.width,
-                height: config.height,
-                metadata: { ...imageMetadata({ ...storedImage, width: meta.width, height: meta.height }), prompt: image.prompt },
-            };
-
-            setNodes((prev) => [...prev, node]);
-            setSelectedNodeIds(new Set([id]));
-            setSelectedConnectionId(null);
-            setDialogNodeId(id);
-        },
-        [screenToCanvas, size.height, size.width],
-    );
-
-    const insertAssistantText = useCallback(
-        (text: string, title?: string) => {
-            const center = screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
-            const node = {
-                ...createCanvasNode(CanvasNodeType.Text, center, { content: text, status: NODE_STATUS_SUCCESS }),
-                title: title || text.slice(0, 32) || "Assistant Text",
-            };
-
-            setNodes((prev) => [...prev, node]);
-            setSelectedNodeIds(new Set([node.id]));
-            setSelectedConnectionId(null);
-        },
-        [screenToCanvas, size.height, size.width],
-    );
-
-    const handleAssetInsert = useCallback(
-        (payload: InsertAssetPayload) => {
-            if (payload.kind === "text") {
-                insertAssistantText(payload.content, payload.title);
-            } else if (payload.kind === "video") {
-                const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Video];
-                const center = screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
-                const id = `video-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-                const nextSize = fitNodeSize(payload.width || spec.width, payload.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
-                setNodes((prev) => [
-                    ...prev,
-                    {
-                        id,
-                        type: CanvasNodeType.Video,
-                        title: payload.title,
-                        position: { x: center.x - nextSize.width / 2, y: center.y - nextSize.height / 2 },
-                        width: nextSize.width,
-                        height: nextSize.height,
-                        metadata: { content: payload.url, storageKey: payload.storageKey, status: NODE_STATUS_SUCCESS, naturalWidth: payload.width, naturalHeight: payload.height },
-                    },
-                ]);
-                setSelectedNodeIds(new Set([id]));
-            } else {
-                insertAssistantImage({ id: `asset-${Date.now()}`, prompt: payload.title, dataUrl: payload.dataUrl, storageKey: payload.storageKey });
-            }
-            setAssetPickerOpen(false);
-        },
-        [insertAssistantImage, insertAssistantText, screenToCanvas, size.height, size.width],
-    );
 
     // Memoize every callback and render function passed to CanvasNode.
     // CanvasNode uses React.memo, but new prop references would invalidate it on every render and rerender every node
