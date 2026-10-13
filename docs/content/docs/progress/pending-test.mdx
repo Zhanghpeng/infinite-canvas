@@ -7,6 +7,20 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Canvas Node Prompt Input & Fullscreen Editor Optimization Verification (画布节点提示词输入与全屏编辑优化验证):
+  - **Inline Clear Prompt Button (输入框末尾内联清空 X 按钮与防误触确认)**:
+    - 选中任意图片、视频、音频或文本节点，弹出底部提示词面板；
+    - 当输入框为空时，验证输入框右上角不显示清空按钮；
+    - 输入任意提示词内容后，验证输入框右上角平滑呈现 `X` 清除图标；
+    - 点击 `X` 图标，验证弹出气泡确认弹窗（Popconfirm），提示「确定清空提示词？」且支持「取消」与「清空」；
+    - 点击「取消」，提示词内容完好保留；点击「清空」，提示词立即清空且光标自动重聚焦在输入框内，节点数据同步清空。
+  - **Fullscreen Prompt Editor & Action Bar (放大全屏沉浸编辑与操作栏)**:
+    - 点击提示词面板底部的「放大编辑」按钮（Maximize2 图标），打开编辑弹窗；
+    - 验证弹窗右上角具备「全屏」切换按钮，点击后弹窗铺满全屏（100vw / 100vh 沉浸式视图），编辑器高度自动撑满视口；
+    - 再次点击全屏按钮或按对应按钮，验证平滑退出全屏恢复居中大弹窗；
+    - 验证弹窗底部操作栏左侧提供提示词库快捷选择与字符数统计，右侧提供「完成」按钮；
+    - 在弹窗内输入或使用内联 `X` 清空，点击「完成」或按 Esc 键关闭弹窗，验证修改内容实时同步回画布节点。
+
 - Canvas Asset Insertion & Drag-and-Drop Verification (画布资产插入与拖拽交互验证):
   - **Asset Store Image Insert Fix (资产库图片点击插入 Bug 修复)**:
     - 在画布生成图片或将图片节点通过悬浮工具栏「存资产」保存至资产库；

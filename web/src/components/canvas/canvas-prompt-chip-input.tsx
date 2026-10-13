@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { Image } from "antd";
-import { FileText, Image as ImageIcon, Music2, Video } from "lucide-react";
+import { Image, Popconfirm } from "antd";
+import { FileText, Image as ImageIcon, Music2, Video, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
+import { cn } from "@/lib/utils";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { isImeComposing, isPlainEnterKey } from "@/lib/keyboard-event";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -16,8 +18,11 @@ type Props = {
     onChange: (value: string) => void;
     onSubmit?: () => void;
     className?: string;
+    containerClassName?: string;
     style?: CSSProperties;
     placeholder?: string;
+    allowClear?: boolean;
+    onClear?: () => void;
 };
 
 type MentionState = {
@@ -33,7 +38,8 @@ type Token =
 // Display labels stay localized, while the persisted value uses stable `@[node:<nodeId>]` tokens, so
 // serialization is independent of locale or label changes. Nodes that are missing or disconnected
 // keep their raw token as plain text instead of being dropped.
-export function CanvasPromptChipInput({ value, references, onChange, onSubmit, className, style, placeholder }: Props) {
+export function CanvasPromptChipInput({ value, references, onChange, onSubmit, className, containerClassName, style, placeholder, allowClear = true, onClear }: Props) {
+    const { t } = useTranslation();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const editorRef = useRef<HTMLDivElement>(null);
     const composingRef = useRef(false);
@@ -124,10 +130,21 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
         emit(serializeEditor(editor));
     };
 
+    const handleClear = () => {
+        emit("");
+        const editor = editorRef.current;
+        if (editor) {
+            editor.textContent = "";
+            editor.focus();
+        }
+        closeMention();
+        onClear?.();
+    };
+
     const showPlaceholder = !value.trim();
 
     return (
-        <div className="relative w-full">
+        <div className={cn("relative w-full", containerClassName)}>
             {showPlaceholder && placeholder ? (
                 <div className="pointer-events-none select-none absolute left-3 top-2 whitespace-pre-line text-sm leading-5" style={{ color: theme.node.placeholder }}>
                     {placeholder}
@@ -139,7 +156,7 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                 suppressContentEditableWarning
                 role="textbox"
                 aria-multiline="true"
-                className={`${className || ""} overflow-y-auto whitespace-pre-wrap break-words outline-none`}
+                className={cn(className, allowClear && "pr-8", "overflow-y-auto whitespace-pre-wrap break-words outline-none")}
                 style={{ ...style, cursor: "text" }}
                 onInput={() => {
                     if (!composingRef.current) syncFromEditor();
@@ -190,6 +207,30 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                 }}
                 onBlur={() => window.setTimeout(closeMention, 120)}
             />
+            {allowClear && Boolean(value.trim()) ? (
+                <Popconfirm
+                    title={t("canvas.promptPanel.confirmClearTitle")}
+                    description={t("canvas.promptPanel.confirmClearDesc")}
+                    okText={t("canvas.promptPanel.confirmClearOk")}
+                    cancelText={t("canvas.promptPanel.confirmClearCancel")}
+                    okButtonProps={{ danger: true, size: "small" }}
+                    cancelButtonProps={{ size: "small" }}
+                    onConfirm={handleClear}
+                    placement="topRight"
+                >
+                    <button
+                        type="button"
+                        className="absolute right-2.5 top-2.5 z-10 flex size-5 cursor-pointer items-center justify-center rounded-full bg-transparent text-stone-400 opacity-70 transition hover:bg-black/5 hover:text-stone-700 hover:opacity-100 dark:hover:bg-white/10 dark:hover:text-stone-200"
+                        title={t("canvas.promptPanel.clearPrompt")}
+                        aria-label={t("canvas.promptPanel.clearPrompt")}
+                        onClick={(event) => event.stopPropagation()}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <X className="size-3" />
+                    </button>
+                </Popconfirm>
+            ) : null}
             {mention && candidates.length ? (
                 <MentionMenu rect={mention.rect} references={candidates} activeIndex={Math.min(activeIndex, candidates.length - 1)} theme={theme} onSelect={insertReference} />
             ) : null}
