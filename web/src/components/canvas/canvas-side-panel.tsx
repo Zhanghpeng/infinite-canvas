@@ -391,8 +391,11 @@ function CanvasNodesTab({
                         type="button"
                         onClick={() => void handleExport()}
                         disabled={!checked.size || exporting}
-                        className="ml-auto flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-white/10"
-                        style={{ color: theme.node.text }}
+                        className="ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-white/10"
+                        style={{
+                            color: checked.size ? theme.toolbar.activeText : theme.node.text,
+                            background: checked.size ? theme.toolbar.activeBg : "transparent",
+                        }}
                     >
                         <Download className="size-3.5" />
                         {t("canvas.exportSelected")}
@@ -405,8 +408,14 @@ function CanvasNodesTab({
 
 function CheckMark({ checked, theme }: { checked: boolean; theme: CanvasTheme }) {
     return (
-        <span className="grid size-4 shrink-0 place-items-center rounded border transition" style={{ borderColor: checked ? theme.toolbar.activeText : theme.node.stroke, background: checked ? theme.toolbar.activeText : "transparent" }}>
-            {checked ? <Check className="size-3 text-white" /> : null}
+        <span
+            className="grid size-4 shrink-0 place-items-center rounded border transition"
+            style={{
+                borderColor: checked ? theme.toolbar.activeText : theme.node.placeholder,
+                background: checked ? theme.toolbar.activeText : "transparent",
+            }}
+        >
+            {checked ? <Check className="size-3" style={{ color: theme.node.panel }} /> : null}
         </span>
     );
 }
