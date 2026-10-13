@@ -7,6 +7,16 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- MiniMax H3 Video Default Workflow Alignment Verification (MiniMax H3 视频默认工作流对齐验证):
+  - **New Channel Default Workflow (新建渠道默认工作流)**:
+    - 打开系统设置 / 渠道管理，点击「添加渠道」；
+    - 查看新增渠道的工作流配置，验证全能参考视频（`omniVideo`）与首尾帧视频（`frameVideo`）默认选中的均为「FP8 4步 PDMD」极速工作流；
+    - 在已有渠道中点击对应视频分类的「恢复内置默认」，验证恢复后的默认工作流同样为「FP8 4步 PDMD」；
+    - 验证工作流下拉列表中仍保留原「FP8 20步」标准工作流作为备选，可随时按需自由切换。
+  - **Canvas Video Generation Default Selection (画布视频生成默认行为)**:
+    - 在画布中新建视频节点或触发全能参考/首尾帧视频生成；
+    - 验证默认执行的生成工作流为 4 步极速蒸馏版本（秒级出片），音画同步与 EasyCache 加速正常生效。
+
 - Canvas Node Media Download & Zip Export File Naming Verification (画布节点下载与元素导出文件名优化验证):
   - **Single Node / Batch Image Download Naming (单节点与批量单图下载命名)**:
     - 选中或悬停在图片、视频、音频节点上方，点击悬浮工具栏中的「下载」按钮；
