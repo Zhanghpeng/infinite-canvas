@@ -7,6 +7,17 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Canvas Node Media Download & Zip Export File Naming Verification (画布节点下载与元素导出文件名优化验证):
+  - **Single Node / Batch Image Download Naming (单节点与批量单图下载命名)**:
+    - 选中或悬停在图片、视频、音频节点上方，点击悬浮工具栏中的「下载」按钮；
+    - 验证下载生成的文件名符合 `[项目名]_[节点标题或类型]_[4位短ID].[扩展名]` 格式（如未设置标题时自动以当前类型 `image`/`video`/`audio` 兜底，不写死为 image）；
+    - 在批量生图节点卡片中点击单张图片下载，验证文件名采用当前子图自身的 4 位短 ID 防重；
+    - 验证文件名中若包含操作系统特殊非法字符已被安全过滤替换为下划线。
+  - **Side Panel Export Elements Zip Naming (侧边栏导出选中元素命名)**:
+    - 展开左侧元素面板，勾选多个节点后点击底部「导出选中」；
+    - 验证导出的 Zip 压缩包文件名符合 `[项目名]_导出元素_{数量}个.zip`（英文环境下为 `[项目名]_exported-elements_{count}.zip`）；
+    - 解压 Zip 包，验证内部各个文件统一命名为 `[节点标题或类型]_[4位短ID].[扩展名]`，同名文件自动递增序号。
+
 - Canvas Node Prompt Input & Fullscreen Editor Optimization Verification (画布节点提示词输入与全屏编辑优化验证):
   - **Inline Clear Prompt Button (输入框末尾内联清空 X 按钮与防误触确认)**:
     - 选中任意图片、视频、音频或文本节点，弹出底部提示词面板；

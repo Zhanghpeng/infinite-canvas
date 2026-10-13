@@ -51,7 +51,7 @@ import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { buildNodeMentionReferences, getGroupResourceNodes, isCanvasReferenceNode, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
-import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
+import { exportCanvasProjects, safeFileName } from "@/lib/canvas/canvas-export";
 import { applyNodeConfigPatch, audioMetadata, buildAudioGenerationMetadata, buildImageGenerationMetadata, cloneNodeMetadata, createCanvasNode, imageMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
 import {
     calculateGroupBoundsForNodes,
@@ -2075,14 +2075,21 @@ function InfiniteCanvasPage() {
 
     const downloadNodeImage = useCallback((node: CanvasNodeData) => {
         if ((node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content) return;
-        saveAs(node.metadata.content, `canvas-${node.type}-${node.id}.${node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Audio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.content)}`);
-    }, []);
+        const projectName = safeFileName(currentProject?.title?.trim() || t("canvas.title"));
+        const titleOrType = safeFileName(node.title?.trim() || node.type);
+        const shortId = node.id.slice(0, 4);
+        const ext = node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Audio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.content);
+        saveAs(node.metadata.content, `${projectName}_${titleOrType}_${shortId}.${ext}`);
+    }, [currentProject?.title, t]);
 
     const downloadBatchImage = useCallback((node: CanvasNodeData, imageId: string) => {
         const image = node.metadata?.images?.find((item) => item.id === imageId);
         if (!image?.content) return;
-        saveAs(image.content, `canvas-image-${node.id}-${image.id}.${imageExtension(image.content)}`);
-    }, []);
+        const projectName = safeFileName(currentProject?.title?.trim() || t("canvas.title"));
+        const titleOrType = safeFileName(node.title?.trim() || "image");
+        const shortId = image.id.slice(0, 4);
+        saveAs(image.content, `${projectName}_${titleOrType}_${shortId}.${imageExtension(image.content)}`);
+    }, [currentProject?.title, t]);
 
     const captureVideoNodeFrame = useCallback(
         async (nodeId: string, position: VideoFramePosition) => {
@@ -4422,6 +4429,7 @@ function InfiniteCanvasPage() {
                 onPreviewNode={setPreviewNodeId}
                 onInsertAsset={handleAssetInsert}
                 onTitleChange={handleNodeTitleChange}
+                projectTitle={currentProject?.title}
             />
             <section className="relative min-w-0 flex-1 overflow-hidden">
                 <CanvasTopBar
