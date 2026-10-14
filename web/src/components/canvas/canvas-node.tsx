@@ -226,6 +226,7 @@ export const CanvasNode = React.memo(function CanvasNode({
         const handleOutsidePointerDown = (event: PointerEvent) => {
             const target = event.target;
             if (!(target instanceof Node)) return;
+            if (target instanceof Element && target.closest("[data-canvas-resource-mention-menu]")) return;
             if (isEditingContent && textareaRef.current?.contains(target)) return;
 
             setIsEditingContent(false);
@@ -598,7 +599,12 @@ function TextContent({ node, theme, isEditingContent, textareaRef, mentionRefere
                         references={mentionReferences}
                         highlightLabels={false}
                         onChange={(value) => onContentChange(node.id, value)}
-                        onBlur={onStopEditing}
+                        onBlur={(event) => {
+                            if (event.relatedTarget instanceof HTMLElement && event.relatedTarget.closest("[data-canvas-resource-mention-menu]")) {
+                                return;
+                            }
+                            onStopEditing();
+                        }}
                         onKeyDown={(event) => {
                             if (event.key === "Escape") onStopEditing();
                         }}

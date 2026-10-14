@@ -46,6 +46,7 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
     // Track the last value emitted to the parent. An identical focused value is this component's own echo,
     // so skip rebuilding to preserve the caret and IME. Rebuild external changes even while focused.
     const lastEmittedRef = useRef(value);
+    const savedRangeRef = useRef<Range | null>(null);
     const [mention, setMention] = useState<MentionState | null>(null);
     const [activeIndex, setActiveIndex] = useState(0);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -65,7 +66,7 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
     useEffect(() => {
         const editor = editorRef.current;
         if (!editor) return;
-        if (document.activeElement === editor && value === lastEmittedRef.current) return;
+        if (value === lastEmittedRef.current) return;
         editor.textContent = "";
         tokens.forEach((token) => {
             if (token.type === "text") {
@@ -98,6 +99,10 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
             closeMention();
             return;
         }
+        const selection = window.getSelection();
+        if (selection?.rangeCount && editorRef.current?.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+            savedRangeRef.current = selection.getRangeAt(0).cloneRange();
+        }
         setMention({ query: match[1] || "", rect: caretRect() });
         setActiveIndex(0);
     };
@@ -105,29 +110,45 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
     const closeMention = () => {
         setMention(null);
         setActiveIndex(0);
+        savedRangeRef.current = null;
     };
 
     const insertReference = (reference: CanvasResourceReference) => {
         const editor = editorRef.current;
         if (!editor) return;
-        removeActiveMention();
-        const chip = createReferenceChip(reference, theme, setImagePreview);
-        const space = document.createTextNode(" ");
         const selection = window.getSelection();
-        const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-        if (range) {
-            range.insertNode(space);
-            range.insertNode(chip);
-            range.setStartAfter(space);
-            range.collapse(true);
+        let range: Range | null = null;
+        if (selection?.rangeCount && editor.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+            range = selection.getRangeAt(0);
+        } else if (savedRangeRef.current && editor.contains(savedRangeRef.current.commonAncestorContainer)) {
+            range = savedRangeRef.current;
             selection?.removeAllRanges();
             selection?.addRange(range);
+        }
+
+        removeActiveMention(range);
+        const chip = createReferenceChip(reference, theme, setImagePreview);
+        const space = document.createTextNode(" ");
+        const activeRange = selection?.rangeCount && editor.contains(selection.getRangeAt(0).commonAncestorContainer)
+            ? selection.getRangeAt(0)
+            : range && editor.contains(range.commonAncestorContainer)
+            ? range
+            : null;
+
+        if (activeRange) {
+            activeRange.insertNode(space);
+            activeRange.insertNode(chip);
+            activeRange.setStartAfter(space);
+            activeRange.collapse(true);
+            selection?.removeAllRanges();
+            selection?.addRange(activeRange);
         } else {
             editor.append(chip, space);
             placeCaretAtEnd(editor);
         }
         closeMention();
         emit(serializeEditor(editor));
+        editor.focus();
     };
 
     const handleClear = () => {
@@ -205,7 +226,12 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                     }
                     requestAnimationFrame(syncMention);
                 }}
-                onBlur={() => window.setTimeout(closeMention, 120)}
+                onBlur={(event) => {
+                    if (event.relatedTarget instanceof HTMLElement && event.relatedTarget.closest("[data-canvas-resource-mention-menu]")) {
+                        return;
+                    }
+                    window.setTimeout(closeMention, 120);
+                }}
             />
             {allowClear && Boolean(value.trim()) ? (
                 <Popconfirm
@@ -253,7 +279,10 @@ function MentionMenu({ rect, references, activeIndex, theme, onSelect }: { rect:
         onSelect(reference);
     };
 
-    const stopCanvasInteraction = (event: PointerEvent | MouseEvent) => event.stopPropagation();
+    const stopCanvasInteraction = (event: PointerEvent | MouseEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+    };
 
     const menuWidth = 256;
     const maxMenuHeight = 224;
@@ -265,8 +294,10 @@ function MentionMenu({ rect, references, activeIndex, theme, onSelect }: { rect:
 
     return createPortal(
         <div
+            tabIndex={-1}
+            data-canvas-no-zoom="true"
             data-canvas-resource-mention-menu="true"
-            className="fixed z-[1100] max-h-56 w-64 overflow-y-auto rounded-xl border p-1 shadow-2xl backdrop-blur-md"
+            className="fixed z-[1100] max-h-56 w-64 overflow-y-auto rounded-xl border p-1 shadow-2xl backdrop-blur-md outline-none"
             style={{ left, top, background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
             onPointerDown={stopCanvasInteraction}
             onMouseDown={stopCanvasInteraction}
@@ -282,7 +313,10 @@ function MentionMenu({ rect, references, activeIndex, theme, onSelect }: { rect:
                     onPointerDown={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
-                        selectReference(reference);
+                    }}
+                    onMouseDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
                     }}
                     onClick={(event) => {
                         event.preventDefault();
@@ -358,10 +392,20 @@ function serializeNodes(nodes: NodeListOf<ChildNode>) {
     return result;
 }
 
-function removeActiveMention() {
+function removeActiveMention(rangeOverride?: Range | null) {
     const selection = window.getSelection();
-    if (!selection?.rangeCount) return;
-    const range = selection.getRangeAt(0);
+    const range = rangeOverride || (selection?.rangeCount ? selection.getRangeAt(0) : null);
+    if (!range) return;
+    if (range.startContainer.nodeType === Node.TEXT_NODE) {
+        const textNode = range.startContainer as Text;
+        const beforeCaret = (textNode.textContent || "").slice(0, range.startOffset);
+        const lastAt = beforeCaret.lastIndexOf("@");
+        if (lastAt !== -1) {
+            range.setStart(textNode, lastAt);
+            range.deleteContents();
+            return;
+        }
+    }
     const text = textBeforeCaret();
     const match = /@([^\s@]*)$/.exec(text);
     if (!match) return;

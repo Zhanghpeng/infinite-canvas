@@ -7,6 +7,21 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Canvas Node Resource Mention Mouse Click Insertion Verification (画布节点提示词 @ 资源菜单鼠标点击插入验证):
+  - **Video/Image/Audio Node Prompt Mention Mouse Click (视频/图片/音频节点提示词面板 @ 鼠标点击)**:
+    - 选中画布中的视频、图片、音频节点，展开底部提示词输入面板；
+    - 在提示词输入框中输入 `@` 字符，呼出资源引用下拉菜单（MentionMenu）；
+    - 使用鼠标点击下拉菜单中的任意资源项；
+    - 验证输入面板保持稳定显示（不被意外隐藏或关闭），所选资源 Chip 标签与空格精准插入到原光标位置，输入框自动恢复聚焦可继续输入。
+  - **Text Node Inline Editing Mention Mouse Click (文本节点双击编辑 @ 鼠标点击)**:
+    - 双击文本节点进入行内多行编辑状态；
+    - 输入 `@` 字符呼出资源下拉菜单；
+    - 使用鼠标点击下拉菜单中的任意资源项；
+    - 验证文本节点不会在鼠标按下（pointerdown）时被判定为点击外部而退出编辑状态，资源文本标签精准插入到对应位置并保留聚焦。
+  - **Keyboard Navigation & Cross-Input Consistency (键盘导航与多输入组件一致性)**:
+    - 测试键盘上下箭头选择与回车插入功能保持正常工作；
+    - 验证配置节点组装器（CanvasConfigComposer）与 Agent 对话输入框点击 @ 选项同样稳定插入。
+
 - Canvas Image Node Quick Tools All-Hidden Stability Verification (图片节点快捷工具全部隐藏稳定性验证):
   - **All Quick Tools Hidden & Save Stability (全部隐藏并保存稳定性)**:
     - 鼠标悬停在包含图片的图片节点上方，点击工具栏右侧的「...」更多按钮（配置快捷工具）；
