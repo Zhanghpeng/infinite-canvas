@@ -7,6 +7,14 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Canvas Node Title Inline Editing React Error #185 Fix Verification (画布节点标题双击重命名 React #185 报错修复验证):
+  - **Inline Title Renaming Stability (双击重命名标题稳定性)**:
+    - 在画布上双击任意节点（图片、视频、音频、文本等）的标题文本；
+    - 验证正常进入行内重命名编辑输入框，不再触发 `Minified React error #185 (Maximum update depth exceeded)` 页面白屏崩溃；
+    - 编辑输入文本后按下 Enter 键、Escape 键或点击外部区域，验证标题正常保存/取消并平稳退出编辑状态；
+    - 快速连续双击多个不同节点进行标题编辑，验证画布渲染平稳流畅，不再产生级联 `setState` 死循环。
+
+
 - MiniMax H3 Video Default Workflow Alignment Verification (MiniMax H3 视频默认工作流对齐验证):
   - **New Channel Default Workflow (新建渠道默认工作流)**:
     - 打开系统设置 / 渠道管理，点击「添加渠道」；

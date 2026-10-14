@@ -140,9 +140,10 @@ export const CanvasNode = React.memo(function CanvasNode({
     const [titleDraft, setTitleDraft] = useState(data.title || "");
 
     useEffect(() => {
-        onEditingTitleChange?.(data.id, isEditingTitle);
+        if (!isEditingTitle) return;
+        onEditingTitleChange?.(data.id, true);
         return () => {
-            if (isEditingTitle) onEditingTitleChange?.(data.id, false);
+            onEditingTitleChange?.(data.id, false);
         };
     }, [data.id, isEditingTitle, onEditingTitleChange]);
     const hasImageContent = data.type === CanvasNodeType.Image && Boolean(data.metadata?.content || data.metadata?.images?.some((img) => Boolean(img.content)));

@@ -1983,6 +1983,13 @@ function InfiniteCanvasPage() {
         setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, title } : node)));
     }, []);
 
+    const handleNodeEditingTitleChange = useCallback((nodeId: string, isEditing: boolean) => {
+        setEditingTitleNodeId((current) => {
+            const next = isEditing ? nodeId : null;
+            return current === next ? current : next;
+        });
+    }, []);
+
     const toggleBatchExpanded = useCallback((nodeId: string) => {
         setExpandedBatchNodeIds((current) => {
             const next = new Set(current);
@@ -4553,7 +4560,7 @@ function InfiniteCanvasPage() {
                             onResizeEnd={handleNodeResizeEnd}
                             onContentChange={handleNodeContentChange}
                             onTitleChange={handleNodeTitleChange}
-                            onEditingTitleChange={(nodeId, isEditing) => setEditingTitleNodeId(isEditing ? nodeId : null)}
+                            onEditingTitleChange={handleNodeEditingTitleChange}
                             onToggleBatch={toggleBatchExpanded}
                             onSetBatchPrimary={setBatchPrimary}
                             onDuplicateBatchImage={duplicateBatchImage}
