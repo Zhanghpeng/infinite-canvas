@@ -66,7 +66,10 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
     useEffect(() => {
         const editor = editorRef.current;
         if (!editor) return;
-        if (value === lastEmittedRef.current) return;
+        if (serializeEditor(editor) === value || (document.activeElement === editor && value === lastEmittedRef.current)) {
+            lastEmittedRef.current = value;
+            return;
+        }
         editor.textContent = "";
         tokens.forEach((token) => {
             if (token.type === "text") {

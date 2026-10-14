@@ -18,6 +18,10 @@ The current release needs manual verification in these areas:
     - 输入 `@` 字符呼出资源下拉菜单；
     - 使用鼠标点击下拉菜单中的任意资源项；
     - 验证文本节点不会在鼠标按下（pointerdown）时被判定为点击外部而退出编辑状态，资源文本标签精准插入到对应位置并保留聚焦。
+  - **Prompt Persistence & Display Verification (提示词持久呈现与防自动清空验证)**:
+    - 选中包含提示词的节点，验证底部输入框正确渲染出原有的提示词内容，不再呈现为空白；
+    - 在输入框中输入提示词后切换选中其他节点，再切回该节点，验证提示词完好保留不消失；
+    - 打开「放大编辑」弹窗，验证弹窗内的编辑器同样完整展示已有提示词。
   - **Keyboard Navigation & Cross-Input Consistency (键盘导航与多输入组件一致性)**:
     - 测试键盘上下箭头选择与回车插入功能保持正常工作；
     - 验证配置节点组装器（CanvasConfigComposer）与 Agent 对话输入框点击 @ 选项同样稳定插入。
