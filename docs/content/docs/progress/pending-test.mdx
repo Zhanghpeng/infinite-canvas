@@ -7,6 +7,15 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Canvas Image Node Quick Tools All-Hidden Stability Verification (图片节点快捷工具全部隐藏稳定性验证):
+  - **All Quick Tools Hidden & Save Stability (全部隐藏并保存稳定性)**:
+    - 鼠标悬停在包含图片的图片节点上方，点击工具栏右侧的「...」更多按钮（配置快捷工具）；
+    - 在弹出的「自定义工具栏」弹窗中，取消勾选全部快捷工具选项（勾选数显示 0/10+）；
+    - 点击「保存」按钮；
+    - 验证弹窗正常关闭，图片节点上方工具栏平稳更新（仅保留「...」配置入口），不再触发 `Minified React error #185 (Maximum update depth exceeded)` 崩溃白屏；
+    - 刷新页面后重新悬停在图片节点上方，验证工具栏状态保持正常，再次点击「...」可重新勾选工具并正常恢复。
+
+
 - Canvas Node Title Inline Editing React Error #185 Fix Verification (画布节点标题双击重命名 React #185 报错修复验证):
   - **Inline Title Renaming Stability (双击重命名标题稳定性)**:
     - 在画布上双击任意节点（图片、视频、音频、文本等）的标题文本；

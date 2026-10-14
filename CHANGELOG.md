@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [修复] 修复图片节点快捷工具全部隐藏并保存后触发 React #185（Maximum update depth exceeded）死循环崩溃的 Bug：移除冗余且将空工具数组判定为空配置的 localStorage 副作用，规范快捷工具配置状态。
+
 ## v0.19.12 - 2026-10-14
 
 + [修复] 修复节点标题编辑时触发 React #185（Maximum update depth exceeded）无限循环崩溃的 Bug：记忆化 onEditingTitleChange 回调函数引用，并在节点内增加非编辑态静默守卫，防止引起级联重渲染死循环。

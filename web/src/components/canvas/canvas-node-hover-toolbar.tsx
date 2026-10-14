@@ -12,7 +12,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "@/types/canvas";
 import type { CanvasNodeToolbarItem } from "@/types/canvas-plugin";
 import { ImageToolSettingsModal, type ImageToolbarSettingsTool } from "./canvas-image-toolbar-settings-modal";
-import { IMAGE_QUICK_TOOLS_STORAGE_KEY, buildImageToolbarTools, defaultImageQuickToolIds, readImageQuickToolsConfig, type ImageQuickToolId } from "./canvas-image-toolbar-tools";
+import { IMAGE_QUICK_TOOLS_STORAGE_KEY, buildImageToolbarTools, defaultImageQuickToolIds, type ImageQuickToolId } from "./canvas-image-toolbar-tools";
 
 type CanvasNodeHoverToolbarProps = {
     node: CanvasNodeData | null;
@@ -95,7 +95,7 @@ export function CanvasNodeHoverToolbar({
     const updateToolbarConfig = useConfigStore((state) => state.updateToolbarConfig);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
 
-    const quickImageToolIds = (configToolbar.ids as ImageQuickToolId[]) || defaultImageQuickToolIds;
+    const quickImageToolIds = Array.isArray(configToolbar?.ids) ? (configToolbar.ids as ImageQuickToolId[]) : defaultImageQuickToolIds;
     const showImageToolLabels = configToolbar.showLabels ?? false;
 
     const [draftImageToolIds, setDraftImageToolIds] = useState<ImageQuickToolId[]>(quickImageToolIds);
@@ -107,17 +107,11 @@ export function CanvasNodeHoverToolbar({
 
     useEffect(() => {
         try {
-            const stored = window.localStorage.getItem(IMAGE_QUICK_TOOLS_STORAGE_KEY);
-            if (!stored) return;
-            const parsed = JSON.parse(stored) as unknown;
-            const config = readImageQuickToolsConfig(parsed);
-            if (!configToolbar?.ids || configToolbar.ids.length === 0) {
-                updateToolbarConfig({ ids: config.ids, showLabels: config.showLabels });
-            }
-        } catch {
             window.localStorage.removeItem(IMAGE_QUICK_TOOLS_STORAGE_KEY);
+        } catch {
+            // ignore
         }
-    }, [configToolbar?.ids, updateToolbarConfig]);
+    }, []);
 
     useEffect(() => {
         setImageToolSettingsOpen(false);
@@ -249,7 +243,11 @@ export function CanvasNodeHoverToolbar({
 
     const saveImageToolSettings = () => {
         updateToolbarConfig({ ids: draftImageToolIds, showLabels: draftShowImageToolLabels });
-        window.localStorage.setItem(IMAGE_QUICK_TOOLS_STORAGE_KEY, JSON.stringify({ ids: draftImageToolIds, showLabels: draftShowImageToolLabels }));
+        try {
+            window.localStorage.removeItem(IMAGE_QUICK_TOOLS_STORAGE_KEY);
+        } catch {
+            // ignore
+        }
         closeImageToolSettings();
     };
 
