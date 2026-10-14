@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.19.12 - 2026-10-14
+
 + [修复] 修复节点标题编辑时触发 React #185（Maximum update depth exceeded）无限循环崩溃的 Bug：记忆化 onEditingTitleChange 回调函数引用，并在节点内增加非编辑态静默守卫，防止引起级联重渲染死循环。
 + [调整] 将「MiniMax H3 全能视频 (FP8 4步 PDMD)」与「MiniMax H3 首尾帧视频 (FP8 4步 PDMD)」设为系统默认视频生成工作流，新增渠道及恢复默认时默认选用 4 步极速工作流，原 20 步标准工作流降为备选保留。
 
