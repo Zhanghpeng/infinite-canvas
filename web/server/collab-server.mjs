@@ -355,9 +355,12 @@ export function collabHttpMiddleware(req, res, next) {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
     if (url.pathname === "/api/collab/network-ip") {
+        const host = req.headers["x-forwarded-host"] || req.headers.host || "";
+        const isLocal = host.includes("localhost") || host.includes("127.0.0.1");
+        const ip = isLocal ? getLocalIpAddress() : null;
         res.setHeader("Content-Type", "application/json");
         res.setHeader("Access-Control-Allow-Origin", "*");
-        res.end(JSON.stringify({ ip: getLocalIpAddress() }));
+        res.end(JSON.stringify({ ip }));
         return;
     }
 
