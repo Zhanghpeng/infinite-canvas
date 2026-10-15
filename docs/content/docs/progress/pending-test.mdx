@@ -20,7 +20,8 @@ The current release needs manual verification in these areas:
     - 在画布页面新建图片节点时，验证默认选中的工作流与模型为 Qwen-Image-2.1。
   - **Top Navigation & Entry (顶部导航「工作流管理」入口与页面导航)**:
     - 点击顶部导航菜单栏中的「工作流管理」图标或直接访问 `/workflows`；
-    - 验证正常进入工作流管理与大模型配置页面，顶部展示分类标签（文生图、图生图、全能参考视频、音频等）与搜索栏，左侧清晰展示当前渠道的所有工作流列表及「内置/自定义」标签。
+    - 验证正常进入工作流管理与大模型配置页面，顶部展示分类标签（文生图、图生图、全能参考视频、音频等）与搜索栏，左侧清晰展示当前渠道的所有工作流列表及「内置/自定义」标签；
+    - **深色模式视觉验证**：在深色模式下，顶部分类胶囊标签的未选态和选中态（高对比度）背景与文字清晰易读无泛白，左侧选中的工作流卡片背景呈深灰色并带有蓝色高亮边框，卡片内标题和说明文字清晰可见，无白底或文字模糊情况。
   - **Separate ComfyUI Model Endpoints (独立模型接口拉取验证)**:
     - 验证对于标注 `select_models_diffusion_models` 的槽位，系统正确请求 `GET /api/experiment/models/diffusion_models` 并展示扩散模型选项及文件大小；
     - 验证对于标注 `select_models_clip` 的槽位，系统正确请求 `GET /api/experiment/models/text_encoders` 并展示文本编码器选项及文件大小；

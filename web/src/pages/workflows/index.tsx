@@ -313,10 +313,10 @@ export default function WorkflowsPage() {
                                     key={tab.key}
                                     type="button"
                                     onClick={() => setSelectedCategory(tab.key)}
-                                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                                    className={`rounded-full px-3 py-1 text-xs font-medium transition cursor-pointer select-none ${
                                         active
-                                            ? "bg-stone-950 text-white shadow-xs dark:bg-white dark:text-stone-950"
-                                            : "bg-stone-100 text-stone-600 hover:bg-stone-200 dark:bg-stone-850 dark:text-stone-400 dark:hover:bg-stone-800"
+                                            ? "bg-stone-900 text-stone-50 shadow-xs dark:bg-stone-100 dark:text-stone-900"
+                                            : "bg-stone-100 text-stone-600 hover:bg-stone-200/80 hover:text-stone-900 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700 dark:hover:text-stone-200"
                                     }`}
                                 >
                                     {tab.label}
@@ -341,7 +341,7 @@ export default function WorkflowsPage() {
             <div className="flex min-h-0 flex-1 overflow-hidden">
                 {/* 左栏：工作流条目列表 */}
                 <div className="thin-scrollbar flex w-72 shrink-0 flex-col overflow-y-auto border-r border-stone-200 bg-stone-50/50 p-3 sm:w-80 dark:border-stone-800 dark:bg-stone-900/30">
-                    <div className="mb-2 px-1 text-[11px] font-semibold tracking-wider text-stone-400 uppercase">
+                    <div className="mb-2 px-1 text-[11px] font-semibold tracking-wider text-stone-500 uppercase dark:text-stone-400">
                         工作流列表 ({filteredWorkflows.length})
                     </div>
                     <div className="space-y-1.5">
@@ -353,10 +353,10 @@ export default function WorkflowsPage() {
                                     key={wf.id}
                                     type="button"
                                     onClick={() => setActiveWorkflowId(wf.id)}
-                                    className={`w-full rounded-xl border p-3 text-left transition ${
+                                    className={`w-full rounded-xl border p-3 text-left transition cursor-pointer ${
                                         isSelected
-                                            ? "border-blue-500 bg-white shadow-xs dark:border-blue-500/80 dark:bg-stone-850"
-                                            : "border-stone-200/70 bg-white/70 hover:border-stone-300 hover:bg-white dark:border-stone-800/80 dark:bg-stone-900/40 dark:hover:border-stone-700 dark:hover:bg-stone-850/60"
+                                            ? "border-blue-500 bg-blue-50/50 shadow-xs dark:border-blue-500 dark:bg-stone-800"
+                                            : "border-stone-200/70 bg-white/70 hover:border-stone-300 hover:bg-white dark:border-stone-800/80 dark:bg-stone-900/40 dark:hover:border-stone-700 dark:hover:bg-stone-800/50"
                                     }`}
                                 >
                                     <div className="flex items-center justify-between gap-1.5 mb-1">
@@ -380,7 +380,7 @@ export default function WorkflowsPage() {
                                             </span>
                                         </div>
                                     </div>
-                                    <div className="truncate text-[11px] text-stone-400">
+                                    <div className="truncate text-[11px] text-stone-500 dark:text-stone-400">
                                         {wf.description || "无详细说明"}
                                     </div>
                                 </button>
@@ -510,7 +510,7 @@ export default function WorkflowsPage() {
                                             return (
                                                 <div
                                                     key={`${node.nodeId}:${node.inputKey}`}
-                                                    className="rounded-xl border border-stone-200/80 bg-stone-50/50 p-4 transition hover:border-stone-300 dark:border-stone-800 dark:bg-stone-850/40 dark:hover:border-stone-700"
+                                                    className="rounded-xl border border-stone-200/80 bg-stone-50/50 p-4 transition hover:border-stone-300 dark:border-stone-800 dark:bg-stone-800/40 dark:hover:border-stone-700"
                                                 >
                                                     <div className="mb-2 flex items-center justify-between">
                                                         <div className="flex items-center gap-1.5">
