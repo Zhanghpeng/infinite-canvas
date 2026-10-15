@@ -262,6 +262,7 @@ type ConfigStore = {
     clearPromptContinue: () => void;
     saveChannelWorkflow: (channelId: string, workflow: ComfyWorkflowItem) => void;
     saveWorkflowGlobally: (workflow: ComfyWorkflowItem) => void;
+    setChannelDefaultWorkflow: (channelId: string, category: WorkflowCategory, workflowId: string) => void;
     resetChannelWorkflowToBuiltin: (channelId: string, workflowId: string) => void;
 };
 
@@ -517,6 +518,50 @@ export const useConfigStore = create<ConfigStore>()(
                                 json: workflow.json,
                                 createdAt: Date.now(),
                                 isBuiltin: false,
+                            };
+                        }
+                        return updatedChannel;
+                    });
+
+                    return {
+                        config: {
+                            ...state.config,
+                            channels,
+                        },
+                    };
+                }),
+            setChannelDefaultWorkflow: (channelId: string, category: WorkflowCategory, workflowId: string) =>
+                set((state) => {
+                    const channels = state.config.channels.map((channel) => {
+                        if (channel.id !== channelId) return channel;
+
+                        const currentWorkflows = getChannelWorkflows(channel);
+                        const targetWorkflow = currentWorkflows.find(
+                            (wf) => wf.id === workflowId || (wf.category === category && wf.name === workflowId)
+                        );
+                        if (!targetWorkflow) return channel;
+
+                        const nextWorkflows = currentWorkflows.map((wf) => {
+                            if (wf.category !== category) return wf;
+                            const isSelected = wf.id === targetWorkflow.id || wf.name === targetWorkflow.name;
+                            return {
+                                ...wf,
+                                isDefault: isSelected,
+                            };
+                        });
+
+                        const updatedChannel: ModelChannel = {
+                            ...channel,
+                            workflows: nextWorkflows,
+                        };
+
+                        const channelField = WORKFLOW_CATEGORY_TO_CHANNEL_FIELD[category];
+                        if (channelField) {
+                            (updatedChannel as any)[channelField] = {
+                                name: targetWorkflow.name,
+                                json: targetWorkflow.json,
+                                createdAt: targetWorkflow.createdAt || Date.now(),
+                                isBuiltin: targetWorkflow.isBuiltin,
                             };
                         }
                         return updatedChannel;

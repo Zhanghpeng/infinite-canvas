@@ -8,6 +8,12 @@ description: Implemented changes that still need manual verification
 The current release needs manual verification in these areas:
 
 - Workflow Management & Dynamic Model Selection Verification (工作流管理与大模型可视化选择验证):
+  - **Multi-Workflow Category Configuration & Channel Defaults (渠道多工作流切换与单渠道独立默认验证)**:
+    - 打开「设置」弹窗中的渠道卡片，查看包含多个工作流的分类行（如「首尾帧视频工作流」拥有 4 个规格，「全能参考视频工作流」拥有 4 个规格等）；
+    - 验证该分类行出现下拉选择框，展示该分类下的所有工作流（如 4步 PDMD、20步 FP8、8步 Turbo、20步 BF16），且当前选中的项标记「默认」；
+    - 在下拉框中选择另一个工作流，验证提示「已将该工作流设为当前渠道的默认工作流」，且仅修改当前渠道的默认配置，不影响其他渠道；
+    - 点击右侧「配置工作流」，验证精准跳转进入「工作流管理」页面（`/workflows`）并自动高亮选中该工作流，支持即时进行大模型配置和 JSON 编辑；
+    - 在「工作流管理」页面中，如果当前选中的工作流不是渠道默认，可点击顶部操作栏的「设为渠道默认」将其设为当前渠道的默认工作流。
   - **Default Workflow Verification (Qwen-Image-2.1 默认生图工作流验证)**:
     - 检查「设置」页面或「工作流管理」列表，验证文生图分类下的默认工作流（带默认标记）已更新为「Qwen-Image-2.1 文生图」；
     - 验证图生图分类下的默认工作流（带默认标记）已更新为「Qwen-Image-2.1 多图参考图生图」；

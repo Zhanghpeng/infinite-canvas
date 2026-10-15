@@ -267,6 +267,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channel={channel}
+                                                                                category="t2i"
                                                                                 channelId={channel.id}
                                                                                 workflowId={t2iItem?.id || defaultWorkflows.t2i?.name}
                                                                                 value={t2iItem || channel.comfyuiT2iWorkflow || defaultWorkflows.t2i}
@@ -283,6 +285,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channel={channel}
+                                                                                category="i2i"
                                                                                 channelId={channel.id}
                                                                                 workflowId={i2iItem?.id || defaultWorkflows.i2i?.name}
                                                                                 value={i2iItem || channel.comfyuiI2iWorkflow || defaultWorkflows.i2i}
@@ -299,6 +303,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channel={channel}
+                                                                                category="text"
                                                                                 channelId={channel.id}
                                                                                 workflowId={textItem?.id || defaultWorkflows.text?.name}
                                                                                 value={textItem || channel.comfyuiTextWorkflow || defaultWorkflows.text}
@@ -315,6 +321,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channel={channel}
+                                                                                category="omniVideo"
                                                                                 channelId={channel.id}
                                                                                 workflowId={videoItem?.id || defaultWorkflows.video?.name}
                                                                                 value={videoItem || channel.comfyuiVideoWorkflow || defaultWorkflows.video}
@@ -331,6 +339,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channel={channel}
+                                                                                category="frameVideo"
                                                                                 channelId={channel.id}
                                                                                 workflowId={frameVideoItem?.id || defaultWorkflows.frameVideo?.name}
                                                                                 value={frameVideoItem || channel.comfyuiFrameVideoWorkflow || defaultWorkflows.frameVideo}
@@ -347,6 +357,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channel={channel}
+                                                                                category="audio"
                                                                                 channelId={channel.id}
                                                                                 workflowId={audioItem?.id || defaultWorkflows.audio?.name}
                                                                                 value={audioItem || channel.comfyuiAudioWorkflow || defaultWorkflows.audio}
@@ -373,6 +385,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channel={channel}
+                                                                                category="inpaint"
                                                                                 channelId={channel.id}
                                                                                 workflowId={inpaintItem?.id || defaultWorkflows.inpaint?.name}
                                                                                 value={inpaintItem || channel.comfyuiInpaintWorkflow || defaultWorkflows.inpaint}
@@ -389,6 +403,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channel={channel}
+                                                                                category="faceRefine"
                                                                                 channelId={channel.id}
                                                                                 workflowId={faceRefineItem?.id || defaultWorkflows.faceRefine?.name}
                                                                                 value={faceRefineItem || channel.comfyuiFaceRefineWorkflow || defaultWorkflows.faceRefine}
@@ -405,6 +421,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channel={channel}
+                                                                                category="depthVideo"
                                                                                 channelId={channel.id}
                                                                                 workflowId={depthVideoItem?.id || defaultWorkflows.depthVideo?.name}
                                                                                 value={depthVideoItem || channel.comfyuiDepthVideoWorkflow || defaultWorkflows.depthVideo}

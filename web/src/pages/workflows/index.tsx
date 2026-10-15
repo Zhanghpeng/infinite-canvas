@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
     AlertCircle,
     Check,
@@ -10,6 +11,7 @@ import {
     RotateCcw,
     Save,
     Sparkles,
+    Star,
     Upload,
     Workflow as WorkflowIcon,
 } from "lucide-react";
@@ -57,15 +59,25 @@ export default function WorkflowsPage() {
     const { message } = App.useApp();
     const copyText = useCopyText();
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [searchParams] = useSearchParams();
+
+    const queryChannelId = searchParams.get("channelId");
+    const queryWorkflowId = searchParams.get("id");
+    const queryCategory = searchParams.get("category");
 
     const config = useEffectiveConfig();
     const saveWorkflowGlobally = useConfigStore((state) => state.saveWorkflowGlobally);
+    const setChannelDefaultWorkflow = useConfigStore((state) => state.setChannelDefaultWorkflow);
     const resetChannelWorkflowToBuiltin = useConfigStore((state) => state.resetChannelWorkflowToBuiltin);
 
-    // 当前渠道及基准端点（若有配置 ComfyUI 直连则使用）
+    // 当前渠道及基准端点（若 URL 传了 channelId 则锁定对应渠道，否则使用当前默认 ComfyUI 渠道）
     const primaryChannel = useMemo(() => {
+        if (queryChannelId) {
+            const found = config.channels?.find((c) => c.id === queryChannelId);
+            if (found) return found;
+        }
         return config.channels?.find((c) => c.apiFormat === "comfyui") || config.channels?.[0];
-    }, [config.channels]);
+    }, [config.channels, queryChannelId]);
 
     const comfyEndpoint = useMemo(() => {
         return primaryChannel?.comfyuiProxyUrl || (primaryChannel?.id === "local" ? "http://127.0.0.1:8188" : "http://127.0.0.1:8188");
@@ -77,8 +89,24 @@ export default function WorkflowsPage() {
     }, [primaryChannel]);
 
     // 分类筛选与搜索
-    const [selectedCategory, setSelectedCategory] = useState("all");
+    const [selectedCategory, setSelectedCategory] = useState(queryCategory || "all");
     const [searchKeyword, setSearchKeyword] = useState("");
+
+    // 当前选中的正在编辑的工作流
+    const [activeWorkflowId, setActiveWorkflowId] = useState<string>(queryWorkflowId || "");
+
+    // 响应 URL 参数变化定位目标工作流与分类
+    useEffect(() => {
+        if (queryCategory) {
+            setSelectedCategory(queryCategory);
+        }
+        if (queryWorkflowId) {
+            const found = allWorkflows.find((w) => w.id === queryWorkflowId || w.name === queryWorkflowId);
+            if (found) {
+                setActiveWorkflowId(found.id);
+            }
+        }
+    }, [queryCategory, queryWorkflowId, allWorkflows]);
 
     const filteredWorkflows = useMemo(() => {
         return allWorkflows.filter((wf) => {
@@ -87,9 +115,6 @@ export default function WorkflowsPage() {
             return matchesCat && matchesKw;
         });
     }, [allWorkflows, selectedCategory, searchKeyword]);
-
-    // 当前选中的正在编辑的工作流
-    const [activeWorkflowId, setActiveWorkflowId] = useState<string>("");
 
     useEffect(() => {
         if (!filteredWorkflows.length) {
@@ -338,15 +363,22 @@ export default function WorkflowsPage() {
                                         <span className="truncate text-xs font-semibold text-stone-900 dark:text-stone-100">
                                             {wf.name}
                                         </span>
-                                        <span
-                                            className={`inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                                                custom
-                                                    ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
-                                                    : "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300"
-                                            }`}
-                                        >
-                                            {custom ? "自定义" : "内置"}
-                                        </span>
+                                        <div className="flex shrink-0 items-center gap-1">
+                                            {wf.isDefault && (
+                                                <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                                                    默认
+                                                </span>
+                                            )}
+                                            <span
+                                                className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                                    custom
+                                                        ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+                                                        : "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300"
+                                                }`}
+                                            >
+                                                {custom ? "自定义" : "内置"}
+                                            </span>
+                                        </div>
                                     </div>
                                     <div className="truncate text-[11px] text-stone-400">
                                         {wf.description || "无详细说明"}
@@ -379,6 +411,24 @@ export default function WorkflowsPage() {
                             </div>
 
                             <div className="flex items-center gap-2">
+                                {activeWorkflow.isDefault ? (
+                                    <Tag color="green" className="m-0 text-xs py-0.5">
+                                        当前渠道默认
+                                    </Tag>
+                                ) : (
+                                    <Button
+                                        size="small"
+                                        icon={<Star className="size-3.5 text-amber-500" />}
+                                        onClick={() => {
+                                            if (!primaryChannel || !activeWorkflow) return;
+                                            setChannelDefaultWorkflow(primaryChannel.id, activeWorkflow.category, activeWorkflow.id);
+                                            message.success(`已将「${activeWorkflow.name}」设为 ${primaryChannel.name} 的默认工作流`);
+                                        }}
+                                        title={`将此工作流设为当前渠道（${primaryChannel?.name}）该分类下的默认工作流`}
+                                    >
+                                        设为渠道默认
+                                    </Button>
+                                )}
                                 {builtinCounterpart && (
                                     <Button
                                         size="small"
