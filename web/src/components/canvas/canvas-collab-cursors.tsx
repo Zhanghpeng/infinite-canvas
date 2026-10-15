@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { useCollabStore } from "@/stores/use-collab-store";
+import type { CanvasNodeData } from "@/types/canvas";
 
 export function CanvasCollabCursors() {
     const peerPresences = useCollabStore((s) => s.peerPresences);
@@ -53,12 +54,22 @@ export function CanvasCollabCursors() {
 }
 
 export function CanvasCollabSelectionOutlines({
-    nodesMap,
+    nodes,
 }: {
-    nodesMap: Record<string, { x: number; y: number; width: number; height: number }>;
+    nodes: CanvasNodeData[];
 }) {
     const peerPresences = useCollabStore((s) => s.peerPresences);
     const presences = Object.values(peerPresences);
+
+    const nodesMap = useMemo(() => {
+        const map: Record<string, { x: number; y: number; width: number; height: number }> = {};
+        for (const n of nodes) {
+            map[n.id] = { x: n.position.x, y: n.position.y, width: n.width, height: n.height };
+        }
+        return map;
+    }, [nodes]);
+
+    if (presences.length === 0) return null;
 
     return (
         <div className="pointer-events-none absolute inset-0 z-30">

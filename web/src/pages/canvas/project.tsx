@@ -4727,15 +4727,7 @@ function InfiniteCanvasPage() {
                         />
                     ) : null}
                     <CanvasCollabCursors />
-                    <CanvasCollabSelectionOutlines
-                        nodesMap={useMemo(() => {
-                            const map: Record<string, { x: number; y: number; width: number; height: number }> = {};
-                            for (const n of nodes) {
-                                map[n.id] = { x: n.position.x, y: n.position.y, width: n.width, height: n.height };
-                            }
-                            return map;
-                        }, [nodes])}
-                    />
+                    <CanvasCollabSelectionOutlines nodes={nodes} />
                 </InfiniteCanvas>
 
                 <CanvasNodeHoverToolbar
