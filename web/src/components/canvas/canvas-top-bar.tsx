@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Bot, Download, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
+import { BookOpen, Bot, Download, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Share2, Trash2, Undo2, Upload, Users } from "lucide-react";
 import { Button, Dropdown, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
+import { useCollabStore } from "@/stores/use-collab-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { DOCS_URL } from "@/constant/env";
 
@@ -61,6 +62,11 @@ export function CanvasTopBar({
     const [shortcutsOpen, setShortcutsOpen] = useState(false);
     const sidePanelOpen = useCanvasSidePanelStore((state) => state.panelOpen);
     const toggleSidePanel = useCanvasSidePanelStore((state) => state.togglePanel);
+
+    const activeRoomId = useCollabStore((state) => state.activeRoomId);
+    const collabRole = useCollabStore((state) => state.role);
+    const onlineUsers = useCollabStore((state) => state.onlineUsers);
+    const setCollabModalOpen = useCollabStore((state) => state.setCollabModalOpen);
 
     useEffect(() => {
         if (!isTitleEditing) return;
@@ -139,6 +145,44 @@ export function CanvasTopBar({
                 </div>
 
                 <div className="pointer-events-auto flex items-center gap-1.5">
+                    <Button
+                        type="text"
+                        className="!h-10 !rounded-xl !px-3 !font-medium"
+                        style={{
+                            background: activeRoomId
+                                ? collabRole === "host"
+                                    ? "rgba(37,99,235,0.12)"
+                                    : "rgba(16,185,129,0.12)"
+                                : theme.toolbar.panel,
+                            color: activeRoomId ? (collabRole === "host" ? "#2563eb" : "#059669") : theme.node.text,
+                            boxShadow: "0 10px 30px rgba(28,25,23,.10)",
+                        }}
+                        icon={
+                            activeRoomId ? (
+                                <span className="relative flex size-2">
+                                    <span
+                                        className={`absolute inline-flex size-full animate-ping rounded-full opacity-75 ${
+                                            collabRole === "host" ? "bg-blue-400" : "bg-emerald-400"
+                                        }`}
+                                    />
+                                    <span
+                                        className={`relative inline-flex size-2 rounded-full ${
+                                            collabRole === "host" ? "bg-blue-500" : "bg-emerald-500"
+                                        }`}
+                                    />
+                                </span>
+                            ) : (
+                                <Share2 className="size-4" />
+                            )
+                        }
+                        onClick={() => setCollabModalOpen(true)}
+                    >
+                        {activeRoomId
+                            ? collabRole === "host"
+                                ? `协同中 (${onlineUsers.length || 1})`
+                                : "协同观看"
+                            : "协同"}
+                    </Button>
                     <UserStatusActions variant="canvas" onOpenShortcuts={() => setShortcutsOpen(true)} onOpenPlugins={onOpenPlugins} />
                     <span className="h-6 w-px" style={{ background: theme.toolbar.border }} />
                     <Button

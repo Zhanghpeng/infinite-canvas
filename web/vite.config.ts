@@ -38,9 +38,23 @@ function localPluginsManifest(): Plugin {
     };
 }
 
+import { attachCollabServer, collabHttpMiddleware } from "./server/collab-server.mjs";
+
+function localCollabPlugin(): Plugin {
+    return {
+        name: "local-collab-server",
+        configureServer(server) {
+            server.middlewares.use(collabHttpMiddleware);
+            if (server.httpServer) {
+                attachCollabServer(server.httpServer);
+            }
+        },
+    };
+}
+
 export default defineConfig({
     base: process.env.VITE_BASE || "/",
-    plugins: [react(), localPluginsManifest()],
+    plugins: [react(), localPluginsManifest(), localCollabPlugin()],
     resolve: {
         alias: {
             "@": resolve(webDir, "src"),

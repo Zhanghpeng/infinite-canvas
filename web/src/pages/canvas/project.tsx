@@ -47,7 +47,11 @@ import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/a
 import { CanvasSidePanel } from "@/components/canvas/canvas-side-panel";
 import { CanvasZoomControls } from "@/components/canvas/canvas-zoom-controls";
 import { useAgentStore } from "@/stores/use-agent-store";
-import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import { useCanvasStore, type CanvasProject } from "@/stores/canvas/use-canvas-store";
+import { useCollabStore } from "@/stores/use-collab-store";
+import { useCanvasCollab } from "@/pages/canvas/hooks/use-canvas-collab";
+import { CanvasCollabCursors, CanvasCollabSelectionOutlines } from "@/components/canvas/canvas-collab-cursors";
+import { CanvasCollabModal } from "@/components/canvas/canvas-collab-modal";
 import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { buildNodeMentionReferences, getGroupResourceNodes, isCanvasReferenceNode, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
@@ -302,6 +306,71 @@ function InfiniteCanvasPage() {
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
 
+    const activeRoomId = useCollabStore((state) => state.activeRoomId);
+    const collabRole = useCollabStore((state) => state.role);
+    const startCollaboration = useCollabStore((state) => state.startCollaboration);
+    const isViewer = Boolean(activeRoomId && collabRole === "viewer");
+    const isViewerRef = useRef(isViewer);
+    useEffect(() => {
+        isViewerRef.current = isViewer;
+    }, [isViewer]);
+
+    const lastCursorBroadcastRef = useRef(0);
+
+    const { broadcastCanvasSync, broadcastNodesPatch, broadcastGenerationStatus, broadcastCursor } = useCanvasCollab({
+        onRemoteCanvasUpdate: (remoteNodes, remoteConnections, remoteTitle) => {
+            setNodes(remoteNodes);
+            setConnections(remoteConnections);
+            if (remoteTitle && !titleEditing) setTitleDraft(remoteTitle);
+        },
+        onRemoteNodesPatch: (remoteNodes, remoteConnections) => {
+            setNodes(remoteNodes);
+            setConnections(remoteConnections);
+        },
+        onRemoteGenerationStatus: (nodeId, status, errorDetails, metadata) => {
+            setNodes((prev) =>
+                prev.map((n) =>
+                    n.id === nodeId
+                        ? {
+                              ...n,
+                              metadata: {
+                                  ...n.metadata,
+                                  ...metadata,
+                                  status,
+                                  errorDetails,
+                              },
+                          }
+                        : n,
+                ),
+            );
+        },
+        getCurrentSnapshot: () => ({
+            nodes: nodesRef.current,
+            connections: connectionsRef.current,
+            title: currentProject?.title || "",
+        }),
+    });
+
+    const roomParam = searchParams.get("room");
+    useEffect(() => {
+        if (roomParam && activeRoomId !== roomParam) {
+            const currentHostToken = useCollabStore.getState().hostToken;
+            startCollaboration(roomParam, currentHostToken ? "host" : "viewer");
+        }
+    }, [roomParam, activeRoomId, startCollaboration]);
+
+    const handleStartCollab = useCallback(
+        (roomId: string) => {
+            startCollaboration(roomId, "host");
+            broadcastCanvasSync(nodesRef.current, connectionsRef.current, currentProject?.title);
+        },
+        [broadcastCanvasSync, currentProject?.title, startCollaboration],
+    );
+
+    const handleStopCollab = useCallback(() => {
+        useCollabStore.getState().disconnect();
+    }, []);
+
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({
             nodes: nodesRef.current,
@@ -442,10 +511,31 @@ function InfiniteCanvasPage() {
     useEffect(() => {
         if (!hydrated) return;
         setProjectLoaded(false);
-        const project = openProject(projectId);
+        let project = openProject(projectId);
         if (!project) {
-            navigate("/canvas", { replace: true });
-            return;
+            if (searchParams.get("room")) {
+                const now = new Date().toISOString();
+                const placeholder: CanvasProject = {
+                    id: projectId,
+                    title: "协同画布",
+                    createdAt: now,
+                    updatedAt: now,
+                    nodes: [],
+                    connections: [],
+                    chatSessions: [],
+                    activeChatId: null,
+                    backgroundMode: "lines",
+                    showImageInfo: false,
+                    viewport: { x: 0, y: 0, k: 1 },
+                };
+                useCanvasStore.setState((s) => ({
+                    projects: [placeholder, ...s.projects],
+                }));
+                project = placeholder;
+            } else {
+                navigate("/canvas", { replace: true });
+                return;
+            }
         }
 
         const restore = async () => {
@@ -519,7 +609,10 @@ function InfiniteCanvasPage() {
     useEffect(() => {
         if (!projectLoaded || historyPausedRef.current) return;
         updateProject(projectId, { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo });
-    }, [activeChatId, backgroundMode, chatSessions, connections, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
+        if (activeRoomId && collabRole === "host") {
+            broadcastCanvasSync(nodes, connections, currentProject?.title);
+        }
+    }, [activeChatId, activeRoomId, backgroundMode, broadcastCanvasSync, chatSessions, collabRole, connections, currentProject?.title, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
 
     useEffect(() => {
         if (!dialogNodeId) setNodeImageSettingsOpen(false);
@@ -588,6 +681,7 @@ function InfiniteCanvasPage() {
     }, [screenToCanvas, size.height, size.width]);
 
     const setConnecting = useCallback((next: ConnectionHandle | null) => {
+        if (isViewerRef.current && next) return;
         connectingParamsRef.current = next;
         setConnectingParams(next);
         if (!next) {
@@ -996,6 +1090,7 @@ function InfiniteCanvasPage() {
 
     const deleteNodes = useCallback(
         (ids: Set<string>) => {
+            if (isViewerRef.current) return;
             if (!ids.size) return;
             const allIds = new Set(ids);
             setNodes((prev) => {
@@ -1034,16 +1129,19 @@ function InfiniteCanvasPage() {
     );
 
     const deleteConnection = useCallback((connectionId: string) => {
+        if (isViewerRef.current) return;
         setConnections((prev) => prev.filter((conn) => conn.id !== connectionId));
         setSelectedConnectionId((current) => (current === connectionId ? null : current));
         setContextMenu((current) => (current?.type === "connection" && current.connectionId === connectionId ? null : current));
     }, []);
 
     const disconnectNodeReference = useCallback((fromNodeId: string, toNodeId: string) => {
+        if (isViewerRef.current) return;
         setConnections((prev) => prev.filter((connection) => connection.fromNodeId !== fromNodeId || connection.toNodeId !== toNodeId));
     }, []);
 
     const reorderNodeReferences = useCallback((toNodeId: string, orderedSourceNodeIds: string[]) => {
+        if (isViewerRef.current) return;
         setConnections((prev) => {
             const isTargetInput = (c: CanvasConnection) => c.toNodeId === toNodeId && (c.kind === "input" || !c.kind);
             const targetConns = prev.filter(isTargetInput);
@@ -1476,6 +1574,7 @@ function InfiniteCanvasPage() {
 
     const handleNodeMouseDown = useCallback((event: ReactMouseEvent, nodeId: string) => {
         event.stopPropagation();
+        if (isViewerRef.current) return;
         // Capture already selected the node; this only starts dragging, with a fallback selection if capture did not run.
         const currentNodes = nodesRef.current;
         const nextSelected = pendingSelectionRef.current ?? selectNodeByEvent(event, nodeId).nextSelected;
@@ -1569,6 +1668,13 @@ function InfiniteCanvasPage() {
 
     const handleGlobalMouseMove = useCallback(
         (event: MouseEvent) => {
+            if (activeRoomId) {
+                const now = performance.now();
+                if (now - lastCursorBroadcastRef.current > 40) {
+                    lastCursorBroadcastRef.current = now;
+                    broadcastCursor(screenToCanvas(event.clientX, event.clientY), Array.from(selectedNodeIdsRef.current));
+                }
+            }
             const currentViewport = viewportRef.current;
 
             if (dragRef.current.isDraggingNode) {
@@ -1625,7 +1731,7 @@ function InfiniteCanvasPage() {
                 setMouseWorld(screenToCanvas(event.clientX, event.clientY));
             }
         },
-        [finishNodeDrag, getConnectionDropTarget, screenToCanvas],
+        [activeRoomId, broadcastCursor, finishNodeDrag, getConnectionDropTarget, screenToCanvas],
     );
 
     const handleGlobalPointerMove = useCallback(
@@ -3148,6 +3254,10 @@ function InfiniteCanvasPage() {
 
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, submittedPrompt: string, intent: CanvasGenerationIntent = "new") => {
+            if (isViewerRef.current) {
+                message.warning("当前为协同观看模式，仅房主可以触发 AI 生成");
+                return;
+            }
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const prompt = intent === "repeat" ? (submittedPrompt.trim() || sourceNode?.metadata?.prompt || "") : submittedPrompt;
             const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
@@ -4000,6 +4110,10 @@ function InfiniteCanvasPage() {
 
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData, imageId?: string, intent: "retry" | "resume" = "retry") => {
+            if (isViewerRef.current) {
+                message.warning("当前为协同观看模式，仅房主可以触发 AI 生成");
+                return;
+            }
             const saved = node.metadata || {};
             let context: NodeGenerationContext | null;
             try {
@@ -4612,6 +4726,16 @@ function InfiniteCanvasPage() {
                             onClose={() => setNodeCreatePosition(null)}
                         />
                     ) : null}
+                    <CanvasCollabCursors />
+                    <CanvasCollabSelectionOutlines
+                        nodesMap={useMemo(() => {
+                            const map: Record<string, { x: number; y: number; width: number; height: number }> = {};
+                            for (const n of nodes) {
+                                map[n.id] = { x: n.position.x, y: n.position.y, width: n.width, height: n.height };
+                            }
+                            return map;
+                        }, [nodes])}
+                    />
                 </InfiniteCanvas>
 
                 <CanvasNodeHoverToolbar
@@ -4646,29 +4770,50 @@ function InfiniteCanvasPage() {
                     onUngroup={(node) => ungroupSelected(node.id)}
                 />
 
-                <CanvasToolbar
-                    selectedCount={selectedNodeIds.size}
-                    canvasTool={canvasTool}
-                    canUndo={historyState.canUndo}
-                    canRedo={historyState.canRedo}
-                    backgroundMode={backgroundMode}
-                    showImageInfo={showImageInfo}
-                    onAddImage={() => createNode(CanvasNodeType.Image)}
-                    onAddVideo={() => createNode(CanvasNodeType.Video)}
-                    onAddAudio={() => createNode(CanvasNodeType.Audio)}
-                    onAddText={() => createNode(CanvasNodeType.Text)}
-                    onAddConfig={() => createNode(CanvasNodeType.Config)}
-                    onAddGroup={groupSelectedNodes}
-                    onAddExtensionNode={(type) => createNode(type)}
-                    onUndo={undoCanvas}
-                    onRedo={redoCanvas}
-                    onUpload={() => handleUploadRequest()}
-                    onDelete={() => deleteNodes(new Set(selectedNodeIds))}
-                    onClear={() => setClearConfirmOpen(true)}
-                    onCanvasToolChange={setCanvasTool}
-                    onBackgroundModeChange={setBackgroundMode}
-                    onShowImageInfoChange={setShowImageInfo}
-                />
+                {isViewer ? (
+                    <div
+                        className="pointer-events-auto absolute bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-2xl px-4 py-2.5 shadow-lg backdrop-blur"
+                        style={{
+                            background: theme.toolbar.panel,
+                            border: `1px solid ${theme.toolbar.border}`,
+                            color: theme.node.text,
+                        }}
+                    >
+                        <span className="flex items-center gap-2 text-xs font-medium">
+                            <span className="relative flex size-2">
+                                <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                                <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+                            </span>
+                            <span>协同观看模式（仅房主可编辑）</span>
+                        </span>
+                        <span className="h-4 w-px bg-stone-300 dark:bg-stone-700" />
+                        <span className="text-xs opacity-60">点击任意卡片悬浮栏可直接下载高清物料</span>
+                    </div>
+                ) : (
+                    <CanvasToolbar
+                        selectedCount={selectedNodeIds.size}
+                        canvasTool={canvasTool}
+                        canUndo={historyState.canUndo}
+                        canRedo={historyState.canRedo}
+                        backgroundMode={backgroundMode}
+                        showImageInfo={showImageInfo}
+                        onAddImage={() => createNode(CanvasNodeType.Image)}
+                        onAddVideo={() => createNode(CanvasNodeType.Video)}
+                        onAddAudio={() => createNode(CanvasNodeType.Audio)}
+                        onAddText={() => createNode(CanvasNodeType.Text)}
+                        onAddConfig={() => createNode(CanvasNodeType.Config)}
+                        onAddGroup={groupSelectedNodes}
+                        onAddExtensionNode={(type) => createNode(type)}
+                        onUndo={undoCanvas}
+                        onRedo={redoCanvas}
+                        onUpload={() => handleUploadRequest()}
+                        onDelete={() => deleteNodes(new Set(selectedNodeIds))}
+                        onClear={() => setClearConfirmOpen(true)}
+                        onCanvasToolChange={setCanvasTool}
+                        onBackgroundModeChange={setBackgroundMode}
+                        onShowImageInfoChange={setShowImageInfo}
+                    />
+                )}
 
                 {isMiniMapOpen ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
 
@@ -4807,6 +4952,12 @@ function InfiniteCanvasPage() {
                 </Modal>
 
                 <AssetPickerModal open={assetPickerOpen} onInsert={handleAssetInsert} onClose={() => setAssetPickerOpen(false)} />
+                <CanvasCollabModal
+                    projectId={projectId}
+                    projectTitle={currentProject?.title || ""}
+                    onStartCollab={handleStartCollab}
+                    onStopCollab={handleStopCollab}
+                />
             </section>
         </main>
     );
