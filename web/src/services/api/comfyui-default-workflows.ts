@@ -133,8 +133,8 @@ export const DEFAULT_BUILTIN_COMFYUI_AUDIO_WORKFLOW: ComfyuiWorkflow = {
 };
 
 // Aliases for unified ComfyUI workflows
-export const DEFAULT_COMFYUI_T2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_T2I_WORKFLOW;
-export const DEFAULT_COMFYUI_I2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_I2I_WORKFLOW;
+export const DEFAULT_COMFYUI_T2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW;
+export const DEFAULT_COMFYUI_I2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW;
 export const DEFAULT_COMFYUI_INPAINT_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_INPAINT_WORKFLOW;
 export const DEFAULT_COMFYUI_TEXT_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_TEXT_WORKFLOW;
 export const DEFAULT_COMFYUI_VIDEO_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_VIDEO_WORKFLOW;
@@ -145,16 +145,16 @@ export const DEFAULT_COMFYUI_AUDIO_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_AUDIO_WORK
 export const DEFAULT_COMFYUI_FACE_REFINE_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW;
 
 // Backward-compatible local aliases
-export const DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_T2I_WORKFLOW;
-export const DEFAULT_LOCAL_COMFYUI_I2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_I2I_WORKFLOW;
+export const DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW;
+export const DEFAULT_LOCAL_COMFYUI_I2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW;
 export const DEFAULT_LOCAL_COMFYUI_INPAINT_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_INPAINT_WORKFLOW;
 export const DEFAULT_LOCAL_COMFYUI_TEXT_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_TEXT_WORKFLOW;
 export const DEFAULT_LOCAL_COMFYUI_VIDEO_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_VIDEO_WORKFLOW;
 export const DEFAULT_LOCAL_COMFYUI_FRAME_VIDEO_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_WORKFLOW;
 
 // Backward-compatible cloud aliases
-export const DEFAULT_CLOUD_COMFYUI_T2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_T2I_WORKFLOW;
-export const DEFAULT_CLOUD_COMFYUI_I2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_I2I_WORKFLOW;
+export const DEFAULT_CLOUD_COMFYUI_T2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW;
+export const DEFAULT_CLOUD_COMFYUI_I2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW;
 export const DEFAULT_CLOUD_COMFYUI_INPAINT_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_INPAINT_WORKFLOW;
 export const DEFAULT_CLOUD_COMFYUI_TEXT_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_TEXT_WORKFLOW;
 export const DEFAULT_CLOUD_COMFYUI_VIDEO_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_VIDEO_TURBO_WORKFLOW;
@@ -173,8 +173,8 @@ export type ComfyuiWorkflowBundle = {
 };
 
 export const DEFAULT_BUILTIN_COMFYUI_WORKFLOWS: ComfyuiWorkflowBundle = {
-    t2i: DEFAULT_BUILTIN_COMFYUI_T2I_WORKFLOW,
-    i2i: DEFAULT_BUILTIN_COMFYUI_I2I_WORKFLOW,
+    t2i: DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW,
+    i2i: DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW,
     inpaint: DEFAULT_BUILTIN_COMFYUI_INPAINT_WORKFLOW,
     text: DEFAULT_BUILTIN_COMFYUI_TEXT_WORKFLOW,
     video: DEFAULT_BUILTIN_COMFYUI_VIDEO_WORKFLOW,
@@ -204,34 +204,24 @@ export function getDefaultComfyWorkflowItems(channel?: { id?: string; name?: str
     const prefix = channel?.id || "builtin";
     return [
         {
-            id: `${prefix}-t2i-z-image-turbo`,
-            name: "Z-Image-Turbo 文生图",
-            category: "t2i",
-            json: DEFAULT_BUILTIN_COMFYUI_T2I_WORKFLOW.json,
-            createdAt: 0,
-            isBuiltin: true,
-            isDefault: true,
-            description: "Z-Image-Turbo 极速文生图工作流 (BF16，4~8步出图)",
-        },
-        {
             id: `${prefix}-t2i-qwen-image-21`,
             name: "Qwen-Image-2.1 文生图",
             category: "t2i",
             json: DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW.json,
             createdAt: 0,
             isBuiltin: true,
-            isDefault: false,
+            isDefault: true,
             description: "Qwen-Image-2.1 大模型文生图工作流 (BF16，支持多模态理解与超写实画质)",
         },
         {
-            id: `${prefix}-i2i-flux2-dev`,
-            name: "Flux2.Dev 图生图",
-            category: "i2i",
-            json: DEFAULT_BUILTIN_COMFYUI_I2I_WORKFLOW.json,
+            id: `${prefix}-t2i-z-image-turbo`,
+            name: "Z-Image-Turbo 文生图",
+            category: "t2i",
+            json: DEFAULT_BUILTIN_COMFYUI_T2I_WORKFLOW.json,
             createdAt: 0,
             isBuiltin: true,
-            isDefault: true,
-            description: "Flux2.Dev 多图参考与风格迁移工作流 (FP8 + Turbo LoRA)",
+            isDefault: false,
+            description: "Z-Image-Turbo 极速文生图工作流 (BF16，4~8步出图)",
         },
         {
             id: `${prefix}-i2i-qwen-image-21`,
@@ -240,8 +230,18 @@ export function getDefaultComfyWorkflowItems(channel?: { id?: string; name?: str
             json: DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW.json,
             createdAt: 0,
             isBuiltin: true,
-            isDefault: false,
+            isDefault: true,
             description: "Qwen-Image-2.1 多图融合与风格迁移工作流 (支持最多 10 张参考图)",
+        },
+        {
+            id: `${prefix}-i2i-flux2-dev`,
+            name: "Flux2.Dev 图生图",
+            category: "i2i",
+            json: DEFAULT_BUILTIN_COMFYUI_I2I_WORKFLOW.json,
+            createdAt: 0,
+            isBuiltin: true,
+            isDefault: false,
+            description: "Flux2.Dev 多图参考与风格迁移工作流 (FP8 + Turbo LoRA)",
         },
         {
             id: `${prefix}-inpaint-qwen-image`,

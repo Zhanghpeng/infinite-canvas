@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [调整] 将「Qwen-Image-2.1 文生图」与「Qwen-Image-2.1 多图参考图生图」设为系统文生图（T2I）与图生图（I2I）的默认工作流，系统初始默认生图模型对齐为 Qwen-Image-2.1，原 Z-Image-Turbo 与 Flux2.Dev 保留为可选规格。
 + [新增] 新增工作流独立管理页面（`/workflows`）与顶部导航菜单：支持分类浏览与搜索所有内置及自定义工作流，支持通过 `select_models_*`（如 `select_models_diffusion_models` 分别对应 `/api/experiment/models/diffusion_models`、`select_models_clip` 对应 `/api/experiment/models/text_encoders`）自动探测 Loader 槽位并实时拉取 ComfyUI 模型库供选择；修改大模型即时全渠道全局生效，且支持 JSON 导入导出与一键恢复系统内置默认。
 + [新增] 画布节点与配置卡片新增直接大模型选择器（`CanvasWorkflowModelPicker`）：当当前工作流包含 `select_models_*` 槽位时，在画布提示词面板及配置节点中直接渲染极简下拉选择框，支持实时切换扩散大模型与 CLIP 编码器，并即时全局生效。
 + [优化] 优化顶部导航栏右上角开源地址链接展示：仅保留「开源地址」文案，隐藏具体仓库名并支持直接点击跳转。

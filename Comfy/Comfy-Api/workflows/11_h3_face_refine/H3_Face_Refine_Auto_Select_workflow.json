@@ -1078,8 +1078,8 @@
       "id": 23,
       "type": "VHS_VideoCombine",
       "pos": [
-        2347.727979419825,
-        316.0293084367843
+        2382.367772217689,
+        304.8120736869498
       ],
       "size": [
         390,
@@ -1474,7 +1474,7 @@
         "Node name for S&R": "H3FaceTrackCrop"
       },
       "widgets_values": [
-        "segm/person_yolov8m-seg.pt",
+        "segm\\person_yolov8m-seg.pt",
         0.35,
         3,
         768,
@@ -1487,7 +1487,7 @@
         true,
         0.28,
         "largest_face",
-        "bbox/face_yolov8m.pt",
+        "bbox\\face_yolov8m.pt",
         0.5,
         0,
         "clip_vision",
@@ -1677,7 +1677,7 @@
           ]
         }
       ],
-      "title": "H3 model",
+      "title": "select_models_diffusion_models",
       "properties": {
         "Node name for S&R": "UnetLoaderGGUF"
       },
@@ -1696,8 +1696,8 @@
       "id": 109,
       "type": "CLIPLoader",
       "pos": [
-        -2091.817491596346,
-        474.56295602691074
+        -2082.8689393758436,
+        446.3899074540244
       ],
       "size": [
         330,
@@ -1716,7 +1716,7 @@
           ]
         }
       ],
-      "title": "Text encoder",
+      "title": "select_models_clip",
       "properties": {
         "Node name for S&R": "CLIPLoaderGGUF"
       },
@@ -2809,14 +2809,14 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.3073560549142889,
+      "scale": 0.1938946831595858,
       "offset": [
-        6167.303474193623,
-        1318.0132880144454
+        6442.285718738209,
+        2214.81293966085
       ]
     },
     "ue_links": [],
-    "frontendVersion": "1.53.6",
+    "frontendVersion": "1.55.14",
     "VHS_latentpreview": false,
     "VHS_latentpreviewrate": 0,
     "VHS_MetadataImage": true,

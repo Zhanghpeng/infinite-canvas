@@ -5,7 +5,7 @@
       "format": "mp3",
       "format.quality": "V0",
       "audio": [
-        "37:43",
+        "58",
         0
       ]
     },
@@ -50,7 +50,7 @@
       "title": "duration"
     }
   },
-  "37:6": {
+  "48": {
     "inputs": {
       "unet_name": "minimax_music3_dit_fp32.safetensors",
       "weight_dtype": "default"
@@ -60,7 +60,7 @@
       "title": "select_models_diffusion_models"
     }
   },
-  "37:13": {
+  "49": {
     "inputs": {
       "caption": [
         "44",
@@ -71,7 +71,7 @@
         0
       ],
       "seed": [
-        "37:38",
+        "56",
         0
       ],
       "max_duration": [
@@ -81,7 +81,7 @@
       "cfg_scale": 1.7,
       "top_k": 50,
       "clip": [
-        "37:3",
+        "50",
         0
       ]
     },
@@ -90,7 +90,7 @@
       "title": "MiniMax Music3 文本编码"
     }
   },
-  "37:3": {
+  "50": {
     "inputs": {
       "clip_name": "minimax_music3_text_encoder_bf16.safetensors",
       "type": "minimax",
@@ -98,10 +98,10 @@
     },
     "class_type": "CLIPLoader",
     "_meta": {
-      "title": "加载CLIP"
+      "title": "select_models_clip"
     }
   },
-  "37:7": {
+  "51": {
     "inputs": {
       "vae_name": "minimax_music3_dav.safetensors"
     },
@@ -110,10 +110,10 @@
       "title": "加载VAE"
     }
   },
-  "37:10": {
+  "52": {
     "inputs": {
       "conditioning": [
-        "37:13",
+        "49",
         0
       ]
     },
@@ -122,10 +122,10 @@
       "title": "条件零化"
     }
   },
-  "37:15": {
+  "53": {
     "inputs": {
       "seconds": [
-        "37:13",
+        "49",
         1
       ],
       "batch_size": 1
@@ -135,10 +135,10 @@
       "title": "空 MiniMax Music3 潜空间音频"
     }
   },
-  "37:9": {
+  "54": {
     "inputs": {
       "seed": [
-        "37:38",
+        "56",
         0
       ],
       "steps": 30,
@@ -147,19 +147,19 @@
       "scheduler": "simple",
       "denoise": 1,
       "model": [
-        "37:6",
+        "48",
         0
       ],
       "positive": [
-        "37:13",
+        "49",
         0
       ],
       "negative": [
-        "37:10",
+        "52",
         0
       ],
       "latent_image": [
-        "37:15",
+        "53",
         0
       ]
     },
@@ -168,14 +168,14 @@
       "title": "K采样器"
     }
   },
-  "37:12": {
+  "55": {
     "inputs": {
       "samples": [
-        "37:9",
+        "54",
         0
       ],
       "vae": [
-        "37:7",
+        "51",
         0
       ]
     },
@@ -184,7 +184,7 @@
       "title": "VAE解码（音频）"
     }
   },
-  "37:38": {
+  "56": {
     "inputs": {
       "seed": [
         "46",
@@ -196,16 +196,16 @@
       "title": "种子"
     }
   },
-  "37:42": {
+  "57": {
     "inputs": {
       "tile_size": 1536,
       "overlap": 64,
       "samples": [
-        "37:9",
+        "54",
         0
       ],
       "vae": [
-        "37:7",
+        "51",
         0
       ]
     },
@@ -214,15 +214,15 @@
       "title": "VAE解码音频（分块）"
     }
   },
-  "37:43": {
+  "58": {
     "inputs": {
       "switch": true,
       "on_false": [
-        "37:12",
+        "55",
         0
       ],
       "on_true": [
-        "37:42",
+        "57",
         0
       ]
     },

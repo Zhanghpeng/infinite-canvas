@@ -194,7 +194,7 @@ describe("persistence merge stability", () => {
             useConfigStore.getState(),
         );
 
-        expect(merged.config.imageModel).toBe("builtin::Z-Image-Turbo");
+        expect(merged.config.imageModel).toBe("builtin::Qwen-Image-2.1");
         expect(merged.config.videoModel).toBe("builtin::MiniMax H3 全能视频");
         expect(merged.config.textModel).toBe("builtin::Qwen3.5 4B");
     });

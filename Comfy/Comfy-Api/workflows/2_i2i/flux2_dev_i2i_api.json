@@ -3,7 +3,7 @@
     "inputs": {
       "filename_prefix": "Flux2",
       "images": [
-        "62:8",
+        "154",
         0
       ]
     },
@@ -66,18 +66,18 @@
       "title": "prompt"
     }
   },
-  "62:48": {
+  "147": {
     "inputs": {
       "steps": [
-        "62:94",
+        "170",
         0
       ],
       "width": [
-        "62:66",
+        "163",
         0
       ],
       "height": [
-        "62:66",
+        "163",
         1
       ]
     },
@@ -86,14 +86,14 @@
       "title": "Flux2调度器"
     }
   },
-  "62:22": {
+  "148": {
     "inputs": {
       "model": [
-        "62:93",
+        "169",
         0
       ],
       "conditioning": [
-        "62:39",
+        "158",
         0
       ]
     },
@@ -102,7 +102,7 @@
       "title": "基本引导器"
     }
   },
-  "62:10": {
+  "149": {
     "inputs": {
       "vae_name": "flux2-vae.safetensors"
     },
@@ -111,14 +111,14 @@
       "title": "加载VAE"
     }
   },
-  "62:40": {
+  "150": {
     "inputs": {
       "pixels": [
-        "62:41",
+        "152",
         0
       ],
       "vae": [
-        "62:10",
+        "149",
         0
       ]
     },
@@ -127,14 +127,14 @@
       "title": "VAE编码"
     }
   },
-  "62:44": {
+  "151": {
     "inputs": {
       "pixels": [
-        "62:45",
+        "162",
         0
       ],
       "vae": [
-        "62:10",
+        "149",
         0
       ]
     },
@@ -143,7 +143,7 @@
       "title": "VAE编码"
     }
   },
-  "62:41": {
+  "152": {
     "inputs": {
       "upscale_method": "area",
       "megapixels": 1,
@@ -158,11 +158,11 @@
       "title": "缩放图像（像素）"
     }
   },
-  "62:26": {
+  "153": {
     "inputs": {
       "guidance": 4,
       "conditioning": [
-        "62:6",
+        "160",
         0
       ]
     },
@@ -171,14 +171,14 @@
       "title": "Flux引导"
     }
   },
-  "62:8": {
+  "154": {
     "inputs": {
       "samples": [
-        "62:13",
+        "155",
         0
       ],
       "vae": [
-        "62:10",
+        "149",
         0
       ]
     },
@@ -187,26 +187,26 @@
       "title": "VAE解码"
     }
   },
-  "62:13": {
+  "155": {
     "inputs": {
       "noise": [
-        "62:25",
+        "161",
         0
       ],
       "guider": [
-        "62:22",
+        "148",
         0
       ],
       "sampler": [
-        "62:16",
+        "156",
         0
       ],
       "sigmas": [
-        "62:48",
+        "147",
         0
       ],
       "latent_image": [
-        "62:47",
+        "164",
         0
       ]
     },
@@ -215,7 +215,7 @@
       "title": "自定义采样器（高级）"
     }
   },
-  "62:16": {
+  "156": {
     "inputs": {
       "sampler_name": "euler"
     },
@@ -224,14 +224,14 @@
       "title": "K采样器选择"
     }
   },
-  "62:43": {
+  "157": {
     "inputs": {
       "conditioning": [
-        "62:26",
+        "153",
         0
       ],
       "latent": [
-        "62:44",
+        "151",
         0
       ]
     },
@@ -240,14 +240,14 @@
       "title": "参考Latent"
     }
   },
-  "62:39": {
+  "158": {
     "inputs": {
       "conditioning": [
-        "62:43",
+        "157",
         0
       ],
       "latent": [
-        "62:40",
+        "150",
         0
       ]
     },
@@ -256,7 +256,7 @@
       "title": "参考Latent"
     }
   },
-  "62:12": {
+  "159": {
     "inputs": {
       "unet_name": "flux2_dev_fp8mixed.safetensors",
       "weight_dtype": "default"
@@ -266,14 +266,14 @@
       "title": "select_models_diffusion_models"
     }
   },
-  "62:6": {
+  "160": {
     "inputs": {
       "text": [
         "146",
         0
       ],
       "clip": [
-        "62:38",
+        "165",
         0
       ]
     },
@@ -282,7 +282,7 @@
       "title": "CLIP Text Encode (Positive Prompt)"
     }
   },
-  "62:25": {
+  "161": {
     "inputs": {
       "noise_seed": [
         "143",
@@ -294,7 +294,7 @@
       "title": "随机噪波"
     }
   },
-  "62:45": {
+  "162": {
     "inputs": {
       "upscale_method": "area",
       "megapixels": 1,
@@ -309,10 +309,10 @@
       "title": "缩放图像（像素）"
     }
   },
-  "62:66": {
+  "163": {
     "inputs": {
       "image": [
-        "62:45",
+        "162",
         0
       ]
     },
@@ -321,7 +321,7 @@
       "title": "获取图像尺寸"
     }
   },
-  "62:47": {
+  "164": {
     "inputs": {
       "width": [
         "141",
@@ -338,7 +338,7 @@
       "title": "空Latent图像（Flux2）"
     }
   },
-  "62:38": {
+  "165": {
     "inputs": {
       "clip_name": "mistral_3_small_flux2_fp8.safetensors",
       "type": "flux2",
@@ -349,12 +349,12 @@
       "title": "select_models_clip"
     }
   },
-  "62:88": {
+  "166": {
     "inputs": {
       "lora_name": "Flux2TurboComfyv2.safetensors",
       "strength_model": 1,
       "model": [
-        "62:12",
+        "159",
         0
       ]
     },
@@ -363,7 +363,7 @@
       "title": "LoRA加载器（仅模型）"
     }
   },
-  "62:90": {
+  "167": {
     "inputs": {
       "value": 20
     },
@@ -372,7 +372,7 @@
       "title": "Step"
     }
   },
-  "62:92": {
+  "168": {
     "inputs": {
       "value": 8
     },
@@ -381,18 +381,18 @@
       "title": "Step"
     }
   },
-  "62:93": {
+  "169": {
     "inputs": {
       "switch": [
-        "62:95",
+        "171",
         0
       ],
       "on_false": [
-        "62:12",
+        "159",
         0
       ],
       "on_true": [
-        "62:88",
+        "166",
         0
       ]
     },
@@ -401,18 +401,18 @@
       "title": "Switch (Model)"
     }
   },
-  "62:94": {
+  "170": {
     "inputs": {
       "switch": [
-        "62:95",
+        "171",
         0
       ],
       "on_false": [
-        "62:90",
+        "167",
         0
       ],
       "on_true": [
-        "62:92",
+        "168",
         0
       ]
     },
@@ -421,7 +421,7 @@
       "title": "Switch (Step)"
     }
   },
-  "62:95": {
+  "171": {
     "inputs": {
       "value": true
     },

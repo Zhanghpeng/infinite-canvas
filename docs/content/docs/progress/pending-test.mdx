@@ -8,6 +8,10 @@ description: Implemented changes that still need manual verification
 The current release needs manual verification in these areas:
 
 - Workflow Management & Dynamic Model Selection Verification (工作流管理与大模型可视化选择验证):
+  - **Default Workflow Verification (Qwen-Image-2.1 默认生图工作流验证)**:
+    - 检查「设置」页面或「工作流管理」列表，验证文生图分类下的默认工作流（带默认标记）已更新为「Qwen-Image-2.1 文生图」；
+    - 验证图生图分类下的默认工作流（带默认标记）已更新为「Qwen-Image-2.1 多图参考图生图」；
+    - 在画布页面新建图片节点时，验证默认选中的工作流与模型为 Qwen-Image-2.1。
   - **Top Navigation & Entry (顶部导航「工作流管理」入口与页面导航)**:
     - 点击顶部导航菜单栏中的「工作流管理」图标或直接访问 `/workflows`；
     - 验证正常进入工作流管理与大模型配置页面，顶部展示分类标签（文生图、图生图、全能参考视频、音频等）与搜索栏，左侧清晰展示当前渠道的所有工作流列表及「内置/自定义」标签。
