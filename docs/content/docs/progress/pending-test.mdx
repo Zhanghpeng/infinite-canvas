@@ -7,24 +7,6 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
-- LAN Real-Time Multi-User Collaboration Verification (内网多人实时协同功能验证):
-  - **Host Starts Collaboration & Generates Link (房主开启协同并生成链接)**:
-    - 打开任意画布，点击顶部栏右侧的「协同」按钮打开协同设置弹窗；
-    - 点击「开启内网协同」，验证状态变为「协同进行中（房主特权：可编辑与生成）」，并在弹窗中展示当前局域网 IP 分享链接（例如 `http://<IP>:3000/canvas/<id>?room=<roomId>`）；
-    - 点击「复制」按钮，验证链接成功复制到剪贴板。
-  - **Viewer Joins via Link (协作者通过链接加入与权限控制)**:
-    - 在同局域网的另一台设备或隐身标签页中打开上述链接；
-    - 验证协作者自动识别为观摩角色，顶部展示「协同观看」按钮与在线成员数；
-    - 验证协作者页面底部呈现「协同观看模式（仅房主可编辑）」浮动状态栏，原底部的节点创建/编辑工具栏自动隐藏；
-    - 验证协作者尝试拖拽节点、缩放节点、删除节点或触发连线时均无法操作，输入框保持只读，确保房主排版不被破坏。
-  - **Real-Time Canvas Sync & Cursor Presence (实时画布与动态光标同步)**:
-    - 房主在画布上拖拽节点、添加图片/文本节点或建立连线，验证协作者屏幕毫秒级同步呈现新布局与连线；
-    - 协作者在画布上移动鼠标，验证房主端实时呈现彩色鼠标指针与协作者昵称标签；协作者选中节点时，房主端显示对应颜色的虚线高亮框；
-    - 房主触发 ComfyUI 图片/视频生成时，验证协作者端实时同步生成状态（排队中/生成中/进度），并在生成完成后自动加载高清原图/视频。
-  - **Asset Download for Viewers (协作者物料与产物下载)**:
-    - 协作者鼠标悬停在已生成的图片、视频或音频卡片上方，验证悬浮工具栏保留「下载」、「复制提示词」、「查看详情」按钮；
-    - 点击「下载」按钮，验证协作者能完整顺利下载对应的高清原始图片或视频文件。
-
 
 - Canvas Node Resource Mention Mouse Click Insertion Verification (画布节点提示词 @ 资源菜单鼠标点击插入验证):
   - **Video/Image/Audio Node Prompt Mention Mouse Click (视频/图片/音频节点提示词面板 @ 鼠标点击)**:

@@ -57,6 +57,13 @@ Canvas plugins can contribute node types, rendering, inspectors, serialization, 
 - Store application data and API credentials locally in the browser.
 - Use WebDAV for optional cross-device synchronization.
 
+## LAN Real-Time Multi-User Collaboration
+
+- Host-Authority Collaboration Mode: The canvas host retains exclusive editing and ComfyUI generation permissions, preventing concurrent layout conflicts while enabling seamless group teamwork.
+- One-Click LAN Sharing: Generate dedicated local network links (`http://<LAN_IP>:3000/canvas/<id>?room=<roomId>`) to share instantly with team members on the same Wi-Fi / local network.
+- Live View & Real-Time Presence: Collaborators join as viewers with real-time layout updates, live multi-cursor pointers, member nickname badges, and selection highlight outlines.
+- Instant Material & Asset Downloads: Collaborators can directly preview and download high-resolution generated images, MP4 videos, and audio assets with full HTTP Range stream support.
+
 ## Current limitations
 
 - The project is frontend-first and does not provide built-in cloud accounts or cloud storage.
