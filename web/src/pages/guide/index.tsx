@@ -1031,10 +1031,10 @@ export default function GuidePage() {
                             <span className="shrink-0 font-sans font-medium text-stone-500">{isZh ? "推荐启动命令：" : "Launch Command: "}</span>
                             <span className="truncate">{LAUNCH_CMD_EXAMPLE}</span>
                         </div>
-                        <Tooltip title="一键{isZh ? "复制完整启动命令" : "Copy Full Launch Command"}">
+                        <Tooltip title={isZh ? "一键复制完整启动命令" : "Copy Full Launch Command"}>
                             <button
                                 type="button"
-                                onClick={() => copyText(LAUNCH_CMD_EXAMPLE, "已复制完整启动命令")}
+                                onClick={() => copyText(LAUNCH_CMD_EXAMPLE, isZh ? "已复制完整启动命令" : "Launch command copied")}
                                 className="inline-flex shrink-0 items-center gap-1 rounded bg-stone-200/70 px-2 py-1 text-[11px] font-medium text-stone-700 transition hover:bg-stone-300 dark:bg-stone-700/80 dark:text-stone-200 dark:hover:bg-stone-600"
                             >
                                 <Copy className="size-3" /> {isZh ? "复制命令" : "Copy Command"}
