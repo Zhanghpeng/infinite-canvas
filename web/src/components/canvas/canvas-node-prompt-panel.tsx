@@ -6,7 +6,6 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 import { ChannelWorkflowPicker } from "@/components/channel-workflow-picker";
-import { CanvasWorkflowModelPicker } from "./canvas-workflow-model-picker";
 import { decodeChannelModel, defaultConfig, encodeChannelModel, findWorkflow, getDefaultWorkflow, resolveModelChannel, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -151,18 +150,6 @@ export function CanvasNodePromptPanel({
                                 channelId={node.metadata?.channelId}
                                 workflowId={node.metadata?.workflowId}
                                 onChange={(channelId, workflowId) => onConfigChange(node.id, { channelId, workflowId })}
-                            />
-                            <CanvasWorkflowModelPicker
-                                category={
-                                    Boolean(
-                                        connectedNodes?.some((n) => n.type === CanvasNodeType.Image || (n.type === CanvasNodeType.Group && (n.metadata?.groupChildCount || 0) > 0)) ||
-                                        mentionReferences?.some((r) => r.type === "image")
-                                    )
-                                        ? "i2i"
-                                        : "t2i"
-                                }
-                                channelId={node.metadata?.channelId}
-                                workflowId={node.metadata?.workflowId}
                             />
                             <CanvasImageSettingsPopover
                                 config={config}
