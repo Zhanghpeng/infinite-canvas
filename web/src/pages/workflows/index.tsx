@@ -25,6 +25,7 @@ import {
     type ComfyWorkflowItem,
     type WorkflowCategory,
 } from "@/stores/use-config-store";
+import { useThemeStore } from "@/stores/use-theme-store";
 import {
     fetchComfyuiModels,
     findWorkflowSelectNodes,
@@ -87,6 +88,9 @@ export default function WorkflowsPage() {
     const allWorkflows = useMemo(() => {
         return getChannelWorkflows(primaryChannel);
     }, [primaryChannel]);
+
+    const theme = useThemeStore((state) => state.theme);
+    const isDark = theme === "dark";
 
     // 分类筛选与搜索
     const [selectedCategory, setSelectedCategory] = useState(queryCategory || "all");
@@ -313,13 +317,34 @@ export default function WorkflowsPage() {
                                     key={tab.key}
                                     type="button"
                                     onClick={() => setSelectedCategory(tab.key)}
-                                    className={`rounded-full px-3 py-1 text-xs font-medium transition cursor-pointer select-none ${
+                                    className={`rounded-full px-3.5 py-1 text-xs font-medium transition cursor-pointer select-none ${
                                         active
-                                            ? "bg-stone-900 text-white shadow-xs dark:bg-stone-700 dark:text-white"
-                                            : "bg-stone-100 text-stone-600 hover:bg-stone-200/80 hover:text-stone-900 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700 dark:hover:text-stone-200"
+                                            ? isDark
+                                                ? "bg-white text-stone-950 font-semibold shadow-xs"
+                                                : "bg-stone-900 text-white font-semibold shadow-xs"
+                                            : isDark
+                                                ? "bg-stone-800/80 text-stone-400 hover:bg-stone-700 hover:text-stone-200"
+                                                : "bg-stone-100 text-stone-600 hover:bg-stone-200/80 hover:text-stone-900"
                                     }`}
+                                    style={
+                                        active
+                                            ? isDark
+                                                ? { backgroundColor: "#ffffff", color: "#0c0a09" }
+                                                : { backgroundColor: "#1c1917", color: "#ffffff" }
+                                            : undefined
+                                    }
                                 >
-                                    {tab.label}
+                                    <span
+                                        style={
+                                            active
+                                                ? isDark
+                                                    ? { color: "#0c0a09" }
+                                                    : { color: "#ffffff" }
+                                                : undefined
+                                        }
+                                    >
+                                        {tab.label}
+                                    </span>
                                 </button>
                             );
                         })}
@@ -355,44 +380,59 @@ export default function WorkflowsPage() {
                                     onClick={() => setActiveWorkflowId(wf.id)}
                                     className={`w-full rounded-xl border p-3 text-left transition cursor-pointer ${
                                         isSelected
-                                            ? "border-blue-500 bg-stone-900 text-white shadow-sm dark:border-blue-500 dark:bg-stone-800 dark:text-white"
-                                            : "border-stone-200/70 bg-white/70 hover:border-stone-300 hover:bg-white dark:border-stone-800/80 dark:bg-stone-900/40 dark:hover:border-stone-700 dark:hover:bg-stone-800/50"
+                                            ? isDark
+                                                ? "border-blue-500 bg-stone-800 shadow-sm"
+                                                : "border-blue-500 bg-stone-900 shadow-sm"
+                                            : isDark
+                                                ? "border-stone-800/80 bg-stone-900/40 hover:border-stone-700 hover:bg-stone-800/50"
+                                                : "border-stone-200/70 bg-white/70 hover:border-stone-300 hover:bg-white"
                                     }`}
+                                    style={
+                                        isSelected
+                                            ? isDark
+                                                ? { backgroundColor: "#292524", borderColor: "#3b82f6", color: "#ffffff" }
+                                                : { backgroundColor: "#1c1917", borderColor: "#3b82f6", color: "#ffffff" }
+                                            : undefined
+                                    }
                                 >
                                     <div className="flex items-center justify-between gap-1.5 mb-1">
-                                        <span className={`truncate text-xs font-semibold ${
-                                            isSelected ? "text-white" : "text-stone-900 dark:text-stone-100"
-                                        }`}>
+                                        <span
+                                            className="truncate text-xs font-semibold"
+                                            style={{ color: isSelected ? "#ffffff" : undefined }}
+                                        >
                                             {wf.name}
                                         </span>
                                         <div className="flex shrink-0 items-center gap-1">
                                             {wf.isDefault && (
-                                                <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                                                    isSelected
-                                                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                                                        : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
-                                                }`}>
+                                                <span
+                                                    className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium"
+                                                    style={
+                                                        isSelected
+                                                            ? { backgroundColor: "rgba(16, 185, 129, 0.2)", color: "#6ee7b7", border: "1px solid rgba(16, 185, 129, 0.3)" }
+                                                            : undefined
+                                                    }
+                                                >
                                                     默认
                                                 </span>
                                             )}
                                             <span
-                                                className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                                className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium"
+                                                style={
                                                     isSelected
                                                         ? custom
-                                                            ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                                                            : "bg-blue-500/20 text-blue-300 border border-blue-500/30"
-                                                        : custom
-                                                            ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
-                                                            : "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300"
-                                                }`}
+                                                            ? { backgroundColor: "rgba(245, 158, 11, 0.2)", color: "#fcd34d", border: "1px solid rgba(245, 158, 11, 0.3)" }
+                                                            : { backgroundColor: "rgba(59, 130, 246, 0.2)", color: "#93c5fd", border: "1px solid rgba(59, 130, 246, 0.3)" }
+                                                        : undefined
+                                                }
                                             >
                                                 {custom ? "自定义" : "内置"}
                                             </span>
                                         </div>
                                     </div>
-                                    <div className={`truncate text-[11px] ${
-                                        isSelected ? "text-stone-300" : "text-stone-500 dark:text-stone-400"
-                                    }`}>
+                                    <div
+                                        className="truncate text-[11px]"
+                                        style={{ color: isSelected ? "#d6d3d1" : undefined }}
+                                    >
                                         {wf.description || "无详细说明"}
                                     </div>
                                 </button>
