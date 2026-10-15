@@ -4955,7 +4955,7 @@ function InfiniteCanvasPage() {
                     title={previewNode?.type === CanvasNodeType.Video ? t("canvas.projectPage.videoDetails") : t("canvas.projectPage.imageDetails")}
                     open={Boolean(previewContent)}
                     centered
-                    destroyOnClose
+                    destroyOnHidden
                     onCancel={handleClosePreview}
                     footer={null}
                     width="auto"

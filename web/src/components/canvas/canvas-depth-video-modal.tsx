@@ -96,7 +96,7 @@ export function CanvasDepthVideoModal({
             open={open}
             onCancel={onClose}
             centered
-            destroyOnClose
+            destroyOnHidden
             width={540}
             footer={
                 <div className="flex items-center justify-between pt-2">

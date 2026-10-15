@@ -706,7 +706,7 @@ export default function PricingPage() {
                 onCancel={() => setQrModalOpen(false)}
                 footer={null}
                 centered
-                destroyOnClose
+                destroyOnHidden
             >
                 <div className="py-2 text-center">
                     <div className="mb-4 flex justify-center">
