@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-+ [修复] 修复工作流管理页面（`/workflows`）在深色模式下顶部分类胶囊标签与左侧选中工作流条目因背景类名缺失导致文字看不清的样式显示问题。
++ [修复] 修复工作流管理页面（`/workflows`）左侧选中的工作流卡片在浅色与深色模式下的文本对比度：统一选中项为深底白字高对比度视觉呈现，并规范顶部分类胶囊标签在深浅色模式下的高对比度配色。
 + [优化] 优化渠道工作流多规格配置与默认切换：在渠道设置弹窗中，当分类（如首尾帧视频、全能参考视频、生图等）包含多个工作流时，支持下拉选择并即选即生效为该渠道默认，并支持一键跳转工作流管理中心定位该工作流进行大模型与参数调优。
 + [调整] 将「Qwen-Image-2.1 文生图」与「Qwen-Image-2.1 多图参考图生图」设为系统文生图（T2I）与图生图（I2I）的默认工作流，系统初始默认生图模型对齐为 Qwen-Image-2.1，原 Z-Image-Turbo 与 Flux2.Dev 保留为可选规格。
 + [新增] 新增工作流独立管理页面（`/workflows`）与顶部导航菜单：支持分类浏览与搜索所有内置及自定义工作流，支持通过 `select_models_*`（如 `select_models_diffusion_models` 分别对应 `/api/experiment/models/diffusion_models`、`select_models_clip` 对应 `/api/experiment/models/text_encoders`）自动探测 Loader 槽位并实时拉取 ComfyUI 模型库供选择；修改大模型即时全渠道全局生效，且支持 JSON 导入导出与一键恢复系统内置默认。

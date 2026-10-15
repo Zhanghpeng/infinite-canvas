@@ -315,7 +315,7 @@ export default function WorkflowsPage() {
                                     onClick={() => setSelectedCategory(tab.key)}
                                     className={`rounded-full px-3 py-1 text-xs font-medium transition cursor-pointer select-none ${
                                         active
-                                            ? "bg-stone-900 text-stone-50 shadow-xs dark:bg-stone-100 dark:text-stone-900"
+                                            ? "bg-stone-900 text-white shadow-xs dark:bg-stone-700 dark:text-white"
                                             : "bg-stone-100 text-stone-600 hover:bg-stone-200/80 hover:text-stone-900 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700 dark:hover:text-stone-200"
                                     }`}
                                 >
@@ -355,32 +355,44 @@ export default function WorkflowsPage() {
                                     onClick={() => setActiveWorkflowId(wf.id)}
                                     className={`w-full rounded-xl border p-3 text-left transition cursor-pointer ${
                                         isSelected
-                                            ? "border-blue-500 bg-blue-50/50 shadow-xs dark:border-blue-500 dark:bg-stone-800"
+                                            ? "border-blue-500 bg-stone-900 text-white shadow-sm dark:border-blue-500 dark:bg-stone-800 dark:text-white"
                                             : "border-stone-200/70 bg-white/70 hover:border-stone-300 hover:bg-white dark:border-stone-800/80 dark:bg-stone-900/40 dark:hover:border-stone-700 dark:hover:bg-stone-800/50"
                                     }`}
                                 >
                                     <div className="flex items-center justify-between gap-1.5 mb-1">
-                                        <span className="truncate text-xs font-semibold text-stone-900 dark:text-stone-100">
+                                        <span className={`truncate text-xs font-semibold ${
+                                            isSelected ? "text-white" : "text-stone-900 dark:text-stone-100"
+                                        }`}>
                                             {wf.name}
                                         </span>
                                         <div className="flex shrink-0 items-center gap-1">
                                             {wf.isDefault && (
-                                                <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                                                <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                                    isSelected
+                                                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                                        : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
+                                                }`}>
                                                     默认
                                                 </span>
                                             )}
                                             <span
                                                 className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                                                    custom
-                                                        ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
-                                                        : "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300"
+                                                    isSelected
+                                                        ? custom
+                                                            ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                                                            : "bg-blue-500/20 text-blue-300 border border-blue-500/30"
+                                                        : custom
+                                                            ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+                                                            : "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300"
                                                 }`}
                                             >
                                                 {custom ? "自定义" : "内置"}
                                             </span>
                                         </div>
                                     </div>
-                                    <div className="truncate text-[11px] text-stone-500 dark:text-stone-400">
+                                    <div className={`truncate text-[11px] ${
+                                        isSelected ? "text-stone-300" : "text-stone-500 dark:text-stone-400"
+                                    }`}>
                                         {wf.description || "无详细说明"}
                                     </div>
                                 </button>
