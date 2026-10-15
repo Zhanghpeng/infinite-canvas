@@ -56,7 +56,7 @@
     },
     "class_type": "CLIPLoader",
     "_meta": {
-      "title": "加载CLIP"
+      "title": "select_models_clip"
     }
   },
   "57:29": {
