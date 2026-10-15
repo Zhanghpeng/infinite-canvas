@@ -260,6 +260,7 @@ type ConfigStore = {
     setConfigDialogOpen: (isOpen: boolean) => void;
     clearPromptContinue: () => void;
     saveChannelWorkflow: (channelId: string, workflow: ComfyWorkflowItem) => void;
+    saveWorkflowGlobally: (workflow: ComfyWorkflowItem) => void;
     resetChannelWorkflowToBuiltin: (channelId: string, workflowId: string) => void;
 };
 
@@ -471,6 +472,50 @@ export const useConfigStore = create<ConfigStore>()(
                                 json: targetDefault.json,
                                 createdAt: 0,
                                 isBuiltin: true,
+                            };
+                        }
+                        return updatedChannel;
+                    });
+
+                    return {
+                        config: {
+                            ...state.config,
+                            channels,
+                        },
+                    };
+                }),
+            saveWorkflowGlobally: (workflow: ComfyWorkflowItem) =>
+                set((state) => {
+                    const channels = state.config.channels.map((channel) => {
+                        const currentWorkflows = getChannelWorkflows(channel);
+                        const existsIndex = currentWorkflows.findIndex(
+                            (wf) => wf.id === workflow.id || (wf.category === workflow.category && wf.name === workflow.name)
+                        );
+                        const updatedWorkflow: ComfyWorkflowItem = {
+                            ...workflow,
+                            isBuiltin: false,
+                            createdAt: Date.now(),
+                        };
+                        let nextWorkflows: ComfyWorkflowItem[];
+                        if (existsIndex >= 0) {
+                            nextWorkflows = [...currentWorkflows];
+                            nextWorkflows[existsIndex] = updatedWorkflow;
+                        } else {
+                            nextWorkflows = [...currentWorkflows, updatedWorkflow];
+                        }
+
+                        const updatedChannel: ModelChannel = {
+                            ...channel,
+                            workflows: nextWorkflows,
+                        };
+
+                        const channelField = WORKFLOW_CATEGORY_TO_CHANNEL_FIELD[workflow.category];
+                        if (channelField) {
+                            (updatedChannel as any)[channelField] = {
+                                name: workflow.name,
+                                json: workflow.json,
+                                createdAt: Date.now(),
+                                isBuiltin: false,
                             };
                         }
                         return updatedChannel;

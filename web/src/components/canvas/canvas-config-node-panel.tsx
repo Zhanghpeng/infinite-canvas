@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
 import { ChannelWorkflowPicker } from "@/components/channel-workflow-picker";
+import { CanvasWorkflowModelPicker } from "./canvas-workflow-model-picker";
 import { decodeChannelModel, defaultConfig, encodeChannelModel, findWorkflow, getDefaultWorkflow, resolveModelChannel, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -149,6 +150,22 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                     <CanvasTextSettingsPopover config={config} count={node.metadata?.textCount || 1} placement="topRight" buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2" onConfigChange={(_, value) => onConfigChange(node.id, { reasoningEffort: value })} onCountChange={(textCount) => onConfigChange(node.id, { textCount })} />
                 )}
             </div>
+
+            <CanvasWorkflowModelPicker
+                category={
+                    mode === "image"
+                        ? (inputSummary.imageCount > 0 ? "i2i" : "t2i")
+                        : mode === "video"
+                        ? ["omniVideo", "frameVideo", "faceRefine"]
+                        : mode === "audio"
+                        ? "audio"
+                        : "text"
+                }
+                preferredCategory={mode === "video" ? (findWorkflow(globalConfig, node.metadata?.channelId, node.metadata?.workflowId)?.category || (config.videoMode === "frame" ? "frameVideo" : "omniVideo")) : undefined}
+                channelId={node.metadata?.channelId}
+                workflowId={node.metadata?.workflowId}
+                className="mb-2 flex-wrap"
+            />
 
             <Button
                 type="primary"

@@ -14,6 +14,7 @@ import PricingPage from "@/pages/pricing";
 import PromptsPage from "@/pages/prompts";
 import VideoPage from "@/pages/video";
 import WorkflowEditorPage from "@/pages/workflow-editor";
+import WorkflowsPage from "@/pages/workflows";
 
 export const router = createBrowserRouter([
     {
@@ -27,6 +28,7 @@ export const router = createBrowserRouter([
             { path: "/", element: <HomePage /> },
             { path: "/image", element: <ImagePage /> },
             { path: "/video", element: <VideoPage /> },
+            { path: "/workflows", element: <WorkflowsPage /> },
             { path: "/assets", element: <AssetsPage /> },
             { path: "/prompts", element: <PromptsPage /> },
             { path: "/canvas", element: <CanvasPage /> },
