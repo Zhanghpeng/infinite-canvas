@@ -120,6 +120,7 @@
 
 ## 发布代码生产环境
 - 部署上线一定要阅读 `DEPLOY.md`
+- 多人实时协同服务部署与配置参见：`DEPLOY-Collaboration.md`
 - CI 与镜像发布（文档站 MDX 构建、Docker 镜像推送、GitHub Pages）踩坑与排查清单参见：`docs/CI_RELEASE_TROUBLESHOOTING.md`，发版前对照其清单自检。
 
 ## PR 审查与处理
