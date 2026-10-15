@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { App, Button, Card, Divider, Dropdown, Segmented, Select, Tag, Tooltip } from "antd";
 import type { MenuProps } from "antd";
 import {
@@ -597,6 +598,8 @@ type ChannelProbeStatus = {
 };
 
 export default function GuidePage() {
+    const { t, i18n } = useTranslation();
+    const isZh = i18n.resolvedLanguage === "zh-CN";
     const { message } = App.useApp();
     const copyText = useCopyText();
     const [downloadingZip, setDownloadingZip] = useState(false);
@@ -819,7 +822,7 @@ export default function GuidePage() {
                 "==================================================",
                 "环境与服务部署要点：",
                 "==================================================",
-                `1. 启动本地 ComfyUI 必须开启跨域：例如 \`${LAUNCH_CMD_EXAMPLE}\`；`,
+                `1. {isZh ? "启动本地 ComfyUI" : "Launch ComfyUI"} 必须开启跨域：例如 \`${LAUNCH_CMD_EXAMPLE}\`；`,
                 "2. 音频生成 (MiniMax Music 03) 依赖 ComfyUI 核心版本 >= v0.31.0+；",
                 "3. 视频深度估计 (Video Depth Anything) 首次运行自动下载权重（约 111MB，国内可配置 HF_ENDPOINT=https://hf-mirror.com）；",
                 "4. 人脸精修 YOLO 权重请放置于 ComfyUI models/ultralytics/ 对应子目录；",
@@ -852,13 +855,11 @@ export default function GuidePage() {
                     <div>
                         <div className="inline-flex items-center gap-2 rounded-full border border-stone-200 bg-stone-100/70 px-3 py-1 text-xs text-stone-600 dark:border-stone-800 dark:bg-stone-900/70 dark:text-stone-400">
                             <Layers className="size-3.5" />
-                            <span>本地自建 ComfyUI 原生 API 直连</span>
+                            <span>{isZh ? "本地自建 ComfyUI 原生 API 直连" : "Direct Native ComfyUI (8188) Connection"}</span>
                         </div>
-                        <h1 className="mt-3 text-2xl font-bold tracking-tight text-stone-950 sm:text-3xl dark:text-stone-100">
-                            用户使用手册与工作流下载
-                        </h1>
+                        <h1 className="mt-3 text-2xl font-bold tracking-tight text-stone-950 sm:text-3xl dark:text-stone-100">{isZh ? "用户使用手册与工作流下载" : "User Guide & Workflow Downloads"}</h1>
                         <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-500 dark:text-stone-400">
-                            Infinite Canvas 采用纯前端无服务器架构，直连您本机的 ComfyUI（默认端口 8188）。系统内置 9 大核心能力矩阵，涵盖图像、视频、音频、深度估计及人脸精修。下载并导入下方官方预设工作流，配齐模型并在本地 ComfyUI 调试通过后，即可在无限画布中开展流畅的全流程 AI 创作。
+                            {isZh ? "Infinite Canvas 采用纯前端无服务器架构，直连您本机的 ComfyUI（默认端口 8188）。系统内置 9 大核心能力矩阵，涵盖图像、视频、音频、深度估计及人脸精修。下载并导入下方官方预设工作流，配齐模型并在本地 ComfyUI 调试通过后，即可在无限画布中开展流畅的全流程 AI 创作。" : "Infinite Canvas uses a pure frontend architecture, connecting directly to your native ComfyUI (default port 8188). Built-in 9 core capability workflows cover image, video, audio, depth, and face refine. Download presets below to create seamlessly on canvas."}
                         </p>
                     </div>
 
@@ -869,11 +870,11 @@ export default function GuidePage() {
                             loading={downloadingZip}
                             onClick={handleDownloadAllZip}
                         >
-                            打包下载全部工作流 (.zip)
+                            {isZh ? "打包下载全部工作流 (.zip)" : "Download All Workflows (.zip)"}
                         </Button>
                         <Link to="/config">
                             <Button icon={<ArrowRight className="size-4" />} iconPlacement="end">
-                                前往配置渠道
+                                {isZh ? "前往配置渠道" : "Configure Channels"}
                             </Button>
                         </Link>
                     </div>
@@ -888,20 +889,20 @@ export default function GuidePage() {
                             </div>
                             <div>
                                 <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                                    <span>服务探测</span>
+                                    <span>{isZh ? "服务探测" : "Service Probe"}</span>
                                     <span className="text-xs text-stone-500">
-                                        (共 {comfyChannels.length} 个配置渠道，已选 {selectedChannelIds.length} 个)：
+                                        {isZh ? `(共 ${comfyChannels.length} 个配置渠道，已选 ${selectedChannelIds.length} 个)：` : `(${comfyChannels.length} channels configured, ${selectedChannelIds.length} selected):`}
                                     </span>
                                 </div>
                                 <p className="mt-0.5 text-xs text-stone-500">
-                                    选择需要测试连通性的 ComfyUI 服务渠道。启动时请务必开启跨域参数{" "}
+                                    {isZh ? "选择需要测试连通性的 ComfyUI 服务渠道。启动时请务必开启跨域参数 " : "Select ComfyUI channels to test connectivity. Ensure CORS flag is enabled: "}
                                     <code className="font-semibold text-stone-800 dark:text-stone-200">{CORS_FLAG}</code>
                                 </p>
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
                             <Link to="/config">
-                                <Button size="small">修改渠道配置</Button>
+                                <Button size="small">{isZh ? "修改渠道配置" : "Channel Settings"}</Button>
                             </Link>
                             <Button
                                 size="small"
@@ -911,7 +912,7 @@ export default function GuidePage() {
                                 disabled={selectedChannelIds.length === 0}
                                 onClick={() => handleProbeSelected()}
                             >
-                                探测选中渠道
+                                {isZh ? "探测选中渠道" : "Probe Selected"}
                             </Button>
                         </div>
                     </div>
@@ -1027,16 +1028,16 @@ export default function GuidePage() {
                     {/* 完整启动命令举例与一键复制 */}
                     <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2 rounded-md border border-stone-200/70 bg-stone-100/80 px-3 py-2 text-xs dark:border-stone-800 dark:bg-stone-800/60">
                         <div className="flex min-w-0 items-center gap-2 font-mono text-[11px] text-stone-700 dark:text-stone-300">
-                            <span className="shrink-0 font-sans font-medium text-stone-500">推荐启动命令：</span>
+                            <span className="shrink-0 font-sans font-medium text-stone-500">{isZh ? "推荐启动命令：" : "Launch Command: "}</span>
                             <span className="truncate">{LAUNCH_CMD_EXAMPLE}</span>
                         </div>
-                        <Tooltip title="一键复制完整启动命令">
+                        <Tooltip title="一键{isZh ? "复制完整启动命令" : "Copy Full Launch Command"}">
                             <button
                                 type="button"
                                 onClick={() => copyText(LAUNCH_CMD_EXAMPLE, "已复制完整启动命令")}
                                 className="inline-flex shrink-0 items-center gap-1 rounded bg-stone-200/70 px-2 py-1 text-[11px] font-medium text-stone-700 transition hover:bg-stone-300 dark:bg-stone-700/80 dark:text-stone-200 dark:hover:bg-stone-600"
                             >
-                                <Copy className="size-3" /> 复制命令
+                                <Copy className="size-3" /> {isZh ? "复制命令" : "Copy Command"}
                             </button>
                         </Tooltip>
                     </div>
@@ -1046,7 +1047,7 @@ export default function GuidePage() {
                 <div className="mb-10">
                     <h2 className="mb-4 flex items-center gap-2 text-base font-semibold text-stone-900 dark:text-stone-100">
                         <Check className="size-4 text-emerald-600 dark:text-emerald-400" />
-                        快速起步：4 步完成本地 ComfyUI 对接
+                        {isZh ? "快速起步：4 步完成本地 ComfyUI 对接" : "Quickstart: 4 Steps to Connect ComfyUI"}
                     </h2>
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                         <div className="rounded-lg border border-stone-200 bg-card p-4 dark:border-stone-800">
@@ -1056,9 +1057,7 @@ export default function GuidePage() {
                                 </span>
                                 启动本地 ComfyUI
                             </div>
-                            <p className="text-xs leading-5 text-stone-600 dark:text-stone-400">
-                                启动命令务必包含跨域参数：
-                            </p>
+                            <p className="text-xs leading-5 text-stone-600 dark:text-stone-400">{isZh ? "启动命令务必包含跨域参数：" : "Must include CORS flag in launch command:"}</p>
                             <div className="mt-2 flex items-center justify-between rounded bg-stone-100 px-2 py-1.5 font-mono text-[11px] text-stone-800 dark:bg-stone-800/80 dark:text-stone-200">
                                 <span className="truncate">{CORS_FLAG}</span>
                                 <button
@@ -1084,10 +1083,10 @@ export default function GuidePage() {
                                 <span className="flex size-5 items-center justify-center rounded-full bg-stone-900 !text-white dark:bg-stone-100 dark:!text-stone-900">
                                     2
                                 </span>
-                                下载工作流文件
+                                {isZh ? "下载工作流文件" : "Download Workflows"}
                             </div>
                             <p className="text-xs leading-5 text-stone-600 dark:text-stone-400">
-                                点击右上角打包下载全部工作流，或在下方 9 大能力卡片中按需切换规格下载 UI 连线版或 API 格式。
+                                {isZh ? "点击右上角打包下载全部工作流，或在下方 9 大能力卡片中按需切换规格下载 UI 连线版或 API 格式。" : "Click top right to download all workflows, or select variants below for UI/API formats."}
                             </p>
                         </div>
 
@@ -1096,10 +1095,10 @@ export default function GuidePage() {
                                 <span className="flex size-5 items-center justify-center rounded-full bg-stone-900 !text-white dark:bg-stone-100 dark:!text-stone-900">
                                     3
                                 </span>
-                                安装插件与模型
+                                {isZh ? "安装插件与模型" : "Install Plugins & Models"}
                             </div>
                             <p className="text-xs leading-5 text-stone-600 dark:text-stone-400">
-                                将下方 5 大通用基础插件克隆至 <code className="font-mono">custom_nodes/</code>，权重放入 <code className="font-mono">models/</code> 对应子目录。
+                                {isZh ? <>将下方 5 大通用基础插件克隆至 <code className="font-mono">custom_nodes/</code>，权重放入 <code className="font-mono">models/</code> 对应子目录。</> : <>Clone the 5 core plugins to <code className="font-mono">custom_nodes/</code> and put weights in <code className="font-mono">models/</code>.</>}
                             </p>
                         </div>
 
@@ -1108,10 +1107,10 @@ export default function GuidePage() {
                                 <span className="flex size-5 items-center justify-center rounded-full bg-stone-900 !text-white dark:bg-stone-100 dark:!text-stone-900">
                                     4
                                 </span>
-                                调试成功后即可使用
+                                {isZh ? "调试成功后即可使用" : "Test & Start Creating"}
                             </div>
                             <p className="text-xs leading-5 text-stone-600 dark:text-stone-400">
-                                将工作流拖入 ComfyUI 页面点击 Queue 生成测试无报错后，回到本项目配置渠道，即可畅享画布生成！
+                                {isZh ? "将工作流拖入 ComfyUI 页面点击 Queue 生成测试无报错后，回到本项目配置渠道，即可畅享画布生成！" : "Drag workflow into ComfyUI and test queue without errors. Then bind in Infinite Canvas and start generating!"}
                             </p>
                         </div>
                     </div>
@@ -1124,14 +1123,12 @@ export default function GuidePage() {
                         <div>
                             <div className="flex items-center gap-2">
                                 <h2 className="text-lg font-bold text-stone-950 dark:text-stone-100">
-                                    通用必备 5 大 ComfyUI 核心扩展插件
+                                    {isZh ? "通用必备 5 大 ComfyUI 核心扩展插件" : "5 Essential Core ComfyUI Extension Plugins"}
                                 </h2>
-                                <Tag color="blue" className="m-0 text-xs">
-                                    基础必备
-                                </Tag>
+                                <Tag color="blue" className="m-0 text-xs">{isZh ? "基础必备" : "Essential"}</Tag>
                             </div>
                             <p className="mt-0.5 text-xs text-stone-500">
-                                覆盖生图、图生图、局部编辑、大语言模型与视频基础生成。克隆至 ComfyUI 的 <code className="rounded bg-stone-100 px-1 py-0.5 font-mono text-[11px] text-stone-700 dark:bg-stone-800 dark:text-stone-300">custom_nodes/</code> 目录下并重启服务。
+                                {isZh ? <>覆盖生图、图生图、局部编辑、大语言模型与视频基础生成。克隆至 ComfyUI 的 <code className="rounded bg-stone-100 px-1 py-0.5 font-mono text-[11px] text-stone-700 dark:bg-stone-800 dark:text-stone-300">custom_nodes/</code> 目录下并重启服务。</> : <>Covers text2img, img2img, inpaint, LLM, and video generation. Clone into ComfyUI custom_nodes/ and restart.</>}
                             </p>
                         </div>
                         <Button
@@ -1139,7 +1136,7 @@ export default function GuidePage() {
                             icon={<Copy className="size-3.5" />}
                             onClick={() => copyText(CLONE_CORE_PLUGINS_CMD, "已复制 5 大基础插件克隆命令")}
                         >
-                            一键复制 5 大基础插件克隆命令
+                            {isZh ? "一键复制 5 大基础插件克隆命令" : "Copy 5 Core Plugins Clone Commands"}
                         </Button>
                     </div>
 
@@ -1198,14 +1195,12 @@ export default function GuidePage() {
                             <div>
                                 <div className="flex items-center gap-2">
                                     <h3 className="text-sm font-bold text-stone-950 dark:text-stone-100">
-                                        进阶与专用扩展套件 (人脸精修 / 视频深度估计)
+                                        {isZh ? "进阶与专用扩展套件 (人脸精修 / 视频深度估计)" : "Advanced Extension Plugins (Face Refine / Video Depth)"}
                                     </h3>
-                                    <Tag color="volcano" className="m-0 text-xs">
-                                        按需安装
-                                    </Tag>
+                                    <Tag color="volcano" className="m-0 text-xs">{isZh ? "按需安装" : "Optional"}</Tag>
                                 </div>
                                 <p className="mt-1 text-xs text-stone-500">
-                                    若需使用「视频人脸追踪精修」或「ReShot 视频深度估计」，需额外克隆以下专用插件以支持 YOLO 人脸追踪、视频音画封装及时序单目深度提取：
+                                    {isZh ? "若需使用「视频人脸追踪精修」或「ReShot 视频深度估计」，需额外克隆以下专用插件以支持 YOLO 人脸追踪、视频音画封装及时序单目深度提取：" : "Required for video face refine or ReShot depth estimation to support YOLO face tracking and depth extraction:"}
                                 </p>
                             </div>
                             <Button
@@ -1213,7 +1208,7 @@ export default function GuidePage() {
                                 icon={<Copy className="size-3.5" />}
                                 onClick={() => copyText(CLONE_ADVANCED_PLUGINS_CMD, "已复制进阶插件克隆命令")}
                             >
-                                复制进阶套件克隆命令
+                                {isZh ? "复制进阶套件克隆命令" : "Copy Advanced Plugins Command"}
                             </Button>
                         </div>
 
@@ -1259,14 +1254,12 @@ export default function GuidePage() {
                         <div>
                             <div className="flex items-center gap-2">
                                 <h2 className="text-lg font-bold text-stone-950 dark:text-stone-100">
-                                    官方内置 9 大核心能力工作流矩阵
+                                    {isZh ? "官方内置 9 大核心能力工作流矩阵" : "9 Official Built-in Capability Workflows"}
                                 </h2>
-                                <Tag color="blue" className="m-0 text-xs">
-                                    共 9 大能力
-                                </Tag>
+                                <Tag color="blue" className="m-0 text-xs">{isZh ? "共 9 大能力" : "9 Capabilities"}</Tag>
                             </div>
                             <p className="mt-0.5 text-xs text-stone-500">
-                                默认下载 UI 连线版（可拖入 ComfyUI 可视化调试）；下拉选项可直接下载 API 格式 JSON 供系统绑定。
+                                {isZh ? "默认下载 UI 连线版（可拖入 ComfyUI 可视化调试）；下拉选项可直接下载 API 格式 JSON 供系统绑定。" : "Downloads UI workflow for ComfyUI visual editing; dropdown lets you download API format JSON."}
                             </p>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
@@ -1276,21 +1269,21 @@ export default function GuidePage() {
                                 loading={downloadingZip}
                                 onClick={handleDownloadAllZip}
                             >
-                                一键打包全部 (.zip)
+                                {isZh ? "一键打包全部 (.zip)" : "Download All (.zip)"}
                             </Button>
                         </div>
                     </div>
 
                     {/* 模态分类筛选 Tabs */}
                     <div className="mb-6 flex flex-wrap items-center gap-2 border-b border-stone-200 pb-3 dark:border-stone-800">
-                        <span className="text-xs font-medium text-stone-500">分类筛选：</span>
+                        <span className="text-xs font-medium text-stone-500">{isZh ? "分类筛选：" : "Categories: "}</span>
                         <div className="flex flex-wrap gap-1.5">
                             {[
-                                { key: "all", label: "全部能力", icon: Layers, count: 9 },
-                                { key: "image", label: "图像生成", icon: Sparkles, count: 3 },
-                                { key: "video", label: "视频生成", icon: Video, count: 3 },
-                                { key: "audio", label: "音乐音频", icon: Music, count: 1 },
-                                { key: "refine", label: "精修与辅助", icon: Wrench, count: 2 },
+                                { key: "all", label: isZh ? "全部能力" : "All", icon: Layers, count: 9 },
+                                { key: "image", label: isZh ? "图像生成" : "Image", icon: Sparkles, count: 3 },
+                                { key: "video", label: isZh ? "视频生成" : "Video", icon: Video, count: 3 },
+                                { key: "audio", label: isZh ? "音乐音频" : "Audio", icon: Music, count: 1 },
+                                { key: "refine", label: isZh ? "精修与辅助" : "Refine & Utility", icon: Wrench, count: 2 },
                             ].map((item) => {
                                 const Icon = item.icon;
                                 const isActive = activeCategory === item.key;
@@ -1329,7 +1322,7 @@ export default function GuidePage() {
                                         <div className="flex items-center gap-2 py-0.5">
                                             <Layers className="size-3.5 text-blue-500" />
                                             <div>
-                                                <div className="text-xs font-medium">下载 UI 可视化工作流 (.json)</div>
+                                                <div className="text-xs font-medium">{isZh ? "下载 UI 可视化工作流 (.json)" : "Download UI Workflow (.json)"}</div>
                                                 <div className="text-[10px] text-stone-400 font-mono">
                                                     {activeVariant.uiFileName}
                                                 </div>
@@ -1344,7 +1337,7 @@ export default function GuidePage() {
                                         <div className="flex items-center gap-2 py-0.5">
                                             <FileCode className="size-3.5 text-emerald-500" />
                                             <div>
-                                                <div className="text-xs font-medium">下载 API 格式工作流 (.json)</div>
+                                                <div className="text-xs font-medium">{isZh ? "下载 API 格式工作流 (.json)" : "Download API Workflow (.json)"}</div>
                                                 <div className="text-[10px] text-stone-400 font-mono">
                                                     {activeVariant.apiFileName}
                                                 </div>
@@ -1553,7 +1546,7 @@ export default function GuidePage() {
                 <div>
                     <h2 className="mb-4 flex items-center gap-2 text-lg font-bold text-stone-950 dark:text-stone-100">
                         <HelpCircle className="size-5 text-stone-600 dark:text-stone-400" />
-                        常见排错与调试 FAQ
+                        {isZh ? "常见排错与调试 FAQ" : "Frequently Asked Questions & Troubleshooting (FAQ)"}
                     </h2>
                     <div className="grid gap-4 md:grid-cols-2">
                         <div className="rounded-lg border border-stone-200 p-4 dark:border-stone-800">

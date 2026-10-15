@@ -48,6 +48,7 @@ function formatDate(timestamp?: number): string {
 export default function WorkflowEditorPage() {
     const { channelId, workflowId } = useParams<{ channelId: string; workflowId: string }>();
     const navigate = useNavigate();
+    const { t } = useTranslation();
     const { message } = App.useApp();
     const copyText = useCopyText();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -134,7 +135,7 @@ export default function WorkflowEditorPage() {
                 [catKey]: { loading: false, error: undefined, items: list },
             }));
         } catch (err) {
-            const errMsg = err instanceof Error ? err.message : "连接 ComfyUI 获取模型失败";
+            const errMsg = err instanceof Error ? err.message : t("workflowEditor.fetchFailed");
             setModelsMap((prev) => ({
                 ...prev,
                 [catKey]: { loading: false, error: errMsg, items: prev[catKey]?.items || [] },
@@ -172,14 +173,14 @@ export default function WorkflowEditorPage() {
 
         saveChannelWorkflow(targetChannel.id, updatedItem);
         setIsDirty(false);
-        message.success("工作流配置保存成功，各画布生成节点已同步更新");
+        message.success(t("workflowEditor.saveSuccess"));
     };
 
     // 恢复系统默认工作流
     const handleReset = () => {
         if (!targetChannel || !sourceWorkflow) return;
         if (!builtinCounterpart) {
-            message.info("未找到对应的系统内置工作流");
+            message.info(t("workflowEditor.noBuiltinFound"));
             return;
         }
 
@@ -188,7 +189,7 @@ export default function WorkflowEditorPage() {
         setDescription(builtinCounterpart.description || "");
         setWorkflowJson(JSON.parse(JSON.stringify(builtinCounterpart.json)));
         setIsDirty(false);
-        message.success("已恢复为系统内置默认工作流");
+        message.success(t("workflowEditor.resetSuccess"));
     };
 
     // 导出/下载 JSON 文件
@@ -209,7 +210,7 @@ export default function WorkflowEditorPage() {
         await copyText(jsonStr);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
-        message.success("已复制完整工作流 JSON 代码");
+        message.success(t("workflowEditor.copySuccess"));
     };
 
     // 上传/替换 JSON 文件
@@ -222,13 +223,13 @@ export default function WorkflowEditorPage() {
             try {
                 const parsed = JSON.parse(event.target?.result as string);
                 if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-                    throw new Error("工作流 JSON 必须为对象结构（ComfyUI API 格式）");
+                    throw new Error(t("workflowEditor.invalidJson"));
                 }
                 setWorkflowJson(parsed as ComfyuiWorkflowJson);
                 setIsDirty(true);
-                message.success(`成功导入 ${file.name}`);
+                message.success(t("workflowEditor.importSuccess", { name: file.name }));
             } catch (err) {
-                message.error(err instanceof Error ? err.message : "JSON 文件解析失败");
+                message.error(err instanceof Error ? err.message : t("workflowEditor.parseJsonFailed"));
             }
         };
         reader.readAsText(file);
@@ -238,9 +239,9 @@ export default function WorkflowEditorPage() {
     if (!targetChannel || !sourceWorkflow) {
         return (
             <main className="flex h-full flex-col items-center justify-center p-6 bg-background">
-                <Empty description="未找到对应的工作流或渠道配置" />
+                <Empty description={t("workflowEditor.notFound")} />
                 <Button className="mt-4" icon={<ArrowLeft className="size-4" />} onClick={() => navigate("/config")}>
-                    返回设置
+                    {t("workflowEditor.backToConfig")}
                 </Button>
             </main>
         );
@@ -260,13 +261,13 @@ export default function WorkflowEditorPage() {
                         className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-medium text-stone-700 transition hover:bg-stone-100 dark:border-stone-800 dark:bg-stone-900/60 dark:text-stone-300 dark:hover:bg-stone-800"
                     >
                         <ArrowLeft className="size-3.5" />
-                        <span>返回设置</span>
+                        <span>{t("workflowEditor.backToConfig")}</span>
                     </Link>
                     <div className="h-4 w-px bg-stone-200 dark:bg-stone-800" />
                     <div className="flex items-center gap-2">
                         <Sliders className="size-4 text-blue-500" />
                         <h1 className="text-base font-semibold leading-none text-stone-950 dark:text-stone-100">
-                            工作流配置与编辑
+                            {t("workflowEditor.title")}
                         </h1>
                         <span
                             className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${
@@ -275,7 +276,7 @@ export default function WorkflowEditorPage() {
                                     : "bg-blue-100 text-blue-800 dark:bg-blue-950/50 dark:text-blue-300"
                             }`}
                         >
-                            {isCustom ? "自定义版本" : "系统内置"}
+                            {isCustom ? t("workflowEditor.customVersion") : t("workflowEditor.builtinVersion")}
                         </span>
                         <Tag className="m-0 text-xs">{sourceWorkflow.category}</Tag>
                     </div>
@@ -287,9 +288,9 @@ export default function WorkflowEditorPage() {
                             size="small"
                             icon={<RotateCcw className="size-3.5" />}
                             onClick={handleReset}
-                            title="恢复为系统出厂内置工作流"
+                            title={t("workflowEditor.resetDefaultTip")}
                         >
-                            恢复系统默认
+                            {t("workflowEditor.resetDefault")}
                         </Button>
                     )}
                     <Button
@@ -299,7 +300,7 @@ export default function WorkflowEditorPage() {
                         disabled={!isDirty}
                         onClick={handleSave}
                     >
-                        保存修改
+                        {t("workflowEditor.saveChanges")}
                     </Button>
                 </div>
             </header>
@@ -312,14 +313,14 @@ export default function WorkflowEditorPage() {
                         {/* 基础信息卡片 */}
                         <div className="rounded-xl border border-stone-200/90 bg-stone-50/50 p-4 dark:border-stone-800/80 dark:bg-stone-900/30">
                             <div className="text-xs font-semibold text-stone-700 dark:text-stone-300 mb-3 flex items-center justify-between">
-                                <span>工作流基础信息</span>
+                                <span>{t("workflowEditor.basicInfo")}</span>
                                 <span className="text-[11px] font-normal text-stone-400">
-                                    渠道：{targetChannel.name}
+                                    {t("workflowEditor.channel")}{targetChannel.name}
                                 </span>
                             </div>
                             <div className="space-y-3">
                                 <div>
-                                    <label className="mb-1 block text-xs text-stone-500">工作流名称</label>
+                                    <label className="mb-1 block text-xs text-stone-500">{t("workflowEditor.nameLabel")}</label>
                                     <Input
                                         size="middle"
                                         value={name}
@@ -327,11 +328,11 @@ export default function WorkflowEditorPage() {
                                             setName(e.target.value);
                                             setIsDirty(true);
                                         }}
-                                        placeholder="工作流名称"
+                                        placeholder={t("workflowEditor.namePlaceholder")}
                                     />
                                 </div>
                                 <div>
-                                    <label className="mb-1 block text-xs text-stone-500">工作流说明与描述</label>
+                                    <label className="mb-1 block text-xs text-stone-500">{t("workflowEditor.descLabel")}</label>
                                     <Input.TextArea
                                         rows={2}
                                         value={description}
@@ -339,7 +340,7 @@ export default function WorkflowEditorPage() {
                                             setDescription(e.target.value);
                                             setIsDirty(true);
                                         }}
-                                        placeholder="填写适用模型规格、采样步数等说明..."
+                                        placeholder={t("workflowEditor.descPlaceholder")}
                                     />
                                 </div>
                             </div>
@@ -351,11 +352,11 @@ export default function WorkflowEditorPage() {
                                 <div className="flex items-center gap-2">
                                     <Layers className="size-4 text-stone-600 dark:text-stone-300" />
                                     <span className="text-xs font-semibold text-stone-800 dark:text-stone-200">
-                                        工作流大模型与动态参数配置
+                                        {t("workflowEditor.modelParamsTitle")}
                                     </span>
                                 </div>
                                 <span className="text-xs text-stone-400">
-                                    检测到 {selectNodes.length} 个选择节点
+                                    {t("workflowEditor.detectedNodes", { count: selectNodes.length })}
                                 </span>
                             </div>
 
@@ -363,22 +364,10 @@ export default function WorkflowEditorPage() {
                                 <div className="rounded-lg border border-dashed border-stone-200 p-5 text-center dark:border-stone-800">
                                     <AlertCircle className="mx-auto size-6 text-stone-400 mb-2" />
                                     <div className="text-xs font-medium text-stone-700 dark:text-stone-300">
-                                        当前工作流未标注 select_models_* 选择节点
+                                        {t("workflowEditor.noSelectNodes")}
                                     </div>
                                     <p className="mt-1 text-[11px] leading-relaxed text-stone-400">
-                                        如需在此处启用大模型下拉选择，请在 ComfyUI 导出时，将对应 Loader 节点的{" "}
-                                        <code className="rounded bg-stone-100 px-1 py-0.5 text-stone-700 dark:bg-stone-800 dark:text-stone-300">
-                                            _meta.title
-                                        </code>{" "}
-                                        标注为例如{" "}
-                                        <code className="rounded bg-stone-100 px-1 py-0.5 text-stone-700 dark:bg-stone-800 dark:text-stone-300">
-                                            select_models_diffusion_models
-                                        </code>{" "}
-                                        或{" "}
-                                        <code className="rounded bg-stone-100 px-1 py-0.5 text-stone-700 dark:bg-stone-800 dark:text-stone-300">
-                                            select_models_clip
-                                        </code>
-                                        。
+                                        {t("workflowEditor.noSelectNodesTip")}
                                     </p>
                                 </div>
                             ) : (
@@ -411,10 +400,10 @@ export default function WorkflowEditorPage() {
                                                             {node.title}
                                                         </span>
                                                         <span className="text-[10px] text-stone-400">
-                                                            (节点 #{node.nodeId} · {node.classType || "Loader"})
+                                                            ({t("workflowEditor.nodeInfo", { id: node.nodeId, classType: node.classType || "Loader" })})
                                                         </span>
                                                     </div>
-                                                    <Tooltip title="从 ComfyUI 重新刷新此模型列表">
+                                                    <Tooltip title={t("workflowEditor.refreshTooltip")}>
                                                         <Button
                                                             size="small"
                                                             type="text"
@@ -426,15 +415,15 @@ export default function WorkflowEditorPage() {
 
                                                 <div className="space-y-1.5">
                                                     <div className="flex items-center justify-between text-[11px] text-stone-500">
-                                                        <span>目标输入字段：<code className="text-blue-600 dark:text-blue-400">{node.inputKey}</code></span>
-                                                        <span className="text-stone-400">ComfyUI 分类：{catKey}</span>
+                                                        <span>{t("workflowEditor.targetField")}<code className="text-blue-600 dark:text-blue-400">{node.inputKey}</code></span>
+                                                        <span className="text-stone-400">{t("workflowEditor.comfyCategory")}{catKey}</span>
                                                     </div>
 
                                                     <Select
                                                         className="w-full"
                                                         showSearch
                                                         value={node.currentValue || undefined}
-                                                        placeholder={isLoading ? "正在从 ComfyUI 获取模型列表..." : `请选择 ${node.modelType} 模型`}
+                                                        placeholder={isLoading ? t("workflowEditor.loadingModels") : t("workflowEditor.selectPlaceholder", { type: node.modelType })}
                                                         loading={isLoading}
                                                         options={options}
                                                         onChange={(val) => handleModelChange(node.nodeId, node.inputKey, val)}
@@ -451,12 +440,12 @@ export default function WorkflowEditorPage() {
                                                                         className="block mx-auto mt-1"
                                                                         onClick={() => void loadModels(catKey, true)}
                                                                     >
-                                                                        重试
+                                                                        {t("workflowEditor.retry")}
                                                                     </Button>
                                                                 </div>
                                                             ) : (
                                                                 <div className="p-2 text-center text-xs text-stone-400">
-                                                                    未找到该分类模型文件
+                                                                    {t("workflowEditor.noModels")}
                                                                 </div>
                                                             )
                                                         }
@@ -464,7 +453,7 @@ export default function WorkflowEditorPage() {
 
                                                     {node.currentValue && (
                                                         <div className="truncate text-[11px] text-stone-400">
-                                                            当前值：<span className="font-mono text-stone-600 dark:text-stone-300">{node.currentValue}</span>
+                                                            {t("workflowEditor.currentValue")}<span className="font-mono text-stone-600 dark:text-stone-300">{node.currentValue}</span>
                                                         </div>
                                                     )}
                                                 </div>
@@ -482,10 +471,10 @@ export default function WorkflowEditorPage() {
                     <div className="flex shrink-0 items-center justify-between border-b border-stone-200 bg-white px-5 py-2.5 dark:border-stone-800 dark:bg-stone-900/60">
                         <div className="flex items-center gap-2">
                             <span className="text-xs font-semibold text-stone-700 dark:text-stone-300">
-                                工作流 JSON 预览
+                                {t("workflowEditor.jsonPreview")}
                             </span>
                             <span className="text-[11px] text-stone-400">
-                                ({nodeCount} 个节点 · {jsonString.length < 1024 ? `${jsonString.length} B` : `${(jsonString.length / 1024).toFixed(1)} KB`})
+                                {t("workflowEditor.nodeStats", { count: nodeCount, size: jsonString.length < 1024 ? `${jsonString.length} B` : `${(jsonString.length / 1024).toFixed(1)} KB` })}
                             </span>
                         </div>
 
@@ -502,21 +491,21 @@ export default function WorkflowEditorPage() {
                                 icon={<Upload className="size-3.5" />}
                                 onClick={() => fileInputRef.current?.click()}
                             >
-                                导入 JSON
+                                {t("workflowEditor.importJson")}
                             </Button>
                             <Button
                                 size="small"
                                 icon={<Download className="size-3.5" />}
                                 onClick={handleExportJson}
                             >
-                                导出文件
+                                {t("workflowEditor.exportFile")}
                             </Button>
                             <Button
                                 size="small"
                                 icon={copied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
                                 onClick={handleCopyJson}
                             >
-                                {copied ? "已复制" : "复制代码"}
+                                {copied ? t("workflowEditor.copied") : t("workflowEditor.copyCode")}
                             </Button>
                         </div>
                     </div>

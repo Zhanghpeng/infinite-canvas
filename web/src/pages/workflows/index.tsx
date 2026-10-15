@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import {
     AlertCircle,
     Check,
@@ -43,24 +44,34 @@ function formatFileSize(bytes?: number): string {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-const CATEGORY_TABS: Array<{ key: string; label: string }> = [
-    { key: "all", label: "全部工作流" },
-    { key: "t2i", label: "文生图" },
-    { key: "i2i", label: "图生图" },
-    { key: "inpaint", label: "局部编辑" },
-    { key: "text", label: "文本生成" },
-    { key: "omniVideo", label: "全能参考视频" },
-    { key: "frameVideo", label: "首尾帧视频" },
-    { key: "audio", label: "音乐音频" },
-    { key: "faceRefine", label: "人脸精修" },
-    { key: "depthVideo", label: "深度视频" },
-];
+const CATEGORY_KEYS = [
+    "all",
+    "t2i",
+    "i2i",
+    "inpaint",
+    "text",
+    "omniVideo",
+    "frameVideo",
+    "audio",
+    "faceRefine",
+    "depthVideo",
+] as const;
 
 export default function WorkflowsPage() {
+    const { t } = useTranslation();
     const { message } = App.useApp();
     const copyText = useCopyText();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [searchParams] = useSearchParams();
+
+    const categoryTabs = useMemo(
+        () =>
+            CATEGORY_KEYS.map((key) => ({
+                key,
+                label: t(`workflowsPage.categories.${key}`),
+            })),
+        [t],
+    );
 
     const queryChannelId = searchParams.get("channelId");
     const queryWorkflowId = searchParams.get("id");
@@ -183,7 +194,7 @@ export default function WorkflowsPage() {
                 [catKey]: { loading: false, error: undefined, items: list },
             }));
         } catch (err) {
-            const msg = err instanceof Error ? err.message : "获取模型列表失败";
+            const msg = err instanceof Error ? err.message : t("workflowsPage.fetchModelFailed");
             setModelsMap((prev) => ({
                 ...prev,
                 [catKey]: { loading: false, error: msg, items: prev[catKey]?.items || [] },
@@ -221,7 +232,7 @@ export default function WorkflowsPage() {
 
         saveWorkflowGlobally(updatedWorkflow);
         setIsDirty(false);
-        message.success(`已保存「${updatedWorkflow.name}」，全渠道与画布生成已实时生效！`);
+        message.success(t("workflowsPage.saveSuccess", { name: updatedWorkflow.name }));
     };
 
     // 恢复系统内置出厂版本
@@ -232,7 +243,7 @@ export default function WorkflowsPage() {
         setCurrentDesc(builtinCounterpart.description || "");
         setCurrentJson(JSON.parse(JSON.stringify(builtinCounterpart.json)));
         setIsDirty(false);
-        message.success(`已恢复为系统内置版本「${builtinCounterpart.name}」`);
+        message.success(t("workflowsPage.resetDefaultSuccess", { name: builtinCounterpart.name }));
     };
 
     // 导出文件
@@ -253,7 +264,7 @@ export default function WorkflowsPage() {
         await copyText(jsonStr);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
-        message.success("工作流 JSON 代码已复制到剪贴板");
+        message.success(t("workflowsPage.copySuccess"));
     };
 
     // 导入外部 JSON
@@ -266,13 +277,13 @@ export default function WorkflowsPage() {
             try {
                 const parsed = JSON.parse(event.target?.result as string);
                 if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-                    throw new Error("工作流 JSON 必须为对象结构（ComfyUI API 格式）");
+                    throw new Error(t("workflowsPage.invalidJson"));
                 }
                 setCurrentJson(parsed as ComfyuiWorkflowJson);
                 setIsDirty(true);
-                message.success(`成功导入 ${file.name}`);
+                message.success(t("workflowsPage.importSuccess", { name: file.name }));
             } catch (err) {
-                message.error(err instanceof Error ? err.message : "JSON 文件解析失败");
+                message.error(err instanceof Error ? err.message : t("workflowsPage.parseJsonFailed"));
             }
         };
         reader.readAsText(file);
@@ -291,16 +302,16 @@ export default function WorkflowsPage() {
                         <div className="flex items-center gap-2">
                             <WorkflowIcon className="size-5 text-blue-500" />
                             <h1 className="text-lg font-semibold text-stone-950 dark:text-stone-100">
-                                工作流管理与大模型配置
+                                {t("workflowsPage.title")}
                             </h1>
                         </div>
                         <p className="mt-0.5 text-xs text-stone-500">
-                            实时从本地 ComfyUI 端点拉取并选择 Diffusion 扩散模型与 CLIP 编码器，一处修改全局所有渠道即刻生效。
+                            {t("workflowsPage.description")}
                         </p>
                     </div>
 
                     <div className="flex items-center gap-2 text-xs">
-                        <span className="text-stone-400">ComfyUI 实例：</span>
+                        <span className="text-stone-400">{t("workflowsPage.instance")}</span>
                         <code className="rounded bg-stone-100 px-2 py-0.5 font-mono text-[11px] text-stone-700 dark:bg-stone-800 dark:text-stone-300">
                             {comfyEndpoint}
                         </code>
@@ -310,7 +321,7 @@ export default function WorkflowsPage() {
                 {/* 分类标签栏与搜索 */}
                 <div className="mt-3.5 flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-1.5">
-                        {CATEGORY_TABS.map((tab) => {
+                        {categoryTabs.map((tab) => {
                             const active = selectedCategory === tab.key;
                             return (
                                 <button
@@ -354,7 +365,7 @@ export default function WorkflowsPage() {
                         <Input
                             size="small"
                             allowClear
-                            placeholder="搜索工作流..."
+                            placeholder={t("workflowsPage.searchPlaceholder")}
                             value={searchKeyword}
                             onChange={(e) => setSearchKeyword(e.target.value)}
                         />
@@ -367,7 +378,7 @@ export default function WorkflowsPage() {
                 {/* 左栏：工作流条目列表 */}
                 <div className="thin-scrollbar flex w-72 shrink-0 flex-col overflow-y-auto border-r border-stone-200 bg-stone-50/50 p-3 sm:w-80 dark:border-stone-800 dark:bg-stone-900/30">
                     <div className="mb-2 px-1 text-[11px] font-semibold tracking-wider text-stone-500 uppercase dark:text-stone-400">
-                        工作流列表 ({filteredWorkflows.length})
+                        {t("workflowsPage.workflowList", { count: filteredWorkflows.length })}
                     </div>
                     <div className="space-y-1.5">
                         {filteredWorkflows.map((wf) => {
@@ -412,7 +423,7 @@ export default function WorkflowsPage() {
                                                             : undefined
                                                     }
                                                 >
-                                                    默认
+                                                    {t("workflowsPage.default")}
                                                 </span>
                                             )}
                                             <span
@@ -425,7 +436,7 @@ export default function WorkflowsPage() {
                                                         : undefined
                                                 }
                                             >
-                                                {custom ? "自定义" : "内置"}
+                                                {custom ? t("workflowsPage.custom") : t("workflowsPage.builtin")}
                                             </span>
                                         </div>
                                     </div>
@@ -433,7 +444,7 @@ export default function WorkflowsPage() {
                                         className="truncate text-[11px]"
                                         style={{ color: isSelected ? "#d6d3d1" : undefined }}
                                     >
-                                        {wf.description || "无详细说明"}
+                                        {wf.description || t("workflowsPage.noDescription")}
                                     </div>
                                 </button>
                             );
@@ -457,7 +468,7 @@ export default function WorkflowsPage() {
                                             : "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300"
                                     }`}
                                 >
-                                    {isCustom ? "已自定义" : "系统出厂内置"}
+                                    {isCustom ? t("workflowsPage.customized") : t("workflowsPage.factoryBuiltin")}
                                 </span>
                                 <Tag className="m-0 text-xs">{activeWorkflow.category}</Tag>
                             </div>
@@ -465,7 +476,7 @@ export default function WorkflowsPage() {
                             <div className="flex items-center gap-2">
                                 {activeWorkflow.isDefault ? (
                                     <Tag color="green" className="m-0 text-xs py-0.5">
-                                        当前渠道默认
+                                        {t("workflowsPage.channelDefault")}
                                     </Tag>
                                 ) : (
                                     <Button
@@ -474,11 +485,11 @@ export default function WorkflowsPage() {
                                         onClick={() => {
                                             if (!primaryChannel || !activeWorkflow) return;
                                             setChannelDefaultWorkflow(primaryChannel.id, activeWorkflow.category, activeWorkflow.id);
-                                            message.success(`已将「${activeWorkflow.name}」设为 ${primaryChannel.name} 的默认工作流`);
+                                            message.success(t("workflowsPage.setAsDefaultSuccess", { name: activeWorkflow.name, channel: primaryChannel.name }));
                                         }}
-                                        title={`将此工作流设为当前渠道（${primaryChannel?.name}）该分类下的默认工作流`}
+                                        title={t("workflowsPage.setAsDefaultTip", { channel: primaryChannel?.name })}
                                     >
-                                        设为渠道默认
+                                        {t("workflowsPage.setAsDefault")}
                                     </Button>
                                 )}
                                 {builtinCounterpart && (
@@ -486,9 +497,9 @@ export default function WorkflowsPage() {
                                         size="small"
                                         icon={<RotateCcw className="size-3.5" />}
                                         onClick={handleReset}
-                                        title="恢复为系统出厂配置"
+                                        title={t("workflowsPage.resetDefaultTip")}
                                     >
-                                        恢复默认
+                                        {t("workflowsPage.resetDefault")}
                                     </Button>
                                 )}
                                 <Button
@@ -498,7 +509,7 @@ export default function WorkflowsPage() {
                                     disabled={!isDirty}
                                     onClick={handleSaveGlobal}
                                 >
-                                    保存修改（全渠道生效）
+                                    {t("workflowsPage.saveChanges")}
                                 </Button>
                             </div>
                         </div>
@@ -511,11 +522,11 @@ export default function WorkflowsPage() {
                                     <div className="flex items-center gap-2">
                                         <Layers className="size-4 text-blue-500" />
                                         <span className="text-sm font-semibold text-stone-900 dark:text-stone-100">
-                                            大模型与文本编码器可视化配置
+                                            {t("workflowsPage.modelConfigTitle")}
                                         </span>
                                     </div>
                                     <span className="text-xs text-stone-400">
-                                        检测到 {selectNodes.length} 个模型选择槽位
+                                        {t("workflowsPage.detectedSlots", { count: selectNodes.length })}
                                     </span>
                                 </div>
 
@@ -523,11 +534,13 @@ export default function WorkflowsPage() {
                                     <div className="rounded-xl border border-dashed border-stone-200 p-6 text-center dark:border-stone-800">
                                         <AlertCircle className="mx-auto size-6 text-stone-400 mb-2" />
                                         <div className="text-xs font-semibold text-stone-700 dark:text-stone-300">
-                                            当前工作流未标注 select_models_* 选择槽位
+                                            {t("workflowsPage.noSlots")}
                                         </div>
                                         <p className="mt-1 text-xs text-stone-400">
-                                            可在 ComfyUI API 导出时为对应 Loader 节点标注{" "}
-                                            <code>select_models_diffusion_models</code> 或 <code>select_models_clip</code>。
+                                            {t("workflowsPage.noSlotsTipPrefix")}
+                                            <code>select_models_diffusion_models</code> {t("workflowsPage.noSlotsTipOr", "或")}{" "}
+                                            <code>select_models_clip</code>
+                                            {t("workflowsPage.noSlotsTipSuffix")}
                                         </p>
                                     </div>
                                 ) : (
@@ -575,13 +588,13 @@ export default function WorkflowsPage() {
                                                             )}
                                                             <span className="text-xs font-semibold text-stone-900 dark:text-stone-100">
                                                                 {isDiffusion
-                                                                    ? "扩散大模型 (Diffusion Model)"
+                                                                    ? t("workflowsPage.diffusionModel")
                                                                     : isClip
-                                                                    ? "CLIP / 文本编码模型 (Text Encoder)"
+                                                                    ? t("workflowsPage.clipModel")
                                                                     : node.title}
                                                             </span>
                                                         </div>
-                                                        <Tooltip title="重新从 ComfyUI 刷新此模型库">
+                                                        <Tooltip title={t("workflowsPage.refreshTooltip")}>
                                                             <Button
                                                                 size="small"
                                                                 type="text"
@@ -592,7 +605,7 @@ export default function WorkflowsPage() {
                                                     </div>
 
                                                     <div className="mb-2 text-[11px] text-stone-400">
-                                                        实时接口：<code className="text-blue-600 dark:text-blue-400">{endpointName}</code>
+                                                        {t("workflowsPage.endpoint")}<code className="text-blue-600 dark:text-blue-400">{endpointName}</code>
                                                     </div>
 
                                                     <div className="space-y-1.5">
@@ -600,7 +613,7 @@ export default function WorkflowsPage() {
                                                             className="w-full"
                                                             showSearch
                                                             value={node.currentValue || undefined}
-                                                            placeholder={isLoading ? "正在从 ComfyUI 实时获取..." : `请选择 ${catKey} 模型`}
+                                                            placeholder={isLoading ? t("workflowsPage.loadingModels") : t("workflowsPage.selectModelPlaceholder", { type: catKey })}
                                                             loading={isLoading}
                                                             options={options}
                                                             onChange={(val) => handleModelChange(node.nodeId, node.inputKey, val)}
@@ -617,12 +630,12 @@ export default function WorkflowsPage() {
                                                                             className="block mx-auto mt-1"
                                                                             onClick={() => void loadModelsForCategory(catKey, true)}
                                                                         >
-                                                                            重试连接
+                                                                            {t("workflowsPage.retry")}
                                                                         </Button>
                                                                     </div>
                                                                 ) : (
                                                                     <div className="p-2 text-center text-xs text-stone-400">
-                                                                        未在 ComfyUI 该分类中检测到模型文件
+                                                                        {t("workflowsPage.noModelsFound")}
                                                                     </div>
                                                                 )
                                                             }
@@ -630,7 +643,7 @@ export default function WorkflowsPage() {
 
                                                         {node.currentValue && (
                                                             <div className="truncate text-[11px] text-stone-500">
-                                                                当前选用：
+                                                                {t("workflowsPage.currentSelected")}
                                                                 <span className="font-mono text-stone-700 dark:text-stone-300">
                                                                     {node.currentValue}
                                                                 </span>
@@ -647,29 +660,29 @@ export default function WorkflowsPage() {
                             {/* 基础元数据与 JSON 代码抽屉 */}
                             <div className="rounded-2xl border border-stone-200/90 bg-white p-5 shadow-xs dark:border-stone-800 dark:bg-stone-900/50">
                                 <div className="mb-3 text-xs font-semibold text-stone-700 dark:text-stone-300">
-                                    基础说明与元数据
+                                    {t("workflowsPage.metaInfo")}
                                 </div>
                                 <div className="grid gap-3 sm:grid-cols-2">
                                     <div>
-                                        <label className="mb-1 block text-xs text-stone-500">工作流标题</label>
+                                        <label className="mb-1 block text-xs text-stone-500">{t("workflowsPage.nameLabel")}</label>
                                         <Input
                                             value={currentName}
                                             onChange={(e) => {
                                                 setCurrentName(e.target.value);
                                                 setIsDirty(true);
                                             }}
-                                            placeholder="工作流名称"
+                                            placeholder={t("workflowsPage.namePlaceholder")}
                                         />
                                     </div>
                                     <div>
-                                        <label className="mb-1 block text-xs text-stone-500">描述与采样建议</label>
+                                        <label className="mb-1 block text-xs text-stone-500">{t("workflowsPage.descLabel")}</label>
                                         <Input
                                             value={currentDesc}
                                             onChange={(e) => {
                                                 setCurrentDesc(e.target.value);
                                                 setIsDirty(true);
                                             }}
-                                            placeholder="建议步数、显存要求等..."
+                                            placeholder={t("workflowsPage.descPlaceholder")}
                                         />
                                     </div>
                                 </div>
@@ -677,7 +690,7 @@ export default function WorkflowsPage() {
                                 <div className="mt-5 border-t border-stone-100 pt-4 dark:border-stone-800">
                                     <div className="mb-2 flex items-center justify-between">
                                         <span className="text-xs font-semibold text-stone-700 dark:text-stone-300">
-                                            底层 JSON 结构代码 (ComfyUI API 格式)
+                                            {t("workflowsPage.jsonTitle")}
                                         </span>
                                         <div className="flex items-center gap-1.5">
                                             <input
@@ -692,21 +705,21 @@ export default function WorkflowsPage() {
                                                 icon={<Upload className="size-3.5" />}
                                                 onClick={() => fileInputRef.current?.click()}
                                             >
-                                                导入替换
+                                                {t("workflowsPage.importReplace")}
                                             </Button>
                                             <Button
                                                 size="small"
                                                 icon={<Download className="size-3.5" />}
                                                 onClick={handleExportJson}
                                             >
-                                                导出文件
+                                                {t("workflowsPage.exportFile")}
                                             </Button>
                                             <Button
                                                 size="small"
                                                 icon={copied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
                                                 onClick={handleCopyJson}
                                             >
-                                                {copied ? "已复制" : "复制代码"}
+                                                {copied ? t("workflowsPage.copied") : t("workflowsPage.copyCode")}
                                             </Button>
                                         </div>
                                     </div>
@@ -720,7 +733,7 @@ export default function WorkflowsPage() {
                     </div>
                 ) : (
                     <div className="flex flex-1 items-center justify-center p-6">
-                        <Empty description="请在左侧选择一个工作流进行配置" />
+                        <Empty description={t("workflowsPage.emptySelect")} />
                     </div>
                 )}
             </div>

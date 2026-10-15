@@ -533,7 +533,7 @@ function InfiniteCanvasPage() {
                 const now = new Date().toISOString();
                 const placeholder: CanvasProject = {
                     id: projectId,
-                    title: "协同画布",
+                    title: t("canvas.projectPage.collabCanvas", "协同画布"),
                     createdAt: now,
                     updatedAt: now,
                     nodes: [],
@@ -2633,13 +2633,13 @@ function InfiniteCanvasPage() {
             setContextMenu(null);
 
             if (node.type !== CanvasNodeType.Video || !node.metadata?.content) {
-                message.warning("请选择已包含有效视频的视频节点");
+                message.warning(t("canvas.depthVideo.noVideo"));
                 return;
             }
 
             setFaceRefineNode(node);
         },
-        [message],
+        [message, t],
     );
 
     const handleExecuteFaceRefine = useCallback(
@@ -2682,7 +2682,7 @@ function InfiniteCanvasPage() {
             const isComplete = Boolean(hasReferences && prompt);
 
             const childId = nanoid();
-            const childTitle = `人脸修复 - ${node.title || "视频"}`;
+            const childTitle = t("canvas.faceRefine.childTitle", { title: node.title || t("canvas.sidePanel.filter.video") });
             const childPos = { x: node.position.x + node.width + 96, y: node.position.y };
 
             const newVideoNode: CanvasNodeData = {
@@ -2728,17 +2728,17 @@ function InfiniteCanvasPage() {
 
             if (!isComplete) {
                 if (!prompt && !hasReferences) {
-                    message.info("已创建人脸修复节点，请连接角色参考图片并完善提示词");
+                    message.info(t("canvas.faceRefine.needReferenceAndPrompt"));
                 } else if (!hasReferences) {
-                    message.info("已创建人脸修复节点，请连接角色参考图片");
+                    message.info(t("canvas.faceRefine.needReference"));
                 } else {
-                    message.info("已创建人脸修复节点，请完善提示词");
+                    message.info(t("canvas.faceRefine.needPrompt"));
                 }
                 setDialogNodeId(childId);
                 return;
             }
 
-            message.loading({ content: "正在提交 MiniMax H3 人脸修复任务...", key: `face-refine-${childId}`, duration: 2 });
+            message.loading({ content: t("canvas.faceRefine.submitting"), key: `face-refine-${childId}`, duration: 2 });
             const controller = startGenerationRequest(childId, node.id, childId);
             try {
                 let referenceImages: ReferenceImage[] = [];
@@ -2810,10 +2810,10 @@ function InfiniteCanvasPage() {
                             : item,
                     ),
                 );
-                message.success({ content: "人脸修复生成完成", key: `face-refine-${childId}` });
+                message.success({ content: t("canvas.faceRefine.success"), key: `face-refine-${childId}` });
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
-                const errorDetails = error instanceof Error ? error.message : "人脸修复生成失败";
+                const errorDetails = error instanceof Error ? error.message : t("canvas.faceRefine.failed");
                 message.error({ content: errorDetails, key: `face-refine-${childId}` });
                 setNodes((prev) =>
                     prev.map((item) =>
@@ -3299,7 +3299,7 @@ function InfiniteCanvasPage() {
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, submittedPrompt: string, intent: CanvasGenerationIntent = "new") => {
             if (isViewerRef.current) {
-                message.warning("当前为协同观看模式，仅房主可以触发 AI 生成");
+                message.warning(t("canvas.collabWatchMode.warnOwnerOnly"));
                 return;
             }
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
@@ -4155,7 +4155,7 @@ function InfiniteCanvasPage() {
     const handleRetryNode = useCallback(
         async (node: CanvasNodeData, imageId?: string, intent: "retry" | "resume" = "retry") => {
             if (isViewerRef.current) {
-                message.warning("当前为协同观看模式，仅房主可以触发 AI 生成");
+                message.warning(t("canvas.collabWatchMode.warnOwnerOnly"));
                 return;
             }
             const saved = node.metadata || {};
@@ -4820,10 +4820,10 @@ function InfiniteCanvasPage() {
                                 <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                                 <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
                             </span>
-                            <span>协同观看模式（仅房主可编辑）</span>
+                            <span>{t("canvas.collabWatchMode.badge")}</span>
                         </span>
                         <span className="h-4 w-px bg-stone-300 dark:bg-stone-700" />
-                        <span className="text-xs opacity-60">点击任意卡片悬浮栏可直接下载高清物料</span>
+                        <span className="text-xs opacity-60">{t("canvas.collabWatchMode.tip")}</span>
                     </div>
                 ) : (
                     <CanvasToolbar

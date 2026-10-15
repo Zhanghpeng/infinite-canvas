@@ -7,6 +7,22 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Full-Page Internationalization (i18n) Verification (全站页面中英双语国际化支持验证):
+  - **Workflows Page i18n (/workflows 工作流中心国际化)**:
+    - 切换顶部语言选择为 English；
+    - 访问 `/workflows` 页面，验证标题（Workflow Center）、搜索占位符（Search workflow name or description...）、分类标签（Text to Image, Image to Image, Multimodal Video 等）、大模型配置区域（Diffusion Model, CLIP Encoder）、保存/重置/导入/导出等按钮文案均正确显示为英文；
+    - 切换回中文，验证全部文案正常恢复为中文。
+  - **Workflow Editor i18n (/config/workflows/* 工作流可视化配置与编辑器国际化)**:
+    - 在英文状态下访问工作流编辑器，验证导航面包屑、返回工作流列表、基础信息、模型槽位绑定、JSON 编辑与预览抽屉等文案均以英文呈现。
+  - **Cloud Mirror & Pricing Page i18n (/pricing 云端镜像体验与部署方案国际化)**:
+    - 在英文状态下访问 `/pricing` 页面，验证顶部标语（Cloud Image Experience & Deployment Plans）、三大部署方案卡片（Autodl Mirror, Personal Private Cloud, Enterprise Private Deployment）、功能对比表格矩阵、FAQ 折叠问答以及咨询二维码弹窗文案均完整翻译为英文。
+  - **ComfyUI User Guide Page i18n (/guide 使用手册国际化)**:
+    - 在英文状态下访问 `/guide` 页面，验证标题、ComfyUI 服务联通探测条、起步四步法、插件与套件下载列表、能力矩阵分类及排错常见问题等内容均实现双语无缝切换。
+  - **Canvas & Header Tips i18n (画布及顶部导航提示词条国际化)**:
+    - 验证顶部导航栏云端镜像体验图标悬浮提示（Cloud Image Experience / 云端镜像体验）；
+    - 验证设置页面中的查看使用手册链接（View Guide / 查看手册）；
+    - 验证画布项目人脸修复完成通知、协同画布观看模式提示文案在英文环境下的正确显示。
+
 - Workflow Management & Dynamic Model Selection Verification (工作流管理与大模型可视化选择验证):
   - **Multi-Workflow Category Configuration & Channel Defaults (渠道多工作流切换与单渠道独立默认验证)**:
     - 打开「设置」弹窗中的渠道卡片，查看包含多个工作流的分类行（如「首尾帧视频工作流」拥有 4 个规格，「全能参考视频工作流」拥有 4 个规格等）；

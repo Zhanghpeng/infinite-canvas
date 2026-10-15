@@ -59,7 +59,7 @@ export default function IndexPage() {
                             {t("topNav.guide")}
                         </Button>
                         <Button size="large" onClick={() => navigate("/pricing")} icon={<Sparkles className="size-4 text-amber-500" />}>
-                            限时云端镜像0元体验
+                            {t("topNav.pricing")}
                         </Button>
                     </div>
                 </div>

@@ -20,7 +20,7 @@ export default function ConfigPage() {
                         className="inline-flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-xs font-medium text-stone-700 transition hover:bg-stone-100 dark:border-stone-800 dark:bg-stone-900/60 dark:text-stone-300 dark:hover:bg-stone-800"
                     >
                         <BookOpen className="size-3.5 text-stone-500" />
-                        <span>查看 ComfyUI 部署手册与工作流下载</span>
+                        <span>{t("config.viewGuide")}</span>
                     </Link>
                 </div>
                 <AppConfigPanel />
