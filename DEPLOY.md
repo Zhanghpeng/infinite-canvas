@@ -203,3 +203,91 @@ nginx -t
 - `config.js` 是运行期配置：Docker 部署靠环境变量在容器启动时生成；静态部署如需启用统计，直接改 `/var/www/canvas.imihoo.com/config.js` 中对应 ID 即可（已被配置为 `no-store`，改完即时生效，无需重新构建）。
 - `web/dist` 与 `dist.zip` 等产物不进 Git（`.gitignore` 已忽略），每次发版必须重新构建，避免部署到过期产物。
 - 发版前保留 `/var/www/<域名>_<时间戳>.tar.gz` 备份是既定习惯，回滚依赖这些备份，清理磁盘时注意保留最近若干份。
+
+## 7. 公网多人实时协同部署
+
+当项目部署在公网生产环境（如 `https://canvas.imihoo.com`）时，多人协同的运行架构如下：
+
+```
+                ┌───────────────────────────────┐
+                │   公网生产服务器 (114.55.54.9)   │
+                │                               │
+                │  Nginx (canvas.imihoo.com)    │
+                │    ├─ location / (前端静态资源) │
+                │    ├─ location /ws/collab ────┼───► 本地 Node 协同服务 (:3002)
+                │    └─ location /api/collab/ ──┼───► (实时信令广播 + 媒体资产流式中继)
+                └───────▲──────────────▲────────┘
+                        │              │
+       WSS/HTTPS 协同通信│              │ WSS/HTTPS 观看与下载
+                        │              │
+            ┌───────────┴───┐      ┌───┴──────────┐
+            │  房主 (Host)  │      │ 协作者 (Viewer)│
+            │  (创作者电脑)  │      │ (任意公网访客) │
+            └───────▲───────┘      └──────────────┘
+                    │ 本地直连 (127.0.0.1:8188)
+            ┌───────┴───────┐
+            │ 本地 ComfyUI  │ (算力与隐私留在房主本地，
+            │ (无需公网暴露) │  协作者零 GPU 门槛)
+            └───────────────┘
+```
+
+### 7.1 服务端部署（PM2 守护进程）
+
+服务器端只需要一个极其轻量的 Node 进程运行现有的 `web/server/standalone.mjs`（仅依赖 Node 原生模块与 `ws` 库）：
+
+```bash
+# 1) 在服务器上创建协同服务目录（如 /var/www/collab-server）
+mkdir -p /var/www/collab-server
+cd /var/www/collab-server
+
+# 2) 放置 standalone.mjs 和 collab-server.mjs（可从仓库 web/server/ 同步）
+# 3) 安装唯一依赖 ws
+npm init -y && npm install ws
+
+# 4) 通过 PM2 守护启动并设置开机自启
+pm2 start standalone.mjs --name canvas-collab -- --port 3002
+pm2 save
+pm2 startup
+```
+
+### 7.2 Nginx 反向代理配置
+
+在 `/etc/nginx/sites-available/canvas.imihoo.com` 的 `server { listen 443 ssl; ... }` 块中追加两段代理配置：
+
+```nginx
+    # 1) 多人实时协同 WebSocket 路由 (WSS)
+    location /ws/collab {
+        proxy_pass http://127.0.0.1:3002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    # 2) 协同媒体资产中继 (支持大图片/长视频流式播放与原画下载)
+    location /api/collab/ {
+        proxy_pass http://127.0.0.1:3002;
+        proxy_set_header Host $host;
+        client_max_body_size 100M;
+        proxy_buffering off;
+    }
+```
+
+重载 Nginx 生效：
+
+```bash
+nginx -t && nginx -s reload
+```
+
+### 7.3 验证公网协同服务
+
+```bash
+# 1) 验证 Node 协同服务健康状态
+curl -I http://127.0.0.1:3002/api/collab/network-ip
+
+# 2) 验证 Nginx 外部中继接口（HTTP 200）
+curl -sk -I https://canvas.imihoo.com/api/collab/network-ip
+```
+
