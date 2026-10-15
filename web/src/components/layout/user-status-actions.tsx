@@ -61,7 +61,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                 className="hidden text-xs text-stone-500 transition-colors hover:text-stone-950 dark:text-stone-400 dark:hover:text-white md:inline"
                 style={iconStyle}
             >
-                {t("topNav.credit")} <span className="underline decoration-dotted underline-offset-2">{t("topNav.creditRepo")}</span>
+                {t("topNav.credit")}
             </a>
             {onOpenShortcuts ? (
                 <button type="button" className={naturalIconClass} style={iconStyle} onClick={onOpenShortcuts} aria-label={t("topNav.shortcuts")} title={t("topNav.shortcuts")}>

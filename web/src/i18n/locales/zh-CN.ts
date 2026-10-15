@@ -333,7 +333,7 @@ export default {
         shortcuts: "快捷键",
         lightTheme: "切换到浅色主题",
         darkTheme: "切换到深色主题",
-        credit: "开源地址：",
+        credit: "开源地址",
         creditRepo: "ZhuYichuan/infinite-canvas",
     },
     home: {

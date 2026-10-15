@@ -333,7 +333,7 @@ export default {
         shortcuts: "Keyboard shortcuts",
         lightTheme: "Switch to light theme",
         darkTheme: "Switch to dark theme",
-        credit: "Open Source:",
+        credit: "Open Source",
         creditRepo: "ZhuYichuan/infinite-canvas",
     },
     home: {
