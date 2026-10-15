@@ -151,21 +151,14 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigC
                 )}
             </div>
 
-            <CanvasWorkflowModelPicker
-                category={
-                    mode === "image"
-                        ? (inputSummary.imageCount > 0 ? "i2i" : "t2i")
-                        : mode === "video"
-                        ? ["omniVideo", "frameVideo", "faceRefine"]
-                        : mode === "audio"
-                        ? "audio"
-                        : "text"
-                }
-                preferredCategory={mode === "video" ? (findWorkflow(globalConfig, node.metadata?.channelId, node.metadata?.workflowId)?.category || (config.videoMode === "frame" ? "frameVideo" : "omniVideo")) : undefined}
-                channelId={node.metadata?.channelId}
-                workflowId={node.metadata?.workflowId}
-                className="mb-2 flex-wrap"
-            />
+            {mode === "image" && (
+                <CanvasWorkflowModelPicker
+                    category={inputSummary.imageCount > 0 ? "i2i" : "t2i"}
+                    channelId={node.metadata?.channelId}
+                    workflowId={node.metadata?.workflowId}
+                    className="mb-2 flex-wrap"
+                />
+            )}
 
             <Button
                 type="primary"

@@ -68,9 +68,25 @@ export function CanvasWorkflowModelPicker({
     }, [config, activeChannel, workflowId, category, preferredCategory]);
 
     const selectNodes = useMemo(() => {
+        // 画布节点仅图片（文生图/图生图）允许选择模型，视频、音频、文本节点不需要模型选择器
+        const isImageCategory = !category
+            ? true
+            : Array.isArray(category)
+            ? category.some((c) => c === "t2i" || c === "i2i")
+            : (category === "t2i" || category === "i2i");
+        if (!isImageCategory) {
+            return [];
+        }
+        if (
+            activeWorkflow &&
+            activeWorkflow.category !== "t2i" &&
+            activeWorkflow.category !== "i2i"
+        ) {
+            return [];
+        }
         if (!activeWorkflow?.json) return [];
         return findWorkflowSelectNodes(activeWorkflow.json);
-    }, [activeWorkflow?.json]);
+    }, [activeWorkflow, category]);
 
     const comfyEndpoint = useMemo(() => {
         return activeChannel?.comfyuiProxyUrl || (activeChannel?.id === "local" ? "http://127.0.0.1:8188" : "http://127.0.0.1:8188");

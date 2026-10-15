@@ -189,12 +189,6 @@ export function CanvasNodePromptPanel({
                                     });
                                 }}
                             />
-                            <CanvasWorkflowModelPicker
-                                category={["omniVideo", "frameVideo", "faceRefine"]}
-                                preferredCategory={findWorkflow(globalConfig, node.metadata?.channelId, node.metadata?.workflowId)?.category || (config.videoMode === "frame" ? "frameVideo" : "omniVideo")}
-                                channelId={node.metadata?.channelId}
-                                workflowId={node.metadata?.workflowId}
-                            />
                             <CanvasVideoSettingsPopover
                                 config={config}
                                 buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
@@ -210,11 +204,6 @@ export function CanvasNodePromptPanel({
                                 workflowId={node.metadata?.workflowId}
                                 onChange={(channelId, workflowId) => onConfigChange(node.id, { channelId, workflowId })}
                             />
-                            <CanvasWorkflowModelPicker
-                                category="audio"
-                                channelId={node.metadata?.channelId}
-                                workflowId={node.metadata?.workflowId}
-                            />
                             <CanvasAudioSettingsPopover
                                 config={config}
                                 buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
@@ -229,11 +218,6 @@ export function CanvasNodePromptPanel({
                                 channelId={node.metadata?.channelId}
                                 workflowId={node.metadata?.workflowId}
                                 onChange={(channelId, workflowId) => onConfigChange(node.id, { channelId, workflowId })}
-                            />
-                            <CanvasWorkflowModelPicker
-                                category="text"
-                                channelId={node.metadata?.channelId}
-                                workflowId={node.metadata?.workflowId}
                             />
                             <CanvasTextSettingsPopover
                                 config={config}
