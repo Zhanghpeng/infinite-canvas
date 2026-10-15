@@ -31,8 +31,9 @@ export function CanvasCollabModal({
     const hostOnline = useCollabStore((s) => s.hostOnline);
     const lanIp = useCollabStore((s) => s.lanIp);
 
+    const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
     const port = window.location.port ? `:${window.location.port}` : "";
-    const hostDomain = lanIp && lanIp !== "127.0.0.1" ? `${lanIp}${port}` : window.location.host;
+    const hostDomain = isLocalhost && lanIp && lanIp !== "127.0.0.1" ? `${lanIp}${port}` : window.location.host;
     const shareUrl = activeRoomId
         ? `${window.location.protocol}//${hostDomain}/canvas/${projectId}?room=${activeRoomId}`
         : "";
@@ -41,7 +42,7 @@ export function CanvasCollabModal({
         if (!shareUrl) return;
         navigator.clipboard.writeText(shareUrl).then(() => {
             setCopied(true);
-            message.success("已复制内网协同链接！同局域网成员打开即可加入");
+            message.success(isLocalhost ? "已复制内网协同链接！同局域网成员打开即可加入" : "已复制协同链接！分享给协作者打开即可加入");
             setTimeout(() => setCopied(false), 2000);
         });
     };
@@ -56,7 +57,7 @@ export function CanvasCollabModal({
             title={
                 <div className="flex items-center gap-2 text-base font-semibold">
                     <Share2 className="size-4 text-blue-500" />
-                    <span>局域网多人协同</span>
+                    <span>{isLocalhost ? "局域网多人协同" : "多人实时协同"}</span>
                 </div>
             }
             open={open}
@@ -90,8 +91,14 @@ export function CanvasCollabModal({
                     /* Initial state: not yet in collab */
                     <div className="space-y-4 text-center py-2">
                         <div className="rounded-xl border border-dashed border-stone-200 p-4 text-left text-xs leading-relaxed text-stone-500 dark:border-stone-800 dark:text-stone-400">
-                            <p className="font-medium text-stone-700 dark:text-stone-200 mb-1">💡 内网协同说明</p>
-                            <p>• 开启后生成专属局域网协同链接，发送给同 WiFi / 局域网下的伙伴即可加入。</p>
+                            <p className="font-medium text-stone-700 dark:text-stone-200 mb-1">
+                                {isLocalhost ? "💡 内网协同说明" : "💡 多人协同说明"}
+                            </p>
+                            <p>
+                                {isLocalhost
+                                    ? "• 开启后生成专属局域网协同链接，发送给同 WiFi / 局域网下的伙伴即可加入。"
+                                    : "• 开启后生成专属协同链接，发送给任何在线协作者即可加入。"}
+                            </p>
                             <p>• <strong>权限规则</strong>：你是房主，独占编辑与 AI 生成权限；协作者可实时同步观看你的操作与成果，并随时下载高清物料。</p>
                         </div>
                         <Button
@@ -100,7 +107,7 @@ export function CanvasCollabModal({
                             className="!h-10 !w-full !rounded-xl !font-medium"
                             onClick={handleStart}
                         >
-                            开启内网协同
+                            {isLocalhost ? "开启内网协同" : "开启实时协同"}
                         </Button>
                     </div>
                 ) : (
@@ -139,7 +146,9 @@ export function CanvasCollabModal({
                         {/* Share Link for Host */}
                         {role === "host" ? (
                             <div className="space-y-1.5">
-                                <div className="text-xs text-stone-500">内网分享链接（发给同局域网成员即可）：</div>
+                                <div className="text-xs text-stone-500">
+                                    {isLocalhost ? "内网分享链接（发给同局域网成员即可）：" : "协同分享链接（发给协作者即可加入）："}
+                                </div>
                                 <div className="flex items-center gap-2">
                                     <Input
                                         readOnly
