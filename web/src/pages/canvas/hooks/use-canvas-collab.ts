@@ -179,12 +179,22 @@ export function useCanvasCollab({
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // Keep callback props in refs to avoid reconnection loops
+    const onRemoteCanvasUpdateRef = useRef(onRemoteCanvasUpdate);
+    onRemoteCanvasUpdateRef.current = onRemoteCanvasUpdate;
+
+    const onRemoteNodesPatchRef = useRef(onRemoteNodesPatch);
+    onRemoteNodesPatchRef.current = onRemoteNodesPatch;
+
+    const onRemoteGenerationStatusRef = useRef(onRemoteGenerationStatus);
+    onRemoteGenerationStatusRef.current = onRemoteGenerationStatus;
+
+    const getCurrentSnapshotRef = useRef(getCurrentSnapshot);
+    getCurrentSnapshotRef.current = getCurrentSnapshot;
+
     const activeRoomId = useCollabStore((s) => s.activeRoomId);
     const role = useCollabStore((s) => s.role);
-    const clientId = useCollabStore((s) => s.clientId);
     const hostToken = useCollabStore((s) => s.hostToken);
-    const nickname = useCollabStore((s) => s.nickname);
-    const myColor = useCollabStore((s) => s.myColor);
     const setStatus = useCollabStore((s) => s.setStatus);
     const setOnlineUsers = useCollabStore((s) => s.setOnlineUsers);
     const updatePeerPresence = useCollabStore((s) => s.updatePeerPresence);
@@ -213,7 +223,8 @@ export function useCanvasCollab({
     // Broadcast canvas sync (Host only)
     const broadcastCanvasSync = useCallback(
         (nodes: CanvasNodeData[], connections: CanvasConnection[], title?: string) => {
-            if (role !== "host" || !activeRoomId) return;
+            const state = useCollabStore.getState();
+            if (state.role !== "host" || !state.activeRoomId) return;
 
             // Upload assets to server
             uploadAllNodesAssets(nodes);
@@ -223,39 +234,41 @@ export function useCanvasCollab({
 
             send({
                 type: "sync_canvas",
-                roomId: activeRoomId,
-                clientId,
+                roomId: state.activeRoomId,
+                clientId: state.clientId,
                 nodes: sharedNodes,
                 connections,
                 title,
             });
         },
-        [role, activeRoomId, clientId, send],
+        [send],
     );
 
     // Broadcast patch (Host only)
     const broadcastNodesPatch = useCallback(
         (nodes: CanvasNodeData[], connections: CanvasConnection[]) => {
-            if (role !== "host" || !activeRoomId) return;
+            const state = useCollabStore.getState();
+            if (state.role !== "host" || !state.activeRoomId) return;
 
             uploadAllNodesAssets(nodes);
             const sharedNodes = nodes.map(sanitizeNodeForCollab);
 
             send({
                 type: "patch_nodes",
-                roomId: activeRoomId,
-                clientId,
+                roomId: state.activeRoomId,
+                clientId: state.clientId,
                 nodes: sharedNodes,
                 connections,
             });
         },
-        [role, activeRoomId, clientId, send],
+        [send],
     );
 
     // Broadcast generation status (Host only)
     const broadcastGenerationStatus = useCallback(
         (nodeId: string, status: CanvasNodeStatus, errorDetails?: string, metadata?: CanvasNodeMetadata) => {
-            if (role !== "host" || !activeRoomId) return;
+            const state = useCollabStore.getState();
+            if (state.role !== "host" || !state.activeRoomId) return;
 
             if (metadata?.storageKey) {
                 getAnyAssetBlob(metadata.storageKey, metadata.content).then((blob) => {
@@ -267,37 +280,38 @@ export function useCanvasCollab({
 
             send({
                 type: "generation_status",
-                roomId: activeRoomId,
-                clientId,
+                roomId: state.activeRoomId,
+                clientId: state.clientId,
                 nodeId,
                 status,
                 errorDetails,
                 metadata: sanitizedMeta,
             });
         },
-        [role, activeRoomId, clientId, send],
+        [send],
     );
 
     // Broadcast cursor position (All roles)
     const broadcastCursor = useCallback(
         (cursor: { x: number; y: number } | null, selectedNodeIds: string[] = []) => {
-            if (!activeRoomId) return;
+            const state = useCollabStore.getState();
+            if (!state.activeRoomId) return;
             send({
                 type: "cursor",
-                roomId: activeRoomId,
-                clientId,
+                roomId: state.activeRoomId,
+                clientId: state.clientId,
                 cursor,
                 selectedNodeIds,
             });
         },
-        [activeRoomId, clientId, send],
+        [send],
     );
 
     // Connect & maintain WebSocket
     useEffect(() => {
         if (!activeRoomId) {
             if (wsRef.current) {
-                wsRef.current.close();
+                wsRef.current.close(1000, "leave");
                 wsRef.current = null;
             }
             return;
@@ -318,22 +332,34 @@ export function useCanvasCollab({
             ws.onopen = () => {
                 if (isUnmounted) return;
                 setStatus("connected");
+                const state = useCollabStore.getState();
                 ws.send(
                     JSON.stringify({
                         type: "join",
                         roomId: activeRoomId,
-                        clientId,
-                        role,
-                        hostToken,
-                        nickname,
-                        color: myColor,
+                        clientId: state.clientId,
+                        role: state.role,
+                        hostToken: state.hostToken,
+                        nickname: state.nickname,
+                        color: state.myColor,
                     }),
                 );
 
-                if (role === "host" && getCurrentSnapshot) {
-                    const snap = getCurrentSnapshot();
+                if (state.role === "host") {
+                    const snap = getCurrentSnapshotRef.current?.();
                     if (snap?.nodes?.length) {
-                        broadcastCanvasSync(snap.nodes, snap.connections, snap.title);
+                        uploadAllNodesAssets(snap.nodes);
+                        const sharedNodes = snap.nodes.map(sanitizeNodeForCollab);
+                        ws.send(
+                            JSON.stringify({
+                                type: "sync_canvas",
+                                roomId: activeRoomId,
+                                clientId: state.clientId,
+                                nodes: sharedNodes,
+                                connections: snap.connections,
+                                title: snap.title,
+                            }),
+                        );
                     }
                 }
             };
@@ -341,12 +367,14 @@ export function useCanvasCollab({
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
+                    const currentRole = useCollabStore.getState().role;
+
                     if (data.type === "join_ack") {
                         setHostOnline(Boolean(data.isHostOnline));
                         // If viewer and server has a cached snapshot, load it!
-                        if (role === "viewer" && data.snapshot?.nodes?.length) {
+                        if (currentRole === "viewer" && data.snapshot?.nodes?.length) {
                             const sanitizedNodes = data.snapshot.nodes.map(sanitizeNodeForCollab);
-                            onRemoteCanvasUpdate?.(sanitizedNodes, data.snapshot.connections, data.snapshot.title);
+                            onRemoteCanvasUpdateRef.current?.(sanitizedNodes, data.snapshot.connections, data.snapshot.title);
                             // Preload assets in background
                             for (const node of sanitizedNodes) {
                                 if (node.metadata?.storageKey) {
@@ -358,14 +386,27 @@ export function useCanvasCollab({
                         setOnlineUsers(data.users || [], data.hostId);
                     } else if (data.type === "request_snapshot") {
                         // Host receives request to send fresh state
-                        if (role === "host" && getCurrentSnapshot) {
-                            const snapshot = getCurrentSnapshot();
-                            broadcastCanvasSync(snapshot.nodes, snapshot.connections, snapshot.title);
+                        if (currentRole === "host") {
+                            const snapshot = getCurrentSnapshotRef.current?.();
+                            if (snapshot) {
+                                uploadAllNodesAssets(snapshot.nodes);
+                                const sharedNodes = snapshot.nodes.map(sanitizeNodeForCollab);
+                                ws.send(
+                                    JSON.stringify({
+                                        type: "sync_canvas",
+                                        roomId: activeRoomId,
+                                        clientId: useCollabStore.getState().clientId,
+                                        nodes: sharedNodes,
+                                        connections: snapshot.connections,
+                                        title: snapshot.title,
+                                    }),
+                                );
+                            }
                         }
                     } else if (data.type === "canvas_updated") {
-                        if (role === "viewer") {
+                        if (currentRole === "viewer") {
                             const sanitizedNodes = (data.nodes || []).map(sanitizeNodeForCollab);
-                            onRemoteCanvasUpdate?.(sanitizedNodes, data.connections || [], data.title);
+                            onRemoteCanvasUpdateRef.current?.(sanitizedNodes, data.connections || [], data.title);
                             // Preload assets
                             for (const node of sanitizedNodes) {
                                 if (node.metadata?.storageKey) {
@@ -374,9 +415,9 @@ export function useCanvasCollab({
                             }
                         }
                     } else if (data.type === "nodes_patched") {
-                        if (role === "viewer") {
+                        if (currentRole === "viewer") {
                             const sanitizedNodes = (data.nodes || []).map(sanitizeNodeForCollab);
-                            onRemoteNodesPatch?.(sanitizedNodes, data.connections || []);
+                            onRemoteNodesPatchRef.current?.(sanitizedNodes, data.connections || []);
                             for (const node of sanitizedNodes) {
                                 if (node.metadata?.storageKey) {
                                     void ensureCollabAssetCached(node.metadata.storageKey, node.type === "video" || node.type === "audio");
@@ -384,9 +425,9 @@ export function useCanvasCollab({
                             }
                         }
                     } else if (data.type === "node_generation_status") {
-                        if (role === "viewer") {
+                        if (currentRole === "viewer") {
                             const sanitizedMeta = data.metadata ? sanitizeMetadataForCollab(data.metadata) : undefined;
-                            onRemoteGenerationStatus?.(data.nodeId, data.status, data.errorDetails, sanitizedMeta);
+                            onRemoteGenerationStatusRef.current?.(data.nodeId, data.status, data.errorDetails, sanitizedMeta);
                             if (sanitizedMeta?.storageKey) {
                                 void ensureCollabAssetCached(
                                     sanitizedMeta.storageKey,
@@ -414,11 +455,13 @@ export function useCanvasCollab({
                 console.warn("[Collab] WebSocket error:", e);
             };
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
                 if (isUnmounted) return;
                 setStatus("disconnected");
-                // Try reconnect in 3s
-                reconnectTimerRef.current = setTimeout(connect, 3000);
+                // Only try reconnect if not intentional close (1000)
+                if (event.code !== 1000) {
+                    reconnectTimerRef.current = setTimeout(connect, 3000);
+                }
             };
         };
 
@@ -428,27 +471,11 @@ export function useCanvasCollab({
             isUnmounted = true;
             if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
             if (wsRef.current) {
-                wsRef.current.close();
+                wsRef.current.close(1000, "leave");
                 wsRef.current = null;
             }
         };
-    }, [
-        activeRoomId,
-        role,
-        clientId,
-        hostToken,
-        nickname,
-        myColor,
-        setStatus,
-        setOnlineUsers,
-        updatePeerPresence,
-        setHostOnline,
-        onRemoteCanvasUpdate,
-        onRemoteNodesPatch,
-        onRemoteGenerationStatus,
-        getCurrentSnapshot,
-        broadcastCanvasSync,
-    ]);
+    }, [activeRoomId, role, hostToken, setStatus, setOnlineUsers, updatePeerPresence, setHostOnline]);
 
     return {
         broadcastCanvasSync,

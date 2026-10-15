@@ -354,22 +354,38 @@ function InfiniteCanvasPage() {
     const roomParam = searchParams.get("room");
     useEffect(() => {
         if (roomParam && activeRoomId !== roomParam) {
-            const currentHostToken = useCollabStore.getState().hostToken;
-            startCollaboration(roomParam, currentHostToken ? "host" : "viewer");
+            let savedHostToken: string | null = null;
+            try {
+                savedHostToken = sessionStorage.getItem(`infinite-canvas:collab_host_${roomParam}`);
+            } catch {
+                // ignore
+            }
+            const currentHostToken = useCollabStore.getState().hostToken || savedHostToken;
+            startCollaboration(roomParam, currentHostToken ? "host" : "viewer", currentHostToken || undefined);
         }
     }, [roomParam, activeRoomId, startCollaboration]);
 
     const handleStartCollab = useCallback(
         (roomId: string) => {
             startCollaboration(roomId, "host");
+            setSearchParams((prev) => {
+                const next = new URLSearchParams(prev);
+                next.set("room", roomId);
+                return next;
+            }, { replace: true });
             broadcastCanvasSync(nodesRef.current, connectionsRef.current, currentProject?.title);
         },
-        [broadcastCanvasSync, currentProject?.title, startCollaboration],
+        [broadcastCanvasSync, currentProject?.title, setSearchParams, startCollaboration],
     );
 
     const handleStopCollab = useCallback(() => {
         useCollabStore.getState().disconnect();
-    }, []);
+        setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            next.delete("room");
+            return next;
+        }, { replace: true });
+    }, [setSearchParams]);
 
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({

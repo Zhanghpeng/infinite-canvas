@@ -82,17 +82,45 @@ export const useCollabStore = create<CollabStore>((set, get) => ({
     lanIp: window.location.hostname === "localhost" ? "127.0.0.1" : window.location.hostname,
 
     startCollaboration: (roomId, role, hostToken) => {
+        let token = hostToken;
+        if (role === "host") {
+            if (!token) {
+                try {
+                    token = sessionStorage.getItem(`infinite-canvas:collab_host_${roomId}`) || null;
+                } catch {
+                    // ignore
+                }
+            }
+            if (!token) {
+                token = `host-${nanoid(12)}`;
+            }
+            try {
+                sessionStorage.setItem(`infinite-canvas:collab_host_${roomId}`, token);
+            } catch {
+                // ignore
+            }
+        }
         set({
             activeRoomId: roomId,
             role,
-            hostToken: hostToken || (role === "host" ? `host-${nanoid(12)}` : null),
+            hostToken: token || null,
             status: "connecting",
         });
     },
 
     disconnect: () => {
+        const currentRoom = get().activeRoomId;
+        if (currentRoom) {
+            try {
+                sessionStorage.removeItem(`infinite-canvas:collab_host_${currentRoom}`);
+            } catch {
+                // ignore
+            }
+        }
         set({
             activeRoomId: null,
+            role: "viewer",
+            hostToken: null,
             status: "disconnected",
             onlineUsers: [],
             peerPresences: {},
