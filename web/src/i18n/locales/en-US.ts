@@ -968,6 +968,7 @@ export default {
         "canvas": "My Canvases",
         "image": "Image Studio",
         "video": "Video Studio",
+        "workflows": "Workflows",
         "prompts": "Prompt Library",
         "assets": "My Assets",
         "config": "Settings"
