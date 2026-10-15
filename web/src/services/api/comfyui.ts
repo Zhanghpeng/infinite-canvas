@@ -2813,3 +2813,155 @@ export async function checkComfyuiConnection(baseUrl: string, token?: string): P
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
 }
+
+export type ComfyuiModelItem = {
+    name: string;
+    size?: number;
+    modified?: number;
+    pathIndex?: number;
+};
+
+export type WorkflowSelectNodeInfo = {
+    nodeId: string;
+    title: string;
+    classType?: string;
+    modelType: string;
+    inputKey: string;
+    currentValue: string;
+};
+
+/**
+ * 扫描工作流 JSON 中所有以 select_models_ 开头（或 select_ 开头）的动态选择框节点
+ */
+export function findWorkflowSelectNodes(workflow: ComfyuiWorkflowJson): WorkflowSelectNodeInfo[] {
+    if (!workflow || typeof workflow !== "object") return [];
+    const results: WorkflowSelectNodeInfo[] = [];
+
+    const nodes = Object.entries(workflow);
+    for (const [nodeId, rawNode] of nodes) {
+        if (!rawNode || typeof rawNode !== "object") continue;
+        const node = rawNode as {
+            class_type?: string;
+            inputs?: Record<string, unknown>;
+            _meta?: { title?: unknown };
+        };
+        const rawTitle = node._meta?.title;
+        if (typeof rawTitle !== "string") continue;
+        const title = rawTitle.trim();
+        if (!title.startsWith("select_models_") && !title.startsWith("select_")) continue;
+
+        let modelType = "";
+        if (title.startsWith("select_models_")) {
+            modelType = title.slice("select_models_".length).trim().toLowerCase();
+        } else if (title.startsWith("select_")) {
+            modelType = title.slice("select_".length).trim().toLowerCase();
+        }
+
+        const inputs = node.inputs || {};
+
+        let candidateKeys: string[] = [];
+        if (modelType === "diffusion_models" || modelType === "unet") {
+            candidateKeys = ["unet_name", "model_name", "diffusion_model_name", "value"];
+        } else if (modelType === "clip" || modelType === "text_encoders") {
+            candidateKeys = ["clip_name", "text_encoder_name", "clip_name1", "value"];
+        } else if (modelType === "checkpoints" || modelType === "checkpoint") {
+            candidateKeys = ["ckpt_name", "model_name", "value"];
+        } else if (modelType === "vae") {
+            candidateKeys = ["vae_name", "value"];
+        } else if (modelType === "loras" || modelType === "lora") {
+            candidateKeys = ["lora_name", "value"];
+        } else if (modelType === "controlnet") {
+            candidateKeys = ["control_net_name", "value"];
+        } else {
+            candidateKeys = [`${modelType}_name`, "model_name", "name", "value"];
+        }
+
+        let targetKey = "";
+        for (const cand of candidateKeys) {
+            if (cand in inputs && !Array.isArray(inputs[cand])) {
+                targetKey = cand;
+                break;
+            }
+        }
+
+        if (!targetKey) {
+            for (const [k, v] of Object.entries(inputs)) {
+                if (typeof v === "string" && !Array.isArray(v) && !["device", "weight_dtype", "type"].includes(k)) {
+                    targetKey = k;
+                    break;
+                }
+            }
+        }
+
+        if (targetKey) {
+            results.push({
+                nodeId,
+                title,
+                classType: node.class_type,
+                modelType,
+                inputKey: targetKey,
+                currentValue: String(inputs[targetKey] ?? ""),
+            });
+        }
+    }
+
+    return results;
+}
+
+/**
+ * 更新工作流中指定节点的输入参数值
+ */
+export function updateWorkflowNodeInput(
+    workflow: ComfyuiWorkflowJson,
+    nodeId: string,
+    inputKey: string,
+    value: unknown
+): ComfyuiWorkflowJson {
+    const clone = JSON.parse(JSON.stringify(workflow)) as ComfyuiWorkflowJson;
+    const targetNode = clone[nodeId] as { inputs?: Record<string, unknown> } | undefined;
+    if (targetNode && typeof targetNode === "object") {
+        if (!targetNode.inputs) {
+            targetNode.inputs = {};
+        }
+        targetNode.inputs[inputKey] = value;
+    }
+    return clone;
+}
+
+/**
+ * 实时获取 ComfyUI 模型列表
+ * 支持 diffusion_models, clip (自动映射为 text_encoders), checkpoints, vae, loras 等
+ */
+export async function fetchComfyuiModels(
+    category: string,
+    baseUrl: string,
+    token?: string
+): Promise<ComfyuiModelItem[]> {
+    const rawCat = category.trim().toLowerCase();
+    const endpointCat = rawCat === "clip" ? "text_encoders" : rawCat;
+
+    const normalized = normalizeBaseUrl(baseUrl);
+    const headers: Record<string, string> = {
+        Accept: "*/*",
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const res = await comfyuiFetch(`${normalized}/api/experiment/models/${encodeURIComponent(endpointCat)}`, { headers }, baseUrl);
+    if (!res.ok) {
+        throw new Error(`ComfyUI 获取模型列表失败: HTTP ${res.status}`);
+    }
+
+    const data = (await res.json()) as Array<{ name?: string; size?: number; modified?: number; pathIndex?: number }>;
+    if (Array.isArray(data)) {
+        return data
+            .filter((item) => item && typeof item.name === "string" && item.name.trim().length > 0)
+            .map((item) => ({
+                name: item.name!.trim(),
+                size: item.size,
+                modified: item.modified,
+                pathIndex: item.pathIndex,
+            }));
+    }
+    return [];
+}
+

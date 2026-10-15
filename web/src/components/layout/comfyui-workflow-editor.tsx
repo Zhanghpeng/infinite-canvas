@@ -1,3 +1,5 @@
+import { Sliders } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import type { ComfyuiWorkflow, ComfyWorkflowItem } from "@/stores/use-config-store";
@@ -45,10 +47,14 @@ const BUILTIN_WORKFLOW_IDENTIFIERS = new Set([
  * Displays attached ComfyUI workflow information (built-in or custom).
  */
 export function ComfyuiWorkflowEditor({
+    channelId,
+    workflowId,
     value,
     defaultWorkflow,
     isBuiltin,
 }: {
+    channelId?: string;
+    workflowId?: string;
     value?: ComfyuiWorkflow | ComfyWorkflowItem;
     defaultWorkflow?: ComfyuiWorkflow | ComfyWorkflowItem;
     isBuiltin?: boolean;
@@ -90,6 +96,16 @@ export function ComfyuiWorkflowEditor({
                     t("comfyui.noWorkflowAttached")
                 )}
             </div>
+            {channelId && activeWorkflow && (
+                <Link
+                    to={`/config/workflows/${encodeURIComponent(channelId)}/${encodeURIComponent(workflowId || activeWorkflow.name)}`}
+                    className="inline-flex items-center gap-1.5 rounded border border-stone-200/80 bg-white px-2 py-1 text-xs font-medium text-stone-700 shadow-xs transition hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-200 dark:hover:bg-stone-750"
+                    title="配置与编辑工作流参数"
+                >
+                    <Sliders className="size-3 text-stone-500" />
+                    <span>配置工作流</span>
+                </Link>
+            )}
         </div>
     );
 }

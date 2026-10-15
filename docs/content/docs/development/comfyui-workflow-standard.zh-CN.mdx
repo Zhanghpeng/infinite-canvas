@@ -84,6 +84,16 @@ description: 槽位词汇表、标注约定、解析规则、传输契约与数�
 - 输出标记：`output_image` / `output_video` / `output_text`，必须标在**保存/输出节点**（SaveImage、VHS_VideoCombine、SaveText 等）上，不可标在预览节点。
 - 一张工作流有且仅有一个 `output_*` 标记。
 
+### 动态模型选择扩展标准 (`select_models_*`)
+
+系统支持在工作流编辑页面中为工作流配置大模型，并通过 `_meta.title` 标注动态拉取 ComfyUI 原生 API 模型库：
+
+- **命名规范**：在 Loader 或对应节点的 `_meta.title` 标注 `select_models_{type}`。
+- **接口对应**：
+  - `select_models_diffusion_models`：对应 ComfyUI `GET /api/experiment/models/diffusion_models`，自动匹配节点的 `unet_name`、`model_name` 或标量字符串输入。
+  - `select_models_clip`：系统自动别名映射至 ComfyUI `GET /api/experiment/models/text_encoders`（ComfyUI 原生将 CLIP 与文本编码器统一收录在 `text_encoders`），自动匹配节点的 `clip_name`、`text_encoder_name` 等。
+  - 通用扩展：任意 `select_models_{category}` 会自动请求 ComfyUI `GET /api/experiment/models/{category}`（如 `checkpoints`, `vae`, `loras`, `controlnet` 等）。
+
 ## 解析规则
 
 填充器将槽位值写入标记节点的 `inputs`。匹配目标输入的规则：

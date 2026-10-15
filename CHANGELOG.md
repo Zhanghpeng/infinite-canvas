@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [新增] 新增工作流独立编辑页面与 ComfyUI 原生大模型实时选择支持：支持通过 `select_models_*`（如 `select_models_diffusion_models`、`select_models_clip` 等）标注自动探测 Loader 输入节点并实时拉取 ComfyUI 模型库供下拉选择；提供独立工作流配置页面（`/config/workflows/:channelId/:workflowId`）并支持双栏实时模型调优、JSON 导入导出与一键恢复系统内置默认。
 + [优化] 优化顶部导航栏右上角开源地址链接展示：仅保留「开源地址」文案，隐藏具体仓库名并支持直接点击跳转。
 
 ## v0.19.15 - 2026-10-15

@@ -56,7 +56,7 @@
     },
     "class_type": "CLIPLoader",
     "_meta": {
-      "title": "加载CLIP"
+      "title": "select_models_clip"
     }
   },
   "57:29": {
@@ -103,7 +103,7 @@
     },
     "class_type": "UNETLoader",
     "_meta": {
-      "title": "UNet加载器"
+      "title": "select_models_diffusion_models"
     }
   },
   "57:27": {

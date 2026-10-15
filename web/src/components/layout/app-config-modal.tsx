@@ -267,6 +267,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channelId={channel.id}
+                                                                                workflowId={t2iItem?.id || defaultWorkflows.t2i?.name}
                                                                                 value={t2iItem || channel.comfyuiT2iWorkflow || defaultWorkflows.t2i}
                                                                                 defaultWorkflow={defaultWorkflows.t2i}
                                                                                 isBuiltin={t2iItem ? Boolean(t2iItem.isBuiltin) : undefined}
@@ -281,6 +283,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channelId={channel.id}
+                                                                                workflowId={i2iItem?.id || defaultWorkflows.i2i?.name}
                                                                                 value={i2iItem || channel.comfyuiI2iWorkflow || defaultWorkflows.i2i}
                                                                                 defaultWorkflow={defaultWorkflows.i2i}
                                                                                 isBuiltin={i2iItem ? Boolean(i2iItem.isBuiltin) : undefined}
@@ -295,6 +299,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channelId={channel.id}
+                                                                                workflowId={textItem?.id || defaultWorkflows.text?.name}
                                                                                 value={textItem || channel.comfyuiTextWorkflow || defaultWorkflows.text}
                                                                                 defaultWorkflow={defaultWorkflows.text}
                                                                                 isBuiltin={textItem ? Boolean(textItem.isBuiltin) : undefined}
@@ -309,6 +315,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channelId={channel.id}
+                                                                                workflowId={videoItem?.id || defaultWorkflows.video?.name}
                                                                                 value={videoItem || channel.comfyuiVideoWorkflow || defaultWorkflows.video}
                                                                                 defaultWorkflow={defaultWorkflows.video}
                                                                                 isBuiltin={videoItem ? Boolean(videoItem.isBuiltin) : undefined}
@@ -323,6 +331,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channelId={channel.id}
+                                                                                workflowId={frameVideoItem?.id || defaultWorkflows.frameVideo?.name}
                                                                                 value={frameVideoItem || channel.comfyuiFrameVideoWorkflow || defaultWorkflows.frameVideo}
                                                                                 defaultWorkflow={defaultWorkflows.frameVideo}
                                                                                 isBuiltin={frameVideoItem ? Boolean(frameVideoItem.isBuiltin) : undefined}
@@ -337,6 +347,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channelId={channel.id}
+                                                                                workflowId={audioItem?.id || defaultWorkflows.audio?.name}
                                                                                 value={audioItem || channel.comfyuiAudioWorkflow || defaultWorkflows.audio}
                                                                                 defaultWorkflow={defaultWorkflows.audio}
                                                                                 isBuiltin={audioItem ? Boolean(audioItem.isBuiltin) : undefined}
@@ -361,6 +373,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channelId={channel.id}
+                                                                                workflowId={inpaintItem?.id || defaultWorkflows.inpaint?.name}
                                                                                 value={inpaintItem || channel.comfyuiInpaintWorkflow || defaultWorkflows.inpaint}
                                                                                 defaultWorkflow={defaultWorkflows.inpaint}
                                                                                 isBuiltin={inpaintItem ? Boolean(inpaintItem.isBuiltin) : undefined}
@@ -375,6 +389,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channelId={channel.id}
+                                                                                workflowId={faceRefineItem?.id || defaultWorkflows.faceRefine?.name}
                                                                                 value={faceRefineItem || channel.comfyuiFaceRefineWorkflow || defaultWorkflows.faceRefine}
                                                                                 defaultWorkflow={defaultWorkflows.faceRefine}
                                                                                 isBuiltin={faceRefineItem ? Boolean(faceRefineItem.isBuiltin) : undefined}
@@ -389,6 +405,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                                         </div>
                                                                         <div className="rounded-md border border-stone-100 bg-stone-50/50 p-2 dark:border-stone-800 dark:bg-stone-900/30">
                                                                             <ComfyuiWorkflowEditor
+                                                                                channelId={channel.id}
+                                                                                workflowId={depthVideoItem?.id || defaultWorkflows.depthVideo?.name}
                                                                                 value={depthVideoItem || channel.comfyuiDepthVideoWorkflow || defaultWorkflows.depthVideo}
                                                                                 defaultWorkflow={defaultWorkflows.depthVideo}
                                                                                 isBuiltin={depthVideoItem ? Boolean(depthVideoItem.isBuiltin) : undefined}

@@ -38,6 +38,21 @@ export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 
 export type WorkflowCategory = "t2i" | "i2i" | "inpaint" | "text" | "omniVideo" | "frameVideo" | "audio" | "faceRefine" | "depthVideo" | "superResolve" | "angle" | "upscale";
 
+export const WORKFLOW_CATEGORY_TO_CHANNEL_FIELD: Record<WorkflowCategory, keyof ModelChannel> = {
+    t2i: "comfyuiT2iWorkflow",
+    i2i: "comfyuiI2iWorkflow",
+    inpaint: "comfyuiInpaintWorkflow",
+    text: "comfyuiTextWorkflow",
+    omniVideo: "comfyuiVideoWorkflow",
+    frameVideo: "comfyuiFrameVideoWorkflow",
+    audio: "comfyuiAudioWorkflow",
+    faceRefine: "comfyuiFaceRefineWorkflow",
+    depthVideo: "comfyuiDepthVideoWorkflow",
+    superResolve: "comfyuiSuperResolveWorkflow",
+    angle: "comfyuiAngleWorkflow",
+    upscale: "comfyuiUpscaleWorkflow",
+};
+
 export type ToolbarConfig = {
     ids: string[];
     showLabels: boolean;
@@ -244,6 +259,8 @@ type ConfigStore = {
     openConfigDialog: (shouldPromptContinue?: boolean, tab?: ConfigTabKey) => void;
     setConfigDialogOpen: (isOpen: boolean) => void;
     clearPromptContinue: () => void;
+    saveChannelWorkflow: (channelId: string, workflow: ComfyWorkflowItem) => void;
+    resetChannelWorkflowToBuiltin: (channelId: string, workflowId: string) => void;
 };
 
 const VIDEO_KEYWORDS = ["video", "sora", "veo", "kling", "wan", "hailuo", "视频", "minimax"];
@@ -386,6 +403,86 @@ export const useConfigStore = create<ConfigStore>()(
             openConfigDialog: (shouldPromptContinue = false, configTab = "channels") => set({ isConfigOpen: true, shouldPromptContinue, configTab }),
             setConfigDialogOpen: (isConfigOpen) => set({ isConfigOpen }),
             clearPromptContinue: () => set({ shouldPromptContinue: false }),
+            saveChannelWorkflow: (channelId: string, workflow: ComfyWorkflowItem) =>
+                set((state) => {
+                    const channels = state.config.channels.map((channel) => {
+                        if (channel.id !== channelId) return channel;
+                        const currentWorkflows = getChannelWorkflows(channel);
+                        const existsIndex = currentWorkflows.findIndex((wf) => wf.id === workflow.id);
+                        const updatedWorkflow: ComfyWorkflowItem = {
+                            ...workflow,
+                            isBuiltin: false,
+                            createdAt: Date.now(),
+                        };
+                        let nextWorkflows: ComfyWorkflowItem[];
+                        if (existsIndex >= 0) {
+                            nextWorkflows = [...currentWorkflows];
+                            nextWorkflows[existsIndex] = updatedWorkflow;
+                        } else {
+                            nextWorkflows = [...currentWorkflows, updatedWorkflow];
+                        }
+
+                        const updatedChannel: ModelChannel = {
+                            ...channel,
+                            workflows: nextWorkflows,
+                        };
+
+                        const channelField = WORKFLOW_CATEGORY_TO_CHANNEL_FIELD[workflow.category];
+                        if (channelField) {
+                            const currentBound = channel[channelField] as ComfyuiWorkflow | undefined;
+                            if (!currentBound || currentBound.name === workflow.name || workflow.isDefault) {
+                                (updatedChannel as any)[channelField] = {
+                                    name: workflow.name,
+                                    json: workflow.json,
+                                    createdAt: Date.now(),
+                                    isBuiltin: false,
+                                };
+                            }
+                        }
+                        return updatedChannel;
+                    });
+
+                    return {
+                        config: {
+                            ...state.config,
+                            channels,
+                        },
+                    };
+                }),
+            resetChannelWorkflowToBuiltin: (channelId: string, workflowId: string) =>
+                set((state) => {
+                    const channels = state.config.channels.map((channel) => {
+                        if (channel.id !== channelId) return channel;
+                        const defaultWorkflows = getDefaultComfyWorkflowItems(channel);
+                        const targetDefault = defaultWorkflows.find((w) => w.id === workflowId || w.id.endsWith(workflowId.replace(/^[^-]+-/, "")));
+                        if (!targetDefault) return channel;
+
+                        const currentWorkflows = getChannelWorkflows(channel);
+                        const nextWorkflows = currentWorkflows.map((w) => (w.id === workflowId ? targetDefault : w));
+                        const updatedChannel: ModelChannel = {
+                            ...channel,
+                            workflows: nextWorkflows,
+                        };
+
+                        const channelField = WORKFLOW_CATEGORY_TO_CHANNEL_FIELD[targetDefault.category];
+                        if (channelField) {
+                            (updatedChannel as any)[channelField] = {
+                                name: targetDefault.name,
+                                json: targetDefault.json,
+                                createdAt: 0,
+                                isBuiltin: true,
+                            };
+                        }
+                        return updatedChannel;
+                    });
+
+                    return {
+                        config: {
+                            ...state.config,
+                            channels,
+                        },
+                    };
+                }),
         }),
         {
             name: CONFIG_STORE_KEY,

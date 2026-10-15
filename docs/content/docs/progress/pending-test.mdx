@@ -7,6 +7,23 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Workflow Editor & Dynamic Model Selection Verification (工作流配置编辑与动态大模型选择验证):
+  - **Edit Entry & Navigation (设置页配置入口与页面跳转)**:
+    - 打开「设置」页面（`/config`），在各个 ComfyUI 工作流卡片（如「Z-Image-Turbo 文生图」、「Flux2.Dev 图生图」等）右侧，验证出现「配置工作流」按钮；
+    - 点击按钮，验证跳转至专属工作流配置编辑页面（`/config/workflows/:channelId/:workflowId`）。
+  - **Dynamic Model Selection from ComfyUI (实时动态模型选择)**:
+    - 检查页面左侧工作流动态参数列表，验证系统自动识别了标注为 `select_models_diffusion_models` 与 `select_models_clip` 的节点；
+    - 验证下拉选择框实时加载了目标 ComfyUI 实例（如本地 8188）中的模型文件列表，并展示模型文件大小；
+    - 切换选择不同模型，验证右侧 JSON 预览即时联动更新对应 Loader 节点的模型输入值；
+    - 点击刷新按钮，验证重新拉取 ComfyUI 最新模型文件列表。
+  - **Save & Reset Persistence (工作流持久化与恢复默认)**:
+    - 修改模型后点击右上角「保存修改」，验证提示保存成功；
+    - 返回设置或画布页面，验证对应分类生成时直接使用修改后的新模型参数；
+    - 重新进入配置页面，点击「恢复系统默认」，验证一键复原为系统出厂工作流。
+  - **JSON Import & Export (JSON 导入与导出)**:
+    - 点击「导出文件」，验证能正常下载完整的 ComfyUI API 工作流 JSON；
+    - 点击「复制代码」，验证能完整复制 JSON；
+    - 点击「导入 JSON」，验证能上传新的 API 工作流文件替换当前内容。
 
 - Top Navigation Open Source Link Verification (顶部导航开源地址展示验证):
   - **Open Source Link Display & Navigation (开源地址链接展示与跳转验证)**:

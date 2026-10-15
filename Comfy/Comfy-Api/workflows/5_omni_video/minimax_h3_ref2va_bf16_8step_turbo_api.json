@@ -144,7 +144,7 @@
     },
     "class_type": "UNETLoader",
     "_meta": {
-      "title": "UNet加载器"
+      "title": "select_models_diffusion_models"
     }
   },
   "14": {
