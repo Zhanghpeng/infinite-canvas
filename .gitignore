@@ -18,3 +18,5 @@ plugins/canvas/*/node_modules
 web/public/plugins
 .pi/
 .scratch/
+.collab-cache/
+web/.collab-cache/

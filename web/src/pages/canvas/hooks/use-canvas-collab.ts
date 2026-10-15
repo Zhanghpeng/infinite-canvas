@@ -20,10 +20,131 @@ export async function uploadAssetToCollabServer(storageKey: string, blob: Blob) 
     }
 }
 
+export async function getAnyAssetBlob(storageKey: string, contentUrl?: string): Promise<Blob | null> {
+    if (!storageKey && !contentUrl) return null;
+    let blob: Blob | null | undefined = null;
+    if (storageKey) {
+        if (storageKey.startsWith("video:") || storageKey.startsWith("audio:") || storageKey.startsWith("file:")) {
+            blob = await getMediaBlob(storageKey);
+        } else if (storageKey.startsWith("image:")) {
+            blob = await getImageBlob(storageKey);
+        }
+        if (!blob) blob = await getImageBlob(storageKey);
+        if (!blob) blob = await getMediaBlob(storageKey);
+    }
+    if (!blob && contentUrl && contentUrl.startsWith("blob:")) {
+        try {
+            const resp = await fetch(contentUrl);
+            if (resp.ok) {
+                blob = await resp.blob();
+            }
+        } catch {
+            // Ignore fetch failure
+        }
+    }
+    return blob || null;
+}
+
+export function toCollabAssetUrl(storageKey: string): string {
+    return `/api/collab/assets/${encodeURIComponent(storageKey)}`;
+}
+
+export function sanitizeMetadataForCollab(meta: CanvasNodeMetadata): CanvasNodeMetadata {
+    let hasChanges = false;
+    let newContent = meta.content;
+
+    if (meta.storageKey) {
+        if (!meta.content || meta.content.startsWith("blob:")) {
+            newContent = toCollabAssetUrl(meta.storageKey);
+            hasChanges = true;
+        }
+    }
+
+    let newImages = meta.images;
+    if (meta.images && meta.images.length > 0) {
+        newImages = meta.images.map((img) => {
+            if (img.storageKey && (!img.content || img.content.startsWith("blob:"))) {
+                hasChanges = true;
+                return { ...img, content: toCollabAssetUrl(img.storageKey) };
+            }
+            return img;
+        });
+    }
+
+    let newGenRefs = meta.generationReferences;
+    if (meta.generationReferences && meta.generationReferences.length > 0) {
+        newGenRefs = meta.generationReferences.map((ref) => {
+            if (ref.storageKey && (!ref.url || ref.url.startsWith("blob:"))) {
+                hasChanges = true;
+                return { ...ref, url: toCollabAssetUrl(ref.storageKey) };
+            }
+            return ref;
+        });
+    }
+
+    if (!hasChanges) return meta;
+    return {
+        ...meta,
+        content: newContent,
+        images: newImages,
+        generationReferences: newGenRefs,
+    };
+}
+
+export function sanitizeNodeForCollab(node: CanvasNodeData): CanvasNodeData {
+    if (!node.metadata) return node;
+    const sanitizedMeta = sanitizeMetadataForCollab(node.metadata);
+    if (sanitizedMeta === node.metadata) return node;
+    return {
+        ...node,
+        metadata: sanitizedMeta,
+    };
+}
+
+export async function uploadNodeAssets(node: CanvasNodeData) {
+    const meta = node.metadata;
+    if (!meta) return;
+
+    if (meta.storageKey) {
+        const blob = await getAnyAssetBlob(meta.storageKey, meta.content);
+        if (blob) {
+            void uploadAssetToCollabServer(meta.storageKey, blob);
+        }
+    }
+
+    if (meta.images) {
+        for (const img of meta.images) {
+            if (img.storageKey) {
+                const blob = await getAnyAssetBlob(img.storageKey, img.content);
+                if (blob) {
+                    void uploadAssetToCollabServer(img.storageKey, blob);
+                }
+            }
+        }
+    }
+
+    if (meta.generationReferences) {
+        for (const ref of meta.generationReferences) {
+            if (ref.storageKey) {
+                const blob = await getAnyAssetBlob(ref.storageKey, ref.url);
+                if (blob) {
+                    void uploadAssetToCollabServer(ref.storageKey, blob);
+                }
+            }
+        }
+    }
+}
+
+export function uploadAllNodesAssets(nodes: CanvasNodeData[]) {
+    for (const node of nodes) {
+        void uploadNodeAssets(node);
+    }
+}
+
 export async function ensureCollabAssetCached(storageKey: string, isMedia = false) {
     if (!storageKey) return;
     try {
-        if (isMedia) {
+        if (isMedia || storageKey.startsWith("video:") || storageKey.startsWith("audio:")) {
             const existing = await getMediaBlob(storageKey);
             if (existing) return;
         } else {
@@ -34,7 +155,7 @@ export async function ensureCollabAssetCached(storageKey: string, isMedia = fals
         const res = await fetch(`/api/collab/assets/${encodedKey}`);
         if (!res.ok) return;
         const blob = await res.blob();
-        if (isMedia) {
+        if (isMedia || storageKey.startsWith("video:") || storageKey.startsWith("audio:")) {
             await setMediaBlob(storageKey, blob);
         } else {
             await setImageBlob(storageKey, blob);
@@ -93,34 +214,21 @@ export function useCanvasCollab({
     const broadcastCanvasSync = useCallback(
         (nodes: CanvasNodeData[], connections: CanvasConnection[], title?: string) => {
             if (role !== "host" || !activeRoomId) return;
+
+            // Upload assets to server
+            uploadAllNodesAssets(nodes);
+
+            // Sanitize nodes so blob URLs are replaced with accessible collab asset URLs
+            const sharedNodes = nodes.map(sanitizeNodeForCollab);
+
             send({
                 type: "sync_canvas",
                 roomId: activeRoomId,
                 clientId,
-                nodes,
+                nodes: sharedNodes,
                 connections,
                 title,
             });
-
-            // Upload any local assets to collab server for viewers to download
-            for (const node of nodes) {
-                if (node.metadata?.storageKey) {
-                    const isMedia = node.type === "video" || node.type === "audio";
-                    const key = node.metadata.storageKey;
-                    (isMedia ? getMediaBlob(key) : getImageBlob(key)).then((blob) => {
-                        if (blob) void uploadAssetToCollabServer(key, blob);
-                    });
-                }
-                if (node.metadata?.images) {
-                    for (const img of node.metadata.images) {
-                        if (img.storageKey) {
-                            getImageBlob(img.storageKey).then((blob) => {
-                                if (blob) void uploadAssetToCollabServer(img.storageKey, blob);
-                            });
-                        }
-                    }
-                }
-            }
         },
         [role, activeRoomId, clientId, send],
     );
@@ -129,11 +237,15 @@ export function useCanvasCollab({
     const broadcastNodesPatch = useCallback(
         (nodes: CanvasNodeData[], connections: CanvasConnection[]) => {
             if (role !== "host" || !activeRoomId) return;
+
+            uploadAllNodesAssets(nodes);
+            const sharedNodes = nodes.map(sanitizeNodeForCollab);
+
             send({
                 type: "patch_nodes",
                 roomId: activeRoomId,
                 clientId,
-                nodes,
+                nodes: sharedNodes,
                 connections,
             });
         },
@@ -144,6 +256,15 @@ export function useCanvasCollab({
     const broadcastGenerationStatus = useCallback(
         (nodeId: string, status: CanvasNodeStatus, errorDetails?: string, metadata?: CanvasNodeMetadata) => {
             if (role !== "host" || !activeRoomId) return;
+
+            if (metadata?.storageKey) {
+                getAnyAssetBlob(metadata.storageKey, metadata.content).then((blob) => {
+                    if (blob) void uploadAssetToCollabServer(metadata.storageKey!, blob);
+                });
+            }
+
+            const sanitizedMeta = metadata ? sanitizeMetadataForCollab(metadata) : undefined;
+
             send({
                 type: "generation_status",
                 roomId: activeRoomId,
@@ -151,17 +272,8 @@ export function useCanvasCollab({
                 nodeId,
                 status,
                 errorDetails,
-                metadata,
+                metadata: sanitizedMeta,
             });
-
-            // If generated an image/media, ensure it's uploaded
-            if (metadata?.storageKey) {
-                const key = metadata.storageKey;
-                const isMedia = metadata.generationMode === "video" || metadata.generationMode === "audio";
-                (isMedia ? getMediaBlob(key) : getImageBlob(key)).then((blob) => {
-                    if (blob) void uploadAssetToCollabServer(key, blob);
-                });
-            }
         },
         [role, activeRoomId, clientId, send],
     );
@@ -217,6 +329,13 @@ export function useCanvasCollab({
                         color: myColor,
                     }),
                 );
+
+                if (role === "host" && getCurrentSnapshot) {
+                    const snap = getCurrentSnapshot();
+                    if (snap?.nodes?.length) {
+                        broadcastCanvasSync(snap.nodes, snap.connections, snap.title);
+                    }
+                }
             };
 
             ws.onmessage = (event) => {
@@ -226,9 +345,10 @@ export function useCanvasCollab({
                         setHostOnline(Boolean(data.isHostOnline));
                         // If viewer and server has a cached snapshot, load it!
                         if (role === "viewer" && data.snapshot?.nodes?.length) {
-                            onRemoteCanvasUpdate?.(data.snapshot.nodes, data.snapshot.connections, data.snapshot.title);
+                            const sanitizedNodes = data.snapshot.nodes.map(sanitizeNodeForCollab);
+                            onRemoteCanvasUpdate?.(sanitizedNodes, data.snapshot.connections, data.snapshot.title);
                             // Preload assets in background
-                            for (const node of data.snapshot.nodes) {
+                            for (const node of sanitizedNodes) {
                                 if (node.metadata?.storageKey) {
                                     void ensureCollabAssetCached(node.metadata.storageKey, node.type === "video" || node.type === "audio");
                                 }
@@ -244,9 +364,10 @@ export function useCanvasCollab({
                         }
                     } else if (data.type === "canvas_updated") {
                         if (role === "viewer") {
-                            onRemoteCanvasUpdate?.(data.nodes || [], data.connections || [], data.title);
+                            const sanitizedNodes = (data.nodes || []).map(sanitizeNodeForCollab);
+                            onRemoteCanvasUpdate?.(sanitizedNodes, data.connections || [], data.title);
                             // Preload assets
-                            for (const node of data.nodes || []) {
+                            for (const node of sanitizedNodes) {
                                 if (node.metadata?.storageKey) {
                                     void ensureCollabAssetCached(node.metadata.storageKey, node.type === "video" || node.type === "audio");
                                 }
@@ -254,8 +375,9 @@ export function useCanvasCollab({
                         }
                     } else if (data.type === "nodes_patched") {
                         if (role === "viewer") {
-                            onRemoteNodesPatch?.(data.nodes || [], data.connections || []);
-                            for (const node of data.nodes || []) {
+                            const sanitizedNodes = (data.nodes || []).map(sanitizeNodeForCollab);
+                            onRemoteNodesPatch?.(sanitizedNodes, data.connections || []);
+                            for (const node of sanitizedNodes) {
                                 if (node.metadata?.storageKey) {
                                     void ensureCollabAssetCached(node.metadata.storageKey, node.type === "video" || node.type === "audio");
                                 }
@@ -263,11 +385,12 @@ export function useCanvasCollab({
                         }
                     } else if (data.type === "node_generation_status") {
                         if (role === "viewer") {
-                            onRemoteGenerationStatus?.(data.nodeId, data.status, data.errorDetails, data.metadata);
-                            if (data.metadata?.storageKey) {
+                            const sanitizedMeta = data.metadata ? sanitizeMetadataForCollab(data.metadata) : undefined;
+                            onRemoteGenerationStatus?.(data.nodeId, data.status, data.errorDetails, sanitizedMeta);
+                            if (sanitizedMeta?.storageKey) {
                                 void ensureCollabAssetCached(
-                                    data.metadata.storageKey,
-                                    data.metadata.generationMode === "video" || data.metadata.generationMode === "audio",
+                                    sanitizedMeta.storageKey,
+                                    sanitizedMeta.generationMode === "video" || sanitizedMeta.generationMode === "audio",
                                 );
                             }
                         }

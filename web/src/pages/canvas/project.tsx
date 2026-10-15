@@ -2186,22 +2186,50 @@ function InfiniteCanvasPage() {
         setNodes((prev) => prev.map((node) => (node.id === nodeId ? applyNodeConfigPatch(node, patch) : node)));
     }, []);
 
-    const downloadNodeImage = useCallback((node: CanvasNodeData) => {
+    const downloadNodeImage = useCallback(async (node: CanvasNodeData) => {
         if ((node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content) return;
         const projectName = safeFileName(currentProject?.title?.trim() || t("canvas.title"));
         const titleOrType = safeFileName(node.title?.trim() || node.type);
         const shortId = node.id.slice(0, 4);
         const ext = node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Audio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.content);
-        saveAs(node.metadata.content, `${projectName}_${titleOrType}_${shortId}.${ext}`);
+        const filename = `${projectName}_${titleOrType}_${shortId}.${ext}`;
+        const contentUrl = node.metadata.content;
+
+        try {
+            if (contentUrl.startsWith("data:")) {
+                saveAs(contentUrl, filename);
+                return;
+            }
+            const res = await fetch(contentUrl);
+            if (!res.ok) throw new Error("fetch failed");
+            const blob = await res.blob();
+            saveAs(blob, filename);
+        } catch {
+            saveAs(contentUrl, filename);
+        }
     }, [currentProject?.title, t]);
 
-    const downloadBatchImage = useCallback((node: CanvasNodeData, imageId: string) => {
+    const downloadBatchImage = useCallback(async (node: CanvasNodeData, imageId: string) => {
         const image = node.metadata?.images?.find((item) => item.id === imageId);
         if (!image?.content) return;
         const projectName = safeFileName(currentProject?.title?.trim() || t("canvas.title"));
         const titleOrType = safeFileName(node.title?.trim() || "image");
         const shortId = image.id.slice(0, 4);
-        saveAs(image.content, `${projectName}_${titleOrType}_${shortId}.${imageExtension(image.content)}`);
+        const filename = `${projectName}_${titleOrType}_${shortId}.${imageExtension(image.content)}`;
+        const contentUrl = image.content;
+
+        try {
+            if (contentUrl.startsWith("data:")) {
+                saveAs(contentUrl, filename);
+                return;
+            }
+            const res = await fetch(contentUrl);
+            if (!res.ok) throw new Error("fetch failed");
+            const blob = await res.blob();
+            saveAs(blob, filename);
+        } catch {
+            saveAs(contentUrl, filename);
+        }
     }, [currentProject?.title, t]);
 
     const captureVideoNodeFrame = useCallback(

@@ -1,5 +1,44 @@
 import { networkInterfaces } from "node:os";
 import { WebSocketServer, WebSocket } from "ws";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const cacheDir = resolve(__dirname, "../.collab-cache");
+try {
+    if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true });
+} catch {}
+
+function safeFileName(key) {
+    return encodeURIComponent(key).replace(/[*?:/]/g, "_");
+}
+
+function saveAssetToDisk(key, buffer, mimeType) {
+    try {
+        const base = resolve(cacheDir, safeFileName(key));
+        writeFileSync(`${base}.bin`, buffer);
+        writeFileSync(`${base}.meta.json`, JSON.stringify({ mimeType }));
+    } catch (e) {
+        console.warn("[CollabServer] Failed to write asset to disk cache:", e);
+    }
+}
+
+function loadAssetFromDisk(key) {
+    try {
+        const base = resolve(cacheDir, safeFileName(key));
+        const binPath = `${base}.bin`;
+        const metaPath = `${base}.meta.json`;
+        if (existsSync(binPath) && existsSync(metaPath)) {
+            const buffer = readFileSync(binPath);
+            const { mimeType } = JSON.parse(readFileSync(metaPath, "utf-8"));
+            return { buffer, mimeType };
+        }
+    } catch (e) {
+        console.warn("[CollabServer] Failed to load asset from disk cache:", e);
+    }
+    return null;
+}
 
 // In-memory rooms cache
 // roomId -> { id, hostId, hostToken, title, nodes: [], connections: [], clients: Map<clientId, Client> }
@@ -7,6 +46,9 @@ const rooms = new Map();
 
 // In-memory assets cache for LAN sharing: storageKey -> { buffer, mimeType }
 const assetsCache = new Map();
+
+// Pending waiters for assets currently uploading: storageKey -> Array<callback>
+const pendingAssetWaiters = new Map();
 
 export function getLocalIpAddress() {
     const nets = networkInterfaces();
@@ -268,28 +310,113 @@ function send(ws, payload) {
     }
 }
 
+function serveAsset(res, req, asset) {
+    const total = asset.buffer.length;
+    const range = req.headers.range;
+
+    if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : total - 1;
+
+        if (isNaN(start) || isNaN(end) || start >= total || end >= total || start > end) {
+            res.writeHead(416, {
+                "Content-Range": `bytes */${total}`,
+                "Access-Control-Allow-Origin": "*",
+            });
+            res.end();
+            return;
+        }
+
+        const chunk = asset.buffer.subarray(start, end + 1);
+        res.writeHead(206, {
+            "Content-Range": `bytes ${start}-${end}/${total}`,
+            "Accept-Ranges": "bytes",
+            "Content-Length": chunk.length,
+            "Content-Type": asset.mimeType || "application/octet-stream",
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=86400",
+        });
+        res.end(chunk);
+    } else {
+        res.writeHead(200, {
+            "Content-Length": total,
+            "Accept-Ranges": "bytes",
+            "Content-Type": asset.mimeType || "application/octet-stream",
+            "Cache-Control": "public, max-age=86400",
+            "Access-Control-Allow-Origin": "*",
+        });
+        res.end(asset.buffer);
+    }
+}
+
 // Middleware for express / connect / Vite dev server
 export function collabHttpMiddleware(req, res, next) {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
     if (url.pathname === "/api/collab/network-ip") {
         res.setHeader("Content-Type", "application/json");
+        res.setHeader("Access-Control-Allow-Origin", "*");
         res.end(JSON.stringify({ ip: getLocalIpAddress() }));
         return;
     }
 
     if (url.pathname.startsWith("/api/collab/assets/")) {
         const key = decodeURIComponent(url.pathname.replace("/api/collab/assets/", ""));
+
+        if (req.method === "OPTIONS") {
+            res.writeHead(204, {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, PUT, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+            });
+            res.end();
+            return;
+        }
+
         if (req.method === "GET") {
-            const asset = assetsCache.get(key);
+            let asset = assetsCache.get(key);
             if (!asset) {
-                res.statusCode = 404;
-                res.end("Asset not found");
+                asset = loadAssetFromDisk(key);
+                if (asset) {
+                    assetsCache.set(key, asset);
+                }
+            }
+
+            if (asset) {
+                serveAsset(res, req, asset);
                 return;
             }
-            res.setHeader("Content-Type", asset.mimeType || "application/octet-stream");
-            res.setHeader("Cache-Control", "public, max-age=86400");
-            res.end(asset.buffer);
+
+            // Asset not available immediately; wait up to 10s for upload to finish
+            let settled = false;
+            const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                res.statusCode = 404;
+                res.setHeader("Access-Control-Allow-Origin", "*");
+                res.end("Asset not found");
+            }, 10000);
+
+            const onArrived = (arrivedAsset) => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                serveAsset(res, req, arrivedAsset);
+            };
+
+            const cleanup = () => {
+                clearTimeout(timer);
+                const list = pendingAssetWaiters.get(key) || [];
+                const idx = list.indexOf(onArrived);
+                if (idx !== -1) list.splice(idx, 1);
+                if (list.length === 0) pendingAssetWaiters.delete(key);
+            };
+
+            const list = pendingAssetWaiters.get(key) || [];
+            list.push(onArrived);
+            pendingAssetWaiters.set(key, list);
             return;
         }
 
@@ -299,8 +426,23 @@ export function collabHttpMiddleware(req, res, next) {
             req.on("end", () => {
                 const buffer = Buffer.concat(chunks);
                 const mimeType = req.headers["content-type"] || "application/octet-stream";
-                assetsCache.set(key, { buffer, mimeType });
+                const asset = { buffer, mimeType };
+                assetsCache.set(key, asset);
+                saveAssetToDisk(key, buffer, mimeType);
+
+                // Notify any pending GET requests waiting for this asset
+                const waiters = pendingAssetWaiters.get(key);
+                if (waiters && waiters.length > 0) {
+                    pendingAssetWaiters.delete(key);
+                    for (const waiter of waiters) {
+                        try {
+                            waiter(asset);
+                        } catch {}
+                    }
+                }
+
                 res.setHeader("Content-Type", "application/json");
+                res.setHeader("Access-Control-Allow-Origin", "*");
                 res.end(JSON.stringify({ success: true, key, size: buffer.length }));
             });
             return;
