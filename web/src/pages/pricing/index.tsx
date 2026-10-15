@@ -445,7 +445,7 @@ export default function PricingPage() {
                             <Button
                                 size="large"
                                 className="w-full !h-11 !font-medium"
-                                onClick={() => openContactModal(isZh ? "1对1 作者全包部署（¥299）" : "1-on-1 Author Deployment (¥299)");}
+                                onClick={() => openContactModal(isZh ? "1对1 作者全包部署（¥299）" : "1-on-1 Author Deployment (¥299)")}
                             >
                                 {isZh ? "预约作者远程服务" : "Book Author Remote Service"}
                             </Button>
