@@ -206,6 +206,8 @@ nginx -t
 
 ## 7. 公网多人实时协同部署
 
+> 详细的协同服务系统架构、systemd 守护进程、Nginx 反代与运维排查手册参见独立文档：`DEPLOY-Collaboration.md`。
+
 当项目部署在公网生产环境（如 `https://canvas.imihoo.com`）时，多人协同的运行架构如下：
 
 ```
