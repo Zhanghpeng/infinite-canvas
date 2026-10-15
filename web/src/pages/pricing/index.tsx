@@ -290,7 +290,7 @@ export default function PricingPage() {
                                         <div>
                                             <span><strong>{isZh ? "AutoDL 云端 + 本地环境部署支持" : "AutoDL Cloud + Local environment deployment support"}</strong>{isZh ? "（要求 最低 Win10 / 显存 > 12G 最佳）" : " (Requires Win10+ / VRAM > 12GB recommended)"}</span>
                                             <div className="mt-1.5 rounded-lg border border-stone-200 bg-stone-50/90 p-2 text-[11px] leading-relaxed text-stone-600 dark:border-stone-800 dark:bg-stone-900/80 dark:text-stone-400">
-                                                {isZh ? <>💡 <strong>本地环境说明：</strong>本地能否跑通大模型由个人显卡配置决定。若电脑显卡显存低于 12G 或系统低于 Win10，可直接无缝切换使用附赠的 AutoDL 云端镜像，兼顾体验。</> : <>💡 <strong>Local Environment:</strong> Running models locally depends on GPU specs. If VRAM < 12GB or system is below Win10, you can seamlessly switch to the included cloud image.</>}
+                                                {isZh ? <>💡 <strong>本地环境说明：</strong>本地能否跑通大模型由个人显卡配置决定。若电脑显卡显存低于 12G 或系统低于 Win10，可直接无缝切换使用附赠的 AutoDL 云端镜像，兼顾体验。</> : <>💡 <strong>Local Environment:</strong> Running models locally depends on GPU specs. If VRAM is below 12GB or system is below Win10, you can seamlessly switch to the included cloud image.</>}
                                             </div>
                                         </div>
                                     </li>
