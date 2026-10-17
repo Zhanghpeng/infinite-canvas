@@ -7,6 +7,7 @@ import {
     type MouseEvent as ReactMouseEvent,
     type WheelEvent as ReactWheelEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { Button, Tooltip } from "antd";
 import {
     Focus,
@@ -17,6 +18,7 @@ import {
     RotateCcw,
     Layers,
     Info,
+    X,
 } from "lucide-react";
 import { parseWorkflowToGraph } from "./dag-layout";
 import { ComfyFlowNode } from "./comfy-flow-node";
@@ -148,6 +150,39 @@ export function ComfyFlowGraph({
         return () => clearTimeout(timer);
     }, [handleFitView]);
 
+    // 监听全屏切换与 Esc 键退出
+    useEffect(() => {
+        if (!isFullscreen) return;
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+                setIsFullscreen(false);
+            }
+        };
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        window.addEventListener("keydown", handleKeyDown);
+        return () => {
+            document.body.style.overflow = prevOverflow;
+            window.removeEventListener("keydown", handleKeyDown);
+        };
+    }, [isFullscreen]);
+
+    // 全屏切换或窗口尺寸变化时重新自适应
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            handleFitView();
+        }, 60);
+        return () => clearTimeout(timer);
+    }, [isFullscreen, handleFitView]);
+
+    useEffect(() => {
+        const handleResize = () => {
+            handleFitView();
+        };
+        window.addEventListener("resize", handleResize);
+        return () => window.removeEventListener("resize", handleResize);
+    }, [handleFitView]);
+
     // 滚轮缩放 (以鼠标指针为锚点)
     const handleWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
         e.preventDefault();
@@ -238,12 +273,14 @@ export function ComfyFlowGraph({
 
     const selectedNodeData = selectedNodeId ? nodesMap.get(selectedNodeId) || null : null;
 
-    return (
+    const graphElement = (
         <div
             ref={containerRef}
-            className={`relative size-full overflow-hidden select-none bg-stone-100/70 dark:bg-stone-950/80 ${
-                isFullscreen ? "fixed inset-0 z-50 bg-background" : ""
-            } ${className}`}
+            className={`relative overflow-hidden select-none bg-stone-100/70 dark:bg-stone-950/80 ${
+                isFullscreen
+                    ? "fixed inset-0 z-[9999] h-screen w-screen bg-stone-100 dark:bg-stone-950"
+                    : `size-full ${className}`
+            }`}
             onWheel={handleWheel}
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleMouseMove}
@@ -298,8 +335,35 @@ export function ComfyFlowGraph({
                 </div>
             </div>
 
+            {/* 全屏退出显著按钮 (若在全屏模式下) */}
+            {isFullscreen && (
+                <div
+                    className="absolute top-3 right-3 z-30 flex items-center gap-2 rounded-xl border border-stone-200/90 bg-white/95 px-3 py-1.5 shadow-lg backdrop-blur-md dark:border-stone-800 dark:bg-stone-900/95"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <span className="text-xs text-stone-500 dark:text-stone-400">按 ESC 键或点击退出</span>
+                    <Button
+                        size="small"
+                        type="primary"
+                        danger
+                        icon={<X className="size-3.5" />}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            setIsFullscreen(false);
+                        }}
+                    >
+                        退出全屏
+                    </Button>
+                </div>
+            )}
+
             {/* 顶部统计状态徽章 */}
-            <div className="absolute top-3 left-3 flex items-center gap-2 rounded-xl border border-stone-200/80 bg-white/90 px-3 py-1.5 text-xs shadow-xs backdrop-blur-md dark:border-stone-800 dark:bg-stone-900/90">
+            <div
+                className="absolute top-3 left-3 z-20 flex items-center gap-2 rounded-xl border border-stone-200/80 bg-white/90 px-3 py-1.5 text-xs shadow-xs backdrop-blur-md dark:border-stone-800 dark:bg-stone-900/90"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+            >
                 <Layers className="size-3.5 text-blue-500" />
                 <span className="font-semibold text-stone-800 dark:text-stone-200">
                     {rawLayout.stats.totalNodes} 个节点
@@ -319,18 +383,23 @@ export function ComfyFlowGraph({
             </div>
 
             {/* 悬浮工具栏 (缩放与控制) */}
-            <div className="absolute bottom-4 right-4 flex items-center gap-1 rounded-xl border border-stone-200/90 bg-white/95 p-1 shadow-lg backdrop-blur-md dark:border-stone-800 dark:bg-stone-900/95">
+            <div
+                className="absolute bottom-4 right-4 z-20 flex items-center gap-1 rounded-xl border border-stone-200/90 bg-white/95 p-1 shadow-lg backdrop-blur-md dark:border-stone-800 dark:bg-stone-900/95"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+            >
                 <Tooltip title="缩小 (滚轮下滑)">
                     <Button
                         size="small"
                         type="text"
                         icon={<Minus className="size-3.5" />}
-                        onClick={() =>
+                        onClick={(e) => {
+                            e.stopPropagation();
                             setViewport((prev) => ({
                                 ...prev,
                                 zoom: Math.max(Number((prev.zoom - 0.1).toFixed(2)), 0.2),
-                            }))
-                        }
+                            }));
+                        }}
                     />
                 </Tooltip>
 
@@ -343,23 +412,27 @@ export function ComfyFlowGraph({
                         size="small"
                         type="text"
                         icon={<Plus className="size-3.5" />}
-                        onClick={() =>
+                        onClick={(e) => {
+                            e.stopPropagation();
                             setViewport((prev) => ({
                                 ...prev,
                                 zoom: Math.min(Number((prev.zoom + 0.1).toFixed(2)), 2.5),
-                            }))
-                        }
+                            }));
+                        }}
                     />
                 </Tooltip>
 
                 <div className="h-4 w-px bg-stone-200 dark:bg-stone-800 mx-0.5" />
 
-                <Tooltip title="自适应适应画布">
+                <Tooltip title="自适应居中">
                     <Button
                         size="small"
                         type="text"
                         icon={<Focus className="size-3.5" />}
-                        onClick={handleFitView}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            handleFitView();
+                        }}
                     />
                 </Tooltip>
 
@@ -368,18 +441,24 @@ export function ComfyFlowGraph({
                         size="small"
                         type="text"
                         icon={<RotateCcw className="size-3.5" />}
-                        onClick={() => setViewport({ x: 60, y: 60, zoom: 1.0 })}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            setViewport({ x: 60, y: 60, zoom: 1.0 });
+                        }}
                     />
                 </Tooltip>
 
                 <div className="h-4 w-px bg-stone-200 dark:bg-stone-800 mx-0.5" />
 
-                <Tooltip title={isFullscreen ? "退出全屏" : "全屏放大审查"}>
+                <Tooltip title={isFullscreen ? "退出全屏 (ESC)" : "全屏放大审查"}>
                     <Button
                         size="small"
                         type="text"
-                        icon={isFullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
-                        onClick={() => setIsFullscreen((prev) => !prev)}
+                        icon={isFullscreen ? <Minimize2 className="size-3.5 text-blue-500" /> : <Maximize2 className="size-3.5" />}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            setIsFullscreen((prev) => !prev);
+                        }}
                     />
                 </Tooltip>
             </div>
@@ -397,5 +476,16 @@ export function ComfyFlowGraph({
                 onReloadModels={onReloadModels}
             />
         </div>
+    );
+
+    return isFullscreen ? (
+        <>
+            <div className={`size-full min-h-[300px] flex items-center justify-center bg-stone-50/50 text-xs text-stone-400 dark:bg-stone-900/30 ${className}`}>
+                全屏放大审查中 (按 ESC 键或右上角退出)
+            </div>
+            {createPortal(graphElement, document.body)}
+        </>
+    ) : (
+        graphElement
     );
 }
