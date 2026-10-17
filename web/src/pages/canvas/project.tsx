@@ -1147,16 +1147,15 @@ function InfiniteCanvasPage() {
 
     const confirmDeleteNodes = useCallback((ids: Set<string>) => {
         if (isViewerRef.current || !ids.size) return;
-        setDeleteConfirmNodes(ids);
+        setDeleteConfirmNodes(new Set(ids));
     }, []);
 
     const handleConfirmDeleteNodes = useCallback(() => {
-        if (!deleteConfirmNodes || !deleteConfirmNodes.size) {
-            setDeleteConfirmNodes(null);
-            return;
-        }
-        deleteNodes(deleteConfirmNodes);
+        const ids = deleteConfirmNodes;
         setDeleteConfirmNodes(null);
+        if (ids && ids.size) {
+            deleteNodes(ids);
+        }
     }, [deleteConfirmNodes, deleteNodes]);
 
     const deleteConnection = useCallback((connectionId: string) => {
@@ -5072,30 +5071,50 @@ function InfiniteCanvasPage() {
                     <p className="text-sm opacity-60">{t("canvas.projectPage.clearDescription")}</p>
                 </Modal>
 
-                <Modal
-                    title={
-                        (deleteConfirmNodes?.size || 0) > 1
-                            ? t("canvas.node.confirmDeleteMultipleTitle", { count: deleteConfirmNodes?.size || 0 })
-                            : t("canvas.node.confirmDeleteSingleTitle")
-                    }
-                    open={Boolean(deleteConfirmNodes)}
-                    centered
-                    onCancel={() => setDeleteConfirmNodes(null)}
-                    footer={
-                        <>
-                            <Button onClick={() => setDeleteConfirmNodes(null)}>{t("common.cancel")}</Button>
-                            <Button danger type="primary" onClick={handleConfirmDeleteNodes}>
-                                {t("common.delete")}
-                            </Button>
-                        </>
-                    }
-                >
-                    <p className="text-sm opacity-60">
-                        {(deleteConfirmNodes?.size || 0) > 1
-                            ? t("canvas.node.confirmDeleteMultipleContent", { count: deleteConfirmNodes?.size || 0 })
-                            : t("canvas.node.confirmDeleteSingleContent")}
-                    </p>
-                </Modal>
+                {deleteConfirmNodes ? (
+                    <Modal
+                        title={
+                            deleteConfirmNodes.size > 1
+                                ? t("canvas.node.confirmDeleteMultipleTitle", { count: deleteConfirmNodes.size })
+                                : t("canvas.node.confirmDeleteSingleTitle")
+                        }
+                        open={true}
+                        centered
+                        destroyOnHidden
+                        onCancel={(e) => {
+                            e?.stopPropagation();
+                            setDeleteConfirmNodes(null);
+                        }}
+                        footer={
+                            <>
+                                <Button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setDeleteConfirmNodes(null);
+                                    }}
+                                >
+                                    {t("common.cancel")}
+                                </Button>
+                                <Button
+                                    danger
+                                    type="primary"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleConfirmDeleteNodes();
+                                    }}
+                                >
+                                    {t("common.delete")}
+                                </Button>
+                            </>
+                        }
+                    >
+                        <p className="text-sm opacity-60">
+                            {deleteConfirmNodes.size > 1
+                                ? t("canvas.node.confirmDeleteMultipleContent", { count: deleteConfirmNodes.size })
+                                : t("canvas.node.confirmDeleteSingleContent")}
+                        </p>
+                    </Modal>
+                ) : null}
 
                 <AssetPickerModal open={assetPickerOpen} onInsert={handleAssetInsert} onClose={() => setAssetPickerOpen(false)} />
                 <CanvasCollabModal
