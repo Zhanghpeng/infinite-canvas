@@ -7,6 +7,18 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Canvas Nodes Multi-Delete & Confirmation Verification (画布节点多选右键删除与确认弹窗验证):
+  - **框选多节点右键删除与弹窗**:
+    - 在画布上通过左键拖拽框选多个节点（例如 3 个节点）；
+    - 在其中任意一个选中的节点上右键，点击菜单中的「删除」；
+    - 验证弹出确认弹窗「确定删除选中的 3 个节点？」，描述为「删除后选中的 3 个节点及关联的连线将被移除。」；
+    - 点击「取消」，验证弹窗关闭且所有节点完好保留；
+    - 再次右键点击「删除」并点击「删除」确认按钮，验证所有框选节点被全部批量移除，关联连线同步清理。
+  - **单节点右键删除与工具栏删除**:
+    - 单选单个节点右键点击「删除」，验证弹出「确定删除该节点？」确认弹窗；
+    - 框选多个节点后点击顶部工具栏上的删除垃圾桶按钮，验证同样弹出确认弹窗；
+    - 框选节点后按键盘 Delete / Backspace 键，验证依然保持直接极速删除，无弹窗阻断。
+
 - Batch Images Split Verification (多图节点右键拆分为独立节点验证):
   - **右键拆分菜单与校验**:
     - 在画布上选中一个配置为生成多张（例如 3 张）的图片节点，等待图片全部生成完毕；

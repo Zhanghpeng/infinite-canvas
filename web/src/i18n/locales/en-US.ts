@@ -520,6 +520,10 @@ export default {
             "splitBatchImages": "Split into independent nodes",
             "confirmSplitTitle": "Confirm Split",
             "confirmSplitBatchContent": "Split the current {{count}} images into independent nodes?",
+            "confirmDeleteSingleTitle": "Delete this node?",
+            "confirmDeleteMultipleTitle": "Delete {{count}} selected nodes?",
+            "confirmDeleteSingleContent": "This node and its associated connections will be removed.",
+            "confirmDeleteMultipleContent": "The selected {{count}} nodes and their associated connections will be removed.",
             "batchSplitNotReady": "Images are still generating or have errors. Please wait until all are complete."
         },
         "videoFrames": {

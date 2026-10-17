@@ -1144,6 +1144,25 @@ function InfiniteCanvasPage() {
         [chatSessions, cleanupCanvasFiles, projectId],
     );
 
+    const confirmDeleteNodes = useCallback(
+        (ids: Set<string>) => {
+            if (isViewerRef.current || !ids.size) return;
+            const count = ids.size;
+            modal.confirm({
+                title: count > 1 ? t("canvas.node.confirmDeleteMultipleTitle", { count }) : t("canvas.node.confirmDeleteSingleTitle"),
+                content: count > 1 ? t("canvas.node.confirmDeleteMultipleContent", { count }) : t("canvas.node.confirmDeleteSingleContent"),
+                okText: t("common.delete"),
+                cancelText: t("common.cancel"),
+                okButtonProps: { danger: true },
+                centered: true,
+                onOk: () => {
+                    deleteNodes(ids);
+                },
+            });
+        },
+        [deleteNodes, modal, t],
+    );
+
     const deleteConnection = useCallback((connectionId: string) => {
         if (isViewerRef.current) return;
         setConnections((prev) => prev.filter((conn) => conn.id !== connectionId));
@@ -4862,7 +4881,7 @@ function InfiniteCanvasPage() {
                     onSeparateAudio={handleSeparateAudio}
                     onRetry={handleNodeRetry}
                     onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}
-                    onDelete={(node) => deleteNodes(new Set([node.id]))}
+                    onDelete={(node) => confirmDeleteNodes(new Set([node.id]))}
                     onSelectGroupChildren={(node) => handleSelectGroupChildren(node.id)}
                     onCaptureGroupNodes={(node) => handleCaptureGroupNodes(node.id)}
                     onFitGroup={(node) => handleFitGroup(node.id)}
@@ -4906,7 +4925,7 @@ function InfiniteCanvasPage() {
                         onUndo={undoCanvas}
                         onRedo={redoCanvas}
                         onUpload={() => handleUploadRequest()}
-                        onDelete={() => deleteNodes(new Set(selectedNodeIds))}
+                        onDelete={() => confirmDeleteNodes(new Set(selectedNodeIds))}
                         onClear={() => setClearConfirmOpen(true)}
                         onCanvasToolChange={setCanvasTool}
                         onBackgroundModeChange={setBackgroundMode}
@@ -4960,7 +4979,10 @@ function InfiniteCanvasPage() {
                         }}
                         onDelete={() => {
                             if (contextMenu.type === "node") {
-                                deleteNodes(new Set([contextMenu.nodeId]));
+                                const targetIds = selectedNodeIds.has(contextMenu.nodeId)
+                                    ? new Set(selectedNodeIds)
+                                    : new Set([contextMenu.nodeId]);
+                                confirmDeleteNodes(targetIds);
                             } else {
                                 deleteConnection(contextMenu.connectionId);
                             }

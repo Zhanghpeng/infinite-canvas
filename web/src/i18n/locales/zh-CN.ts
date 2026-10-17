@@ -520,6 +520,10 @@ export default {
             "splitBatchImages": "拆分为独立节点",
             "confirmSplitTitle": "拆分确认",
             "confirmSplitBatchContent": "是否将当前 {{count}} 张图片拆分为独立节点？",
+            "confirmDeleteSingleTitle": "确定删除该节点？",
+            "confirmDeleteMultipleTitle": "确定删除选中的 {{count}} 个节点？",
+            "confirmDeleteSingleContent": "删除后该节点及关联的连线将被移除。",
+            "confirmDeleteMultipleContent": "删除后选中的 {{count}} 个节点及关联的连线将被移除。",
             "batchSplitNotReady": "图片正在生成或存在失败项，请等待全部完成后再拆分"
         },
         "videoFrames": {
