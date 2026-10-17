@@ -269,6 +269,7 @@ function InfiniteCanvasPage() {
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
     const [showImageInfo, setShowImageInfo] = useState(false);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+    const [deleteConfirmNodes, setDeleteConfirmNodes] = useState<Set<string> | null>(null);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [projectLoaded, setProjectLoaded] = useState(false);
     const [toolbarNodeId, setToolbarNodeId] = useState<string | null>(null);
@@ -1144,24 +1145,19 @@ function InfiniteCanvasPage() {
         [chatSessions, cleanupCanvasFiles, projectId],
     );
 
-    const confirmDeleteNodes = useCallback(
-        (ids: Set<string>) => {
-            if (isViewerRef.current || !ids.size) return;
-            const count = ids.size;
-            modal.confirm({
-                title: count > 1 ? t("canvas.node.confirmDeleteMultipleTitle", { count }) : t("canvas.node.confirmDeleteSingleTitle"),
-                content: count > 1 ? t("canvas.node.confirmDeleteMultipleContent", { count }) : t("canvas.node.confirmDeleteSingleContent"),
-                okText: t("common.delete"),
-                cancelText: t("common.cancel"),
-                okButtonProps: { danger: true },
-                centered: true,
-                onOk: () => {
-                    deleteNodes(ids);
-                },
-            });
-        },
-        [deleteNodes, modal, t],
-    );
+    const confirmDeleteNodes = useCallback((ids: Set<string>) => {
+        if (isViewerRef.current || !ids.size) return;
+        setDeleteConfirmNodes(ids);
+    }, []);
+
+    const handleConfirmDeleteNodes = useCallback(() => {
+        if (!deleteConfirmNodes || !deleteConfirmNodes.size) {
+            setDeleteConfirmNodes(null);
+            return;
+        }
+        deleteNodes(deleteConfirmNodes);
+        setDeleteConfirmNodes(null);
+    }, [deleteConfirmNodes, deleteNodes]);
 
     const deleteConnection = useCallback((connectionId: string) => {
         if (isViewerRef.current) return;
@@ -5074,6 +5070,31 @@ function InfiniteCanvasPage() {
                     }
                 >
                     <p className="text-sm opacity-60">{t("canvas.projectPage.clearDescription")}</p>
+                </Modal>
+
+                <Modal
+                    title={
+                        (deleteConfirmNodes?.size || 0) > 1
+                            ? t("canvas.node.confirmDeleteMultipleTitle", { count: deleteConfirmNodes?.size || 0 })
+                            : t("canvas.node.confirmDeleteSingleTitle")
+                    }
+                    open={Boolean(deleteConfirmNodes)}
+                    centered
+                    onCancel={() => setDeleteConfirmNodes(null)}
+                    footer={
+                        <>
+                            <Button onClick={() => setDeleteConfirmNodes(null)}>{t("common.cancel")}</Button>
+                            <Button danger type="primary" onClick={handleConfirmDeleteNodes}>
+                                {t("common.delete")}
+                            </Button>
+                        </>
+                    }
+                >
+                    <p className="text-sm opacity-60">
+                        {(deleteConfirmNodes?.size || 0) > 1
+                            ? t("canvas.node.confirmDeleteMultipleContent", { count: deleteConfirmNodes?.size || 0 })
+                            : t("canvas.node.confirmDeleteSingleContent")}
+                    </p>
                 </Modal>
 
                 <AssetPickerModal open={assetPickerOpen} onInsert={handleAssetInsert} onClose={() => setAssetPickerOpen(false)} />
