@@ -7,8 +7,7 @@ import {
     type MouseEvent as ReactMouseEvent,
     type WheelEvent as ReactWheelEvent,
 } from "react";
-import { createPortal } from "react-dom";
-import { Button, Tooltip } from "antd";
+import { Button, Modal, Tooltip } from "antd";
 import {
     Focus,
     Maximize2,
@@ -17,7 +16,6 @@ import {
     Minus,
     RotateCcw,
     Layers,
-    Info,
     X,
 } from "lucide-react";
 import { parseWorkflowToGraph } from "./dag-layout";
@@ -27,21 +25,25 @@ import { ComfyFlowDrawer } from "./comfy-flow-drawer";
 import type { ComfyFlowNodeData } from "./comfy-flow-types";
 import type { ComfyuiModelItem, ComfyuiWorkflowJson } from "@/services/api/comfyui";
 
-interface ComfyFlowGraphProps {
+interface ComfyFlowCanvasProps {
     workflowJson: ComfyuiWorkflowJson;
     modelsMap?: Record<string, { loading: boolean; error?: string; items: ComfyuiModelItem[] }>;
     onModelChange?: (nodeId: string, inputKey: string, nextValue: string) => void;
     onReloadModels?: (category: string) => void;
     className?: string;
+    isFullscreen: boolean;
+    onToggleFullscreen: () => void;
 }
 
-export function ComfyFlowGraph({
+function ComfyFlowCanvas({
     workflowJson,
     modelsMap,
     onModelChange,
     onReloadModels,
     className = "",
-}: ComfyFlowGraphProps) {
+    isFullscreen,
+    onToggleFullscreen,
+}: ComfyFlowCanvasProps) {
     const containerRef = useRef<HTMLDivElement>(null);
 
     // 解析 DAG 布局
@@ -102,7 +104,6 @@ export function ComfyFlowGraph({
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
-    const [isFullscreen, setIsFullscreen] = useState(false);
 
     // 交互拖拽状态 (画布平移 / 节点拖拽)
     const dragStateRef = useRef<{
@@ -144,37 +145,13 @@ export function ComfyFlowGraph({
         });
     }, [rawLayout]);
 
-    // 初始化时自动 Fit View
+    // 初始化以及容器尺寸准备就绪时自动 Fit View
     useEffect(() => {
         const timer = setTimeout(handleFitView, 60);
         return () => clearTimeout(timer);
     }, [handleFitView]);
 
-    // 监听全屏切换与 Esc 键退出
-    useEffect(() => {
-        if (!isFullscreen) return;
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === "Escape") {
-                setIsFullscreen(false);
-            }
-        };
-        const prevOverflow = document.body.style.overflow;
-        document.body.style.overflow = "hidden";
-        window.addEventListener("keydown", handleKeyDown);
-        return () => {
-            document.body.style.overflow = prevOverflow;
-            window.removeEventListener("keydown", handleKeyDown);
-        };
-    }, [isFullscreen]);
-
-    // 全屏切换或窗口尺寸变化时重新自适应
-    useEffect(() => {
-        const timer = setTimeout(() => {
-            handleFitView();
-        }, 60);
-        return () => clearTimeout(timer);
-    }, [isFullscreen, handleFitView]);
-
+    // 窗口尺寸变化时重新自适应
     useEffect(() => {
         const handleResize = () => {
             handleFitView();
@@ -241,7 +218,12 @@ export function ComfyFlowGraph({
                 x: e.clientX - state.startX,
                 y: e.clientY - state.startY,
             }));
-        } else if (state.isDraggingNode && state.targetNodeId && state.nodeInitialX !== undefined && state.nodeInitialY !== undefined) {
+        } else if (
+            state.isDraggingNode &&
+            state.targetNodeId &&
+            state.nodeInitialX !== undefined &&
+            state.nodeInitialY !== undefined
+        ) {
             const dx = (e.clientX - state.startX) / viewport.zoom;
             const dy = (e.clientY - state.startY) / viewport.zoom;
             const newX = Math.round(state.nodeInitialX + dx);
@@ -273,14 +255,10 @@ export function ComfyFlowGraph({
 
     const selectedNodeData = selectedNodeId ? nodesMap.get(selectedNodeId) || null : null;
 
-    const graphElement = (
+    return (
         <div
             ref={containerRef}
-            className={`relative overflow-hidden select-none bg-stone-100/70 dark:bg-stone-950/80 ${
-                isFullscreen
-                    ? "fixed inset-0 z-[9999] h-screen w-screen bg-stone-100 dark:bg-stone-950"
-                    : `size-full ${className}`
-            }`}
+            className={`relative size-full overflow-hidden select-none bg-stone-100/70 dark:bg-stone-950/80 ${className}`}
             onWheel={handleWheel}
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleMouseMove}
@@ -335,7 +313,7 @@ export function ComfyFlowGraph({
                 </div>
             </div>
 
-            {/* 全屏退出显著按钮 (若在全屏模式下) */}
+            {/* 全屏退出按钮 (仅在全屏模态框内显示) */}
             {isFullscreen && (
                 <div
                     className="absolute top-3 right-3 z-30 flex items-center gap-2 rounded-xl border border-stone-200/90 bg-white/95 px-3 py-1.5 shadow-lg backdrop-blur-md dark:border-stone-800 dark:bg-stone-900/95"
@@ -350,7 +328,7 @@ export function ComfyFlowGraph({
                         icon={<X className="size-3.5" />}
                         onClick={(e) => {
                             e.stopPropagation();
-                            setIsFullscreen(false);
+                            onToggleFullscreen();
                         }}
                     >
                         退出全屏
@@ -457,7 +435,7 @@ export function ComfyFlowGraph({
                         icon={isFullscreen ? <Minimize2 className="size-3.5 text-blue-500" /> : <Maximize2 className="size-3.5" />}
                         onClick={(e) => {
                             e.stopPropagation();
-                            setIsFullscreen((prev) => !prev);
+                            onToggleFullscreen();
                         }}
                     />
                 </Tooltip>
@@ -477,15 +455,73 @@ export function ComfyFlowGraph({
             />
         </div>
     );
+}
 
-    return isFullscreen ? (
+export interface ComfyFlowGraphProps {
+    workflowJson: ComfyuiWorkflowJson;
+    modelsMap?: Record<string, { loading: boolean; error?: string; items: ComfyuiModelItem[] }>;
+    onModelChange?: (nodeId: string, inputKey: string, nextValue: string) => void;
+    onReloadModels?: (category: string) => void;
+    className?: string;
+}
+
+export function ComfyFlowGraph({
+    workflowJson,
+    modelsMap,
+    onModelChange,
+    onReloadModels,
+    className = "",
+}: ComfyFlowGraphProps) {
+    const [isFullscreen, setIsFullscreen] = useState(false);
+
+    return (
         <>
-            <div className={`size-full min-h-[300px] flex items-center justify-center bg-stone-50/50 text-xs text-stone-400 dark:bg-stone-900/30 ${className}`}>
-                全屏放大审查中 (按 ESC 键或右上角退出)
-            </div>
-            {createPortal(graphElement, document.body)}
+            {/* 常规嵌入式画布（永不消失，不展示任何遮挡占位符） */}
+            <ComfyFlowCanvas
+                workflowJson={workflowJson}
+                modelsMap={modelsMap}
+                onModelChange={onModelChange}
+                onReloadModels={onReloadModels}
+                className={className}
+                isFullscreen={false}
+                onToggleFullscreen={() => setIsFullscreen(true)}
+            />
+
+            {/* 全屏放大审查模态窗口（100vw x 100vh，原生 Ant Design Modal 顶级挂载） */}
+            <Modal
+                open={isFullscreen}
+                onCancel={() => setIsFullscreen(false)}
+                footer={null}
+                width="100vw"
+                style={{ top: 0, padding: 0, maxWidth: "100vw", margin: 0 }}
+                styles={{
+                    content: {
+                        height: "100vh",
+                        padding: 0,
+                        borderRadius: 0,
+                        overflow: "hidden",
+                    },
+                    body: {
+                        height: "100vh",
+                        padding: 0,
+                        overflow: "hidden",
+                    },
+                }}
+                destroyOnClose
+                closeIcon={null}
+            >
+                <div className="relative size-full overflow-hidden bg-stone-100 dark:bg-stone-950">
+                    <ComfyFlowCanvas
+                        workflowJson={workflowJson}
+                        modelsMap={modelsMap}
+                        onModelChange={onModelChange}
+                        onReloadModels={onReloadModels}
+                        className="size-full"
+                        isFullscreen={true}
+                        onToggleFullscreen={() => setIsFullscreen(false)}
+                    />
+                </div>
+            </Modal>
         </>
-    ) : (
-        graphElement
     );
 }
