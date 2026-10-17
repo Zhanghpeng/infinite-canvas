@@ -7,6 +7,18 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Batch Images Split Verification (多图节点右键拆分为独立节点验证):
+  - **右键拆分菜单与校验**:
+    - 在画布上选中一个配置为生成多张（例如 3 张）的图片节点，等待图片全部生成完毕；
+    - 右键点击该多图节点，验证上下文菜单中出现「拆分为独立节点」项；
+    - 若图片尚未全部生成完成或存在失败项时点击，验证弹出警示「图片正在生成或存在失败项，请等待全部完成后再拆分」；
+  - **确认弹窗与拆分排布**:
+    - 点击「拆分为独立节点」，验证弹出极简确认弹窗「是否将当前 3 张图片拆分为独立节点？」，包含「确定」与「取消」按钮；
+    - 点击「取消」，弹窗关闭，画布无变化；
+    - 点击「确定」，验证多图中的每张图片分别拆分为独立的图片节点，在原节点右侧按竖列自上而下对齐排列，垂直间距为 24px；
+    - 验证新节点标题自动追加序号（如「原标题 #1」、「原标题 #2」、「原标题 #3」），并完整保留原始 prompt、model、size、seed、channelId、workflowId 等参数；
+    - 验证新节点为纯净独立节点，不包含原节点的接入连线或引出连线；原多图节点保持不变且处于选中状态，无额外成功弹窗打扰。
+
 - Full-Page Internationalization (i18n) Verification (全站页面中英双语国际化支持验证):
   - **Workflows Page i18n (/workflows 工作流中心国际化)**:
     - 切换顶部语言选择为 English；

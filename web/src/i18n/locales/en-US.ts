@@ -515,7 +515,11 @@ export default {
             "capturedNodesSuccess": "Captured {{count}} nodes into group",
             "noNewNodesCaptured": "No new enclosed nodes found",
             "fitGroupSuccess": "Fit group to content",
-            "noGroupChildren": "No children in group"
+            "noGroupChildren": "No children in group",
+            "splitBatchImages": "Split into independent nodes",
+            "confirmSplitTitle": "Confirm Split",
+            "confirmSplitBatchContent": "Split the current {{count}} images into independent nodes?",
+            "batchSplitNotReady": "Images are still generating or have errors. Please wait until all are complete."
         },
         "videoFrames": {
             "first": "Capture first frame",

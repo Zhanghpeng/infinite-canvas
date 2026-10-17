@@ -515,7 +515,11 @@ export default {
             "capturedNodesSuccess": "已吸附 {{count}} 个框内节点入组",
             "noNewNodesCaptured": "未发现新的框内节点",
             "fitGroupSuccess": "已自适应调整组尺寸",
-            "noGroupChildren": "组内暂无子节点"
+            "noGroupChildren": "组内暂无子节点",
+            "splitBatchImages": "拆分为独立节点",
+            "confirmSplitTitle": "拆分确认",
+            "confirmSplitBatchContent": "是否将当前 {{count}} 张图片拆分为独立节点？",
+            "batchSplitNotReady": "图片正在生成或存在失败项，请等待全部完成后再拆分"
         },
         "videoFrames": {
             "first": "截取首帧",

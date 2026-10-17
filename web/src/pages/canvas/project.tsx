@@ -2194,6 +2194,69 @@ function InfiniteCanvasPage() {
         setDialogNodeId(id);
     }, []);
 
+    const handleSplitBatchImages = useCallback(
+        (node: CanvasNodeData) => {
+            setContextMenu(null);
+            const images = node.metadata?.images || [];
+            if (images.length <= 1) return;
+            const allSuccess = images.every((img) => img.status === NODE_STATUS_SUCCESS && Boolean(img.content));
+            if (!allSuccess) {
+                message.warning(t("canvas.node.batchSplitNotReady"));
+                return;
+            }
+
+            modal.confirm({
+                title: t("canvas.node.confirmSplitTitle"),
+                content: t("canvas.node.confirmSplitBatchContent", { count: images.length }),
+                okText: t("common.confirm"),
+                cancelText: t("common.cancel"),
+                centered: true,
+                onOk: () => {
+                    const startX = node.position.x + node.width + 96;
+                    const gap = 24;
+                    const newNodes: CanvasNodeData[] = images.map((img, index) => {
+                        const childId = nanoid();
+                        return {
+                            id: childId,
+                            type: CanvasNodeType.Image,
+                            title: `${node.title || t("assets.kinds.image")} #${index + 1}`,
+                            position: {
+                                x: startX,
+                                y: node.position.y + index * (node.height + gap),
+                            },
+                            width: node.width,
+                            height: node.height,
+                            metadata: {
+                                content: img.content,
+                                storageKey: img.storageKey,
+                                naturalWidth: img.naturalWidth,
+                                naturalHeight: img.naturalHeight,
+                                bytes: img.bytes,
+                                mimeType: img.mimeType,
+                                status: NODE_STATUS_SUCCESS,
+                                prompt: node.metadata?.prompt,
+                                generationType: node.metadata?.generationType,
+                                model: node.metadata?.model,
+                                size: node.metadata?.size,
+                                quality: node.metadata?.quality,
+                                ...(img.seed !== undefined ? { seed: img.seed } : node.metadata?.seed !== undefined ? { seed: node.metadata.seed } : {}),
+                                channelId: node.metadata?.channelId,
+                                workflowId: node.metadata?.workflowId,
+                                effectivePrompt: node.metadata?.effectivePrompt,
+                                background: node.metadata?.background,
+                            },
+                        };
+                    });
+
+                    setNodes((prev) => [...prev, ...newNodes]);
+                    setSelectedNodeIds(new Set([node.id]));
+                    setSelectedConnectionId(null);
+                },
+            });
+        },
+        [message, modal, t],
+    );
+
     const handleNodePromptChange = useCallback((nodeId: string, prompt: string) => {
         setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, prompt } } : node)));
     }, []);
@@ -4861,10 +4924,14 @@ function InfiniteCanvasPage() {
                         canCaptureVideoFrame={contextMenuNode?.type === CanvasNodeType.Video && Boolean(contextMenuNode.metadata?.content)}
                         isGroupNode={contextMenuNode?.type === CanvasNodeType.Group}
                         canGroupSelection={selectedNodeIds.size > 1 || (selectedNodeIds.size === 1 && contextMenuNode?.type !== CanvasNodeType.Group)}
+                        canSplitBatchImages={contextMenuNode?.type === CanvasNodeType.Image && (contextMenuNode.metadata?.images?.length || 0) > 1}
                         onClose={() => setContextMenu(null)}
                         onCaptureVideoFrame={(position) => {
                             if (contextMenu.type !== "node") return;
                             void captureVideoNodeFrame(contextMenu.nodeId, position);
+                        }}
+                        onSplitBatchImages={() => {
+                            if (contextMenuNode) handleSplitBatchImages(contextMenuNode);
                         }}
                         onDuplicate={() => {
                             if (contextMenu.type !== "node") return;
