@@ -40,6 +40,53 @@ export const ComfyFlowConnections = memo(function ComfyFlowConnections({
 }: ComfyFlowConnectionsProps) {
     const hasSelection = Boolean(selectedNodeId);
 
+    // 计算当前选中节点的传递闭包（直接相连的边以及全链路血缘连线）
+    const { directEdgeIds, lineageEdgeIds } = useMemo(() => {
+        if (!selectedNodeId) {
+            return { directEdgeIds: new Set<string>(), lineageEdgeIds: new Set<string>() };
+        }
+
+        const direct = new Set<string>();
+        const lineage = new Set<string>();
+
+        // 1-hop 直接连线
+        for (const e of edges) {
+            if (e.fromNodeId === selectedNodeId || e.toNodeId === selectedNodeId) {
+                direct.add(e.id);
+            }
+        }
+
+        // 递归上游溯源 (Ancestors)
+        const upstreamNodes = new Set<string>([selectedNodeId]);
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const e of edges) {
+                if (upstreamNodes.has(e.toNodeId) && !upstreamNodes.has(e.fromNodeId)) {
+                    upstreamNodes.add(e.fromNodeId);
+                    lineage.add(e.id);
+                    changed = true;
+                }
+            }
+        }
+
+        // 递归下游追踪 (Descendants)
+        const downstreamNodes = new Set<string>([selectedNodeId]);
+        changed = true;
+        while (changed) {
+            changed = false;
+            for (const e of edges) {
+                if (downstreamNodes.has(e.fromNodeId) && !downstreamNodes.has(e.toNodeId)) {
+                    downstreamNodes.add(e.toNodeId);
+                    lineage.add(e.id);
+                    changed = true;
+                }
+            }
+        }
+
+        return { directEdgeIds: direct, lineageEdgeIds: lineage };
+    }, [edges, selectedNodeId]);
+
     const renderedPaths = useMemo(() => {
         return edges.map((edge) => {
             const fromNode = nodesMap.get(edge.fromNodeId);
@@ -58,19 +105,20 @@ export const ComfyFlowConnections = memo(function ComfyFlowConnections({
             const curvature = Math.max(dx * 0.45, 40);
             const pathD = `M ${startX} ${startY} C ${startX + curvature} ${startY}, ${endX - curvature} ${endY}, ${endX} ${endY}`;
 
-            const isRelatedToSelection =
-                selectedNodeId === edge.fromNodeId || selectedNodeId === edge.toNodeId;
+            const isDirect = directEdgeIds.has(edge.id);
+            const isLineage = lineageEdgeIds.has(edge.id);
             const isHovered = hoveredEdgeId === edge.id;
 
-            const baseColor = getDataTypeColor(edge.dataType);
-            const strokeColor = isHovered || isRelatedToSelection ? baseColor : baseColor;
-            const strokeWidth = isHovered ? 3.5 : isRelatedToSelection ? 3 : 2;
+            const strokeColor = getDataTypeColor(edge.dataType);
+            const strokeWidth = isHovered ? 3.5 : isDirect ? 3.5 : isLineage ? 2.5 : 1.8;
             const strokeOpacity = hasSelection
-                ? isRelatedToSelection
-                    ? 1
-                    : 0.18
+                ? isDirect
+                    ? 1.0
+                    : isLineage
+                    ? 0.85
+                    : 0.12
                 : isHovered
-                ? 1
+                ? 1.0
                 : 0.72;
 
             return (
@@ -98,13 +146,13 @@ export const ComfyFlowConnections = memo(function ComfyFlowConnections({
                         style={{
                             pointerEvents: "none",
                             transition: "stroke-opacity 0.2s ease, stroke-width 0.2s ease",
-                            filter: isRelatedToSelection || isHovered ? `drop-shadow(0 0 6px ${baseColor}aa)` : undefined,
+                            filter: isDirect || isHovered ? `drop-shadow(0 0 6px ${strokeColor}aa)` : undefined,
                         }}
                     />
                 </g>
             );
         });
-    }, [edges, nodesMap, selectedNodeId, hoveredEdgeId, hasSelection, onEdgeHover]);
+    }, [edges, nodesMap, directEdgeIds, lineageEdgeIds, hoveredEdgeId, hasSelection, onEdgeHover]);
 
     return <g className="comfy-flow-connections">{renderedPaths}</g>;
 });

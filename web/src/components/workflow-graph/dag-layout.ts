@@ -1,64 +1,48 @@
-import type {
-    ComfyFlowEdgeData,
-    ComfyFlowGraphLayout,
-    ComfyFlowNodeData,
-    ComfyNodePort,
-    ComfySlotCategory,
+import {
+    COMFY_NODE_LAYOUT,
+    type ComfyFlowEdgeData,
+    type ComfyFlowGraphLayout,
+    type ComfyFlowNodeData,
+    type ComfyNodePort,
+    type ComfySlotCategory,
 } from "./comfy-flow-types";
 
-// 常见 ComfyUI 节点类别的常见端口类型推导
-const KNOWN_OUTPUT_TYPES: Record<string, string[]> = {
-    KSampler: ["LATENT"],
-    KSamplerAdvanced: ["LATENT"],
-    SamplerCustomAdvanced: ["LATENT"],
-    VAEDecode: ["IMAGE"],
-    VAEEncode: ["LATENT"],
-    VAEEncodeForInpaint: ["LATENT"],
-    CLIPTextEncode: ["CONDITIONING"],
-    CLIPTextEncodeSDXL: ["CONDITIONING"],
-    CLIPLoader: ["CLIP"],
-    UNETLoader: ["MODEL"],
-    VAELoader: ["VAE"],
-    CheckpointLoaderSimple: ["MODEL", "CLIP", "VAE"],
-    LoadImage: ["IMAGE", "MASK"],
-    EmptyLatentImage: ["LATENT"],
-    EmptySD3LatentImage: ["LATENT"],
-    ConditioningCombine: ["CONDITIONING"],
-    FluxGuidance: ["CONDITIONING"],
-    SaveImage: ["IMAGE"],
-    PreviewImage: ["IMAGE"],
-    VHS_VideoCombine: ["IMAGE"],
-};
-
+// 通用端口数据类型推导（优先根据入参/出参命名探测，符合 ComfyUI 标准词汇）
 function inferDataType(classType: string, slotIndex: number, paramKey?: string): string {
     const key = (paramKey || "").toLowerCase();
-    if (key.includes("image") || key.includes("frame")) return "IMAGE";
-    if (key.includes("latent")) return "LATENT";
-    if (key.includes("model") || key.includes("unet")) return "MODEL";
-    if (key.includes("clip") || key.includes("conditioning") || key === "positive" || key === "negative") {
+    const type = (classType || "").toLowerCase();
+
+    if (key.includes("image") || key.includes("frame") || type.includes("image")) return "IMAGE";
+    if (key.includes("latent") || type.includes("latent")) return "LATENT";
+    if (key.includes("model") || key.includes("unet") || type.includes("unet") || type.includes("diffusion")) return "MODEL";
+    if (
+        key.includes("clip") ||
+        key.includes("conditioning") ||
+        key === "positive" ||
+        key === "negative" ||
+        type.includes("clip")
+    ) {
         return "CONDITIONING";
     }
-    if (key.includes("vae")) return "VAE";
-    if (key.includes("mask")) return "MASK";
-    if (key.includes("audio")) return "AUDIO";
-    if (key.includes("video")) return "VIDEO";
+    if (key.includes("vae") || type.includes("vae")) return "VAE";
+    if (key.includes("mask") || type.includes("mask")) return "MASK";
+    if (key.includes("audio") || type.includes("audio")) return "AUDIO";
+    if (key.includes("video") || type.includes("video")) return "VIDEO";
     if (key.includes("seed") || key.includes("steps") || key.includes("width") || key.includes("height")) {
         return "INT";
     }
 
-    const outputs = KNOWN_OUTPUT_TYPES[classType];
-    if (outputs && outputs[slotIndex]) {
-        return outputs[slotIndex];
-    }
+    if (type.includes("sampler")) return "LATENT";
     return "ANY";
 }
 
+// 槽位分类解析（严格遵循 _meta.title 标准协议与保存/输出节点语义）
 function classifySlot(rawTitle?: string, classType?: string): { category: ComfySlotCategory; modelType?: string } {
+    const type = (classType || "").toLowerCase();
+    const isOutputClass = type.startsWith("save") || type.includes("combine") || type.startsWith("preview");
+
     if (!rawTitle) {
-        if (classType?.startsWith("Save") || classType === "VHS_VideoCombine" || classType === "SaveText") {
-            return { category: "output" };
-        }
-        return { category: "general" };
+        return { category: isOutputClass ? "output" : "general" };
     }
 
     const title = rawTitle.trim();
@@ -81,10 +65,7 @@ function classifySlot(rawTitle?: string, classType?: string): { category: ComfyS
     ) {
         return { category: "reference" };
     }
-    if (title.startsWith("output_") || title === "output_image" || title === "output_video" || title === "output_text") {
-        return { category: "output" };
-    }
-    if (classType?.startsWith("Save") || classType === "VHS_VideoCombine" || classType === "SaveText") {
+    if (title.startsWith("output_") || isOutputClass) {
         return { category: "output" };
     }
     return { category: "general" };
@@ -95,7 +76,7 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
         return {
             nodes: [],
             edges: [],
-            bounds: { minX: 0, minY: 0, maxX: 800, maxY: 600, width: 800, height: 600 },
+            bounds: { minX: 0, minY: 0, maxX: 600, maxY: 400, width: 600, height: 400 },
             stats: { totalNodes: 0, totalEdges: 0, detectedSlots: 0 },
         };
     }
@@ -164,15 +145,18 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
     // 构建邻接表用于计算 DAG 拓扑分层 (Kahn / Longest Path)
     const inDegree = new Map<string, number>();
     const outgoing = new Map<string, string[]>();
+    const incoming = new Map<string, string[]>();
 
     for (const id of validNodesMap.keys()) {
         inDegree.set(id, 0);
         outgoing.set(id, []);
+        incoming.set(id, []);
     }
 
     for (const edge of edges) {
         inDegree.set(edge.toNodeId, (inDegree.get(edge.toNodeId) || 0) + 1);
         outgoing.get(edge.fromNodeId)?.push(edge.toNodeId);
+        incoming.get(edge.toNodeId)?.push(edge.fromNodeId);
     }
 
     // 计算分层 (Layer)
@@ -204,7 +188,7 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
         }
     }
 
-    // 对于残留环形或未访问到的节点做兜底
+    // 对于残留环形或未访问到的节点做合理分层
     for (const id of validNodesMap.keys()) {
         if (!layers.has(id)) {
             layers.set(id, 0);
@@ -214,10 +198,6 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
     // 构建完整节点结构
     const nodes: ComfyFlowNodeData[] = [];
     const layerBuckets = new Map<number, ComfyFlowNodeData[]>();
-
-    const NODE_WIDTH = 250;
-    const LAYER_GAP_X = 100;
-    const NODE_GAP_Y = 32;
 
     for (const [id, nodeInfo] of validNodesMap.entries()) {
         const { classType, inputs, title } = nodeInfo;
@@ -245,6 +225,7 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
                 validNodesMap.has(String(val[0]))
             ) {
                 connectedInputs.push({ key, fromNodeId: String(val[0]), fromSlot: val[1] });
+                // 仅实际连线的输入才渲染为左侧端口圆点
                 inputPorts.push({
                     id: `${id}-in-${key}`,
                     name: key,
@@ -252,14 +233,8 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
                     isConnected: true,
                 });
             } else {
+                // 常量标量参数放入字面量列表，避免左侧插槽拥挤
                 literalInputs.push({ key, value: val });
-                // 关键字面量也作为可选端口展现
-                inputPorts.push({
-                    id: `${id}-in-${key}`,
-                    name: key,
-                    type: inferDataType(classType, 0, key),
-                    isConnected: false,
-                });
             }
         }
 
@@ -267,16 +242,15 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
         const outSlotsSet = usedOutputSlots.get(id) || new Set<number>();
         const maxOutSlot = outSlotsSet.size > 0 ? Math.max(...outSlotsSet) : 0;
         const outputPorts: ComfyNodePort[] = [];
-        const knownTypes = KNOWN_OUTPUT_TYPES[classType] || [];
 
         // 只有非最终 Save 节点才强制有输出端口
         if (category !== "output" || outSlotsSet.size > 0) {
             for (let s = 0; s <= maxOutSlot; s++) {
-                const portName = knownTypes[s] || (s === 0 ? "output" : `out_${s}`);
+                const portName = s === 0 ? "output" : `out_${s}`;
                 outputPorts.push({
                     id: `${id}-out-${s}`,
                     name: portName,
-                    type: knownTypes[s] || inferDataType(classType, s),
+                    type: inferDataType(classType, s),
                     slotIndex: s,
                     isConnected: outSlotsSet.has(s),
                 });
@@ -285,11 +259,10 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
 
         // 计算节点自适应高度
         const portRowsCount = Math.max(inputPorts.length, outputPorts.length, 1);
-        // 最多展示前 3 个常用字面量摘要
         const previewLiteralCount = Math.min(literalInputs.length, 3);
-        const baseHeight = 56;
-        const portHeight = portRowsCount * 22;
-        const literalHeight = previewLiteralCount > 0 ? previewLiteralCount * 18 + 10 : 0;
+        const baseHeight = COMFY_NODE_LAYOUT.HEADER_HEIGHT + COMFY_NODE_LAYOUT.SUBTITLE_HEIGHT + COMFY_NODE_LAYOUT.DIVIDER_HEIGHT + COMFY_NODE_LAYOUT.BODY_PADDING_TOP;
+        const portHeight = portRowsCount * COMFY_NODE_LAYOUT.PIN_ROW_HEIGHT;
+        const literalHeight = previewLiteralCount > 0 ? previewLiteralCount * 18 + 12 : 8;
         const calculatedHeight = Math.max(76, baseHeight + portHeight + literalHeight);
 
         const nodeData: ComfyFlowNodeData = {
@@ -306,7 +279,7 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
             outputPorts,
             x: 0,
             y: 0,
-            width: NODE_WIDTH,
+            width: COMFY_NODE_LAYOUT.WIDTH,
             height: calculatedHeight,
             layer: nodeLayer,
         };
@@ -319,18 +292,47 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
         layerBuckets.get(nodeLayer)!.push(nodeData);
     }
 
-    // 计算 X 轴和 Y 轴坐标（层级对齐与垂直居中布局）
-    let currentX = 60;
+    // 重心法（Barycenter Heuristic）优化层内纵向排序，减少导线交叉
+    const nodeYMap = new Map<string, number>();
     const sortedLayers = Array.from(layerBuckets.keys()).sort((a, b) => a - b);
+
+    // 第一层（Root 层）先按 ID 排序
+    if (sortedLayers.length > 0) {
+        layerBuckets.get(sortedLayers[0])?.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+    }
+
+    // 后续各层按上游相连节点的平均 Y 坐标（重心）进行稳定排序
+    for (let i = 1; i < sortedLayers.length; i++) {
+        const layer = sortedLayers[i];
+        const bucket = layerBuckets.get(layer) || [];
+
+        bucket.sort((nodeA, nodeB) => {
+            const upA = incoming.get(nodeA.id) || [];
+            const upB = incoming.get(nodeB.id) || [];
+
+            const avgYA =
+                upA.length > 0
+                    ? upA.reduce((sum, upId) => sum + (nodeYMap.get(upId) || 0), 0) / upA.length
+                    : 0;
+            const avgYB =
+                upB.length > 0
+                    ? upB.reduce((sum, upId) => sum + (nodeYMap.get(upId) || 0), 0) / upB.length
+                    : 0;
+
+            if (avgYA !== avgYB) return avgYA - avgYB;
+            return nodeA.id.localeCompare(nodeB.id, undefined, { numeric: true });
+        });
+    }
 
     // 计算最高层的总高度，使各列纵向垂直居中
     let maxColumnHeight = 0;
     for (const layer of sortedLayers) {
         const bucket = layerBuckets.get(layer)!;
-        const colHeight = bucket.reduce((sum, n) => sum + n.height + NODE_GAP_Y, 0) - NODE_GAP_Y;
+        const colHeight = bucket.reduce((sum, n) => sum + n.height + COMFY_NODE_LAYOUT.NODE_GAP_Y, 0) - COMFY_NODE_LAYOUT.NODE_GAP_Y;
         if (colHeight > maxColumnHeight) maxColumnHeight = colHeight;
     }
 
+    let currentX = 60;
     let minX = currentX;
     let minY = 60;
     let maxX = currentX;
@@ -338,33 +340,37 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
 
     for (const layer of sortedLayers) {
         const bucket = layerBuckets.get(layer)!;
-        const colHeight = bucket.reduce((sum, n) => sum + n.height + NODE_GAP_Y, 0) - NODE_GAP_Y;
+        const colHeight = bucket.reduce((sum, n) => sum + n.height + COMFY_NODE_LAYOUT.NODE_GAP_Y, 0) - COMFY_NODE_LAYOUT.NODE_GAP_Y;
         let startY = 60 + Math.max(0, (maxColumnHeight - colHeight) / 2);
 
         for (const node of bucket) {
             node.x = currentX;
             node.y = startY;
+            nodeYMap.set(node.id, node.y);
 
-            // 计算该节点端口在世界坐标系下的位置
-            const headerOffset = 48;
-            const pinStep = 22;
+            // 精准计算端口圆点世界坐标（与 DOM 视觉对齐）
+            const headerOffset =
+                COMFY_NODE_LAYOUT.HEADER_HEIGHT +
+                COMFY_NODE_LAYOUT.SUBTITLE_HEIGHT +
+                COMFY_NODE_LAYOUT.DIVIDER_HEIGHT +
+                COMFY_NODE_LAYOUT.BODY_PADDING_TOP;
 
             node.inputPorts.forEach((port, idx) => {
                 port.x = node.x;
-                port.y = node.y + headerOffset + idx * pinStep + 10;
+                port.y = node.y + headerOffset + idx * COMFY_NODE_LAYOUT.PIN_ROW_HEIGHT + COMFY_NODE_LAYOUT.PIN_CENTER_OFFSET;
             });
 
             node.outputPorts.forEach((port, idx) => {
                 port.x = node.x + node.width;
-                port.y = node.y + headerOffset + idx * pinStep + 10;
+                port.y = node.y + headerOffset + idx * COMFY_NODE_LAYOUT.PIN_ROW_HEIGHT + COMFY_NODE_LAYOUT.PIN_CENTER_OFFSET;
             });
 
             if (node.y + node.height > maxY) maxY = node.y + node.height;
-            startY += node.height + NODE_GAP_Y;
+            startY += node.height + COMFY_NODE_LAYOUT.NODE_GAP_Y;
         }
 
-        if (currentX + NODE_WIDTH > maxX) maxX = currentX + NODE_WIDTH;
-        currentX += NODE_WIDTH + LAYER_GAP_X;
+        if (currentX + COMFY_NODE_LAYOUT.WIDTH > maxX) maxX = currentX + COMFY_NODE_LAYOUT.WIDTH;
+        currentX += COMFY_NODE_LAYOUT.WIDTH + COMFY_NODE_LAYOUT.LAYER_GAP_X;
     }
 
     return {
@@ -375,8 +381,8 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
             minY,
             maxX,
             maxY,
-            width: Math.max(maxX - minX + 120, 800),
-            height: Math.max(maxY - minY + 120, 600),
+            width: Math.max(maxX - minX + 160, 400),
+            height: Math.max(maxY - minY + 160, 300),
         },
         stats: {
             totalNodes: nodes.length,

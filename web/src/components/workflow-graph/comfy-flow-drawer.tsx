@@ -13,7 +13,7 @@ interface ComfyFlowDrawerProps {
     onSelectNode: (nodeId: string) => void;
     modelsMap?: Record<string, { loading: boolean; error?: string; items: ComfyuiModelItem[] }>;
     onModelChange?: (nodeId: string, inputKey: string, nextValue: string) => void;
-    onReloadModels?: (category: string) => void;
+    onReloadModels?: (category: string, force?: boolean) => void;
 }
 
 export function ComfyFlowDrawer({
@@ -46,16 +46,42 @@ export function ComfyFlowDrawer({
     const modelItems = modelState?.items || [];
     const isModelLoading = modelState?.loading;
 
-    // 找到当前节点中对应的模型 inputKey (例如 unet_name, clip_name, ckpt_name)
+    // 探测当前节点中对应的模型 inputKey (与 ComfyUI 工作流标准契约一致)
     const targetModelInputKey = useMemo(() => {
         if (!isModelSelector) return null;
-        for (const [key, val] of Object.entries(node.inputs)) {
-            if (typeof val === "string" && !Array.isArray(val)) {
-                return key;
+        const modelType = node.modelType || "";
+        let candidateKeys: string[] = [];
+
+        if (modelType === "diffusion_models" || modelType === "unet") {
+            candidateKeys = ["unet_name", "model_name", "diffusion_model_name", "value"];
+        } else if (modelType === "clip" || modelType === "text_encoders") {
+            candidateKeys = ["clip_name", "text_encoder_name", "clip_name1", "value"];
+        } else if (modelType === "checkpoints" || modelType === "checkpoint") {
+            candidateKeys = ["ckpt_name", "model_name", "value"];
+        } else if (modelType === "vae") {
+            candidateKeys = ["vae_name", "value"];
+        } else if (modelType === "loras" || modelType === "lora") {
+            candidateKeys = ["lora_name", "value"];
+        } else if (modelType === "controlnet") {
+            candidateKeys = ["control_net_name", "value"];
+        } else {
+            candidateKeys = [`${modelType}_name`, "model_name", "name", "value"];
+        }
+
+        for (const cand of candidateKeys) {
+            if (cand in node.inputs && !Array.isArray(node.inputs[cand])) {
+                return cand;
+            }
+        }
+
+        // 探测未命中的字符串入参（排除控制类参数）
+        for (const [k, v] of Object.entries(node.inputs)) {
+            if (typeof v === "string" && !Array.isArray(v) && !["device", "weight_dtype", "type"].includes(k)) {
+                return k;
             }
         }
         return "model_name";
-    }, [isModelSelector, node.inputs]);
+    }, [isModelSelector, node.modelType, node.inputs]);
 
     const currentModelValue = targetModelInputKey ? String(node.inputs[targetModelInputKey] || "") : "";
 
@@ -120,7 +146,7 @@ export function ComfyFlowDrawer({
                                     size="small"
                                     type="text"
                                     loading={isModelLoading}
-                                    onClick={() => onReloadModels(modelCategoryKey)}
+                                    onClick={() => onReloadModels(modelCategoryKey, true)}
                                 >
                                     刷新
                                 </Button>

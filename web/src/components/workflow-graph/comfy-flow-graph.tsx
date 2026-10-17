@@ -28,7 +28,7 @@ interface ComfyFlowCanvasProps {
     workflowJson: ComfyuiWorkflowJson;
     modelsMap?: Record<string, { loading: boolean; error?: string; items: ComfyuiModelItem[] }>;
     onModelChange?: (nodeId: string, inputKey: string, nextValue: string) => void;
-    onReloadModels?: (category: string) => void;
+    onReloadModels?: (category: string, force?: boolean) => void;
     className?: string;
     isFullscreen: boolean;
     onToggleFullscreen: () => void;
@@ -113,11 +113,13 @@ function ComfyFlowCanvas({
         startY: number;
         nodeInitialX?: number;
         nodeInitialY?: number;
+        hasMoved: boolean;
     }>({
         isPanning: false,
         isDraggingNode: false,
         startX: 0,
         startY: 0,
+        hasMoved: false,
     });
 
     // 自适应居中视口 (Fit View)
@@ -198,6 +200,7 @@ function ComfyFlowCanvas({
             isDraggingNode: false,
             startX: e.clientX - viewport.x,
             startY: e.clientY - viewport.y,
+            hasMoved: false,
         };
     };
 
@@ -215,6 +218,7 @@ function ComfyFlowCanvas({
             startY: e.clientY,
             nodeInitialX: node.x,
             nodeInitialY: node.y,
+            hasMoved: false,
         };
     };
 
@@ -233,6 +237,11 @@ function ComfyFlowCanvas({
             state.nodeInitialX !== undefined &&
             state.nodeInitialY !== undefined
         ) {
+            const dist = Math.hypot(e.clientX - state.startX, e.clientY - state.startY);
+            if (dist > 4) {
+                state.hasMoved = true;
+            }
+
             const dx = (e.clientX - state.startX) / viewport.zoom;
             const dy = (e.clientY - state.startY) / viewport.zoom;
             const newX = Math.round(state.nodeInitialX + dx);
@@ -248,16 +257,23 @@ function ComfyFlowCanvas({
 
     // 拖拽释放
     const handleMouseUp = () => {
-        dragStateRef.current = {
-            isPanning: false,
-            isDraggingNode: false,
-            startX: 0,
-            startY: 0,
-        };
+        const wasMoved = dragStateRef.current.hasMoved;
+        dragStateRef.current.isPanning = false;
+        dragStateRef.current.isDraggingNode = false;
+
+        // 延时重置 hasMoved，以拦截拖拽后随之触发的 onClick 冒泡事件
+        if (wasMoved) {
+            setTimeout(() => {
+                if (dragStateRef.current) {
+                    dragStateRef.current.hasMoved = false;
+                }
+            }, 80);
+        }
     };
 
-    // 节点选中并调出侧边详情
+    // 节点选中并调出侧边详情 (若发生拖动则抑制点击选中)
     const handleSelectNode = (nodeId: string) => {
+        if (dragStateRef.current.hasMoved) return;
         setSelectedNodeId(nodeId);
         setDrawerOpen(true);
     };
@@ -470,7 +486,7 @@ export interface ComfyFlowGraphProps {
     workflowJson: ComfyuiWorkflowJson;
     modelsMap?: Record<string, { loading: boolean; error?: string; items: ComfyuiModelItem[] }>;
     onModelChange?: (nodeId: string, inputKey: string, nextValue: string) => void;
-    onReloadModels?: (category: string) => void;
+    onReloadModels?: (category: string, force?: boolean) => void;
     className?: string;
 }
 

@@ -7,6 +7,18 @@ export type ComfySlotCategory =
     | "output"
     | "general";
 
+export const COMFY_NODE_LAYOUT = {
+    WIDTH: 250,
+    HEADER_HEIGHT: 28,
+    SUBTITLE_HEIGHT: 20,
+    DIVIDER_HEIGHT: 1,
+    BODY_PADDING_TOP: 8,
+    PIN_ROW_HEIGHT: 22,
+    PIN_CENTER_OFFSET: 11,
+    LAYER_GAP_X: 110,
+    NODE_GAP_Y: 36,
+};
+
 export interface ComfyNodePort {
     id: string; // e.g. "9-input-images" or "9-output-0"
     name: string;
