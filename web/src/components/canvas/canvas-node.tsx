@@ -14,6 +14,7 @@ import type { CanvasNodeContext, CanvasPluginHost } from "@/types/canvas-plugin"
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasVideoPlayer } from "./canvas-video-player";
 import { useTranslation } from "react-i18next";
+import { localizeErrorDetails } from "@/lib/canvas/canvas-generation-helpers";
 
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 const selectionBlue = "#2f80ff";
@@ -541,7 +542,7 @@ function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "
     const canResume = Boolean(node.metadata?.jobId);
     return (
         <div className="flex max-w-[260px] flex-col items-center gap-3 px-5 text-center">
-            <div className="text-xs leading-5 text-red-300">{node.metadata?.errorDetails || t("canvas.node.failed")}</div>
+            <div className="text-xs leading-5 text-red-300">{localizeErrorDetails(node.metadata?.errorDetails) || t("canvas.node.failed")}</div>
             <button
                 type="button"
                 className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
@@ -704,7 +705,7 @@ function TextSlotStatus({ text }: { text: CanvasNodeText }) {
     const loading = text.status === "loading";
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: theme.node.fill, color: failed ? theme.node.text : theme.node.activeStroke }}>
-            {failed ? <span className="text-xs leading-5">{text.errorDetails || t("canvas.node.failed")}</span> : loading ? <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} /> : <span className="text-xs">{t("apiErrors.noContent")}</span>}
+            {failed ? <span className="text-xs leading-5">{localizeErrorDetails(text.errorDetails) || t("canvas.node.failed")}</span> : loading ? <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} /> : <span className="text-xs">{t("apiErrors.noContent")}</span>}
             {loading ? <span className="text-[10px] tracking-[0.2em]">{t("canvas.node.generating")}</span> : null}
         </div>
     );
@@ -934,7 +935,7 @@ function ImageSlotStatus({ image }: { image?: CanvasNodeImage }) {
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: theme.node.fill, color: failed ? theme.node.text : theme.node.activeStroke }}>
             {failed ? (
-                <span className="text-xs leading-5">{image?.errorDetails || t("canvas.node.failed")}</span>
+                <span className="text-xs leading-5">{localizeErrorDetails(image?.errorDetails) || t("canvas.node.failed")}</span>
             ) : loading ? (
                 <>
                     <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />

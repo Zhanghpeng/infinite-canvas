@@ -7,6 +7,13 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Canvas Generation Interrupted Error i18n Verification (画布生成中断与持久化错误信息国际化验证):
+  - **动态中英语言切换同步**:
+    - 在画布生成过程中刷新页面，使节点进入中断错误状态；
+    - 切换顶部导航栏语言为中文，验证节点与详情悬浮弹窗中错误文案正确显示为「页面刷新后生成已中断，请重新生成。」；
+    - 切换语言为英文，验证无需重新触发生成，错误文案即时动态同步为「Generation was interrupted by a page refresh. Generate again.」；
+    - 验证历史已保存过旧错误文案的画布项目在加载时被自动修正对齐。
+
 - ComfyUI Workflow Graph & Connections Visualization Verification (ComfyUI 工作流节点与连线可视化验证):
   - **双模切换与流图加载**:
     - 访问 `/workflows` 页面或 `/config/workflows/*` 编辑器页面；

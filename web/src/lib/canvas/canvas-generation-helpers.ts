@@ -176,21 +176,78 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
     };
 }
 
-export function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
-    return nodes.map((node) =>
-        node.metadata?.status === "loading"
-            ? {
-                  ...node,
-                  metadata: {
-                      ...node.metadata,
-                      status: "error" as const,
-                      errorDetails: i18n.t("canvas.generation.interrupted"),
-                      images: node.metadata.images?.map((image) => (image.status === "loading" ? { ...image, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : image)),
-                      texts: node.metadata.texts?.map((text) => (text.status === "loading" ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : text)),
-                  },
-              }
-            : node,
+export function isInterruptedGenerationError(errorDetails?: string) {
+    if (!errorDetails) return false;
+    return (
+        errorDetails === "Generation was interrupted by a page refresh. Generate again." ||
+        errorDetails === "页面刷新后生成已中断，请重新生成。" ||
+        errorDetails === "canvas.generation.interrupted" ||
+        errorDetails.includes("Generation was interrupted by a page refresh") ||
+        errorDetails.includes("页面刷新后生成已中断")
     );
+}
+
+export function localizeErrorDetails(errorDetails?: string): string | undefined {
+    if (!errorDetails) return undefined;
+    if (isInterruptedGenerationError(errorDetails)) {
+        return i18n.t("canvas.generation.interrupted");
+    }
+    if (
+        errorDetails === "生成失败" ||
+        errorDetails === "Generation failed" ||
+        errorDetails === "canvas.projectPage.generationFailed"
+    ) {
+        return i18n.t("canvas.projectPage.generationFailed");
+    }
+    if (
+        errorDetails === "部分生成失败" ||
+        errorDetails === "Partial generation failed" ||
+        errorDetails === "canvas.projectPage.partialFailed"
+    ) {
+        return i18n.t("canvas.projectPage.partialFailed");
+    }
+    if (
+        errorDetails === "全部生成失败" ||
+        errorDetails === "All generations failed" ||
+        errorDetails === "canvas.projectPage.allFailed"
+    ) {
+        return i18n.t("canvas.projectPage.allFailed");
+    }
+    if (
+        errorDetails === "部分文本生成失败" ||
+        errorDetails === "Partial text generation failed" ||
+        errorDetails === "canvas.projectPage.partialTextFailed"
+    ) {
+        return i18n.t("canvas.projectPage.partialTextFailed");
+    }
+    return errorDetails;
+}
+
+export function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
+    return nodes.map((node) => {
+        const isInterrupted = node.metadata?.status === "loading" || isInterruptedGenerationError(node.metadata?.errorDetails);
+        if (isInterrupted) {
+            return {
+                ...node,
+                metadata: {
+                    ...node.metadata,
+                    status: "error" as const,
+                    errorDetails: i18n.t("canvas.generation.interrupted"),
+                    images: node.metadata.images?.map((image) =>
+                        image.status === "loading" || isInterruptedGenerationError(image.errorDetails)
+                            ? { ...image, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") }
+                            : image,
+                    ),
+                    texts: node.metadata.texts?.map((text) =>
+                        text.status === "loading" || isInterruptedGenerationError(text.errorDetails)
+                            ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") }
+                            : text,
+                    ),
+                },
+            };
+        }
+        return node;
+    });
 }
 
 export function isGenerationCanceled(error: unknown) {

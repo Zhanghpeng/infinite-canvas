@@ -14,6 +14,7 @@ import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "@/t
 import type { CanvasNodeToolbarItem } from "@/types/canvas-plugin";
 import { ImageToolSettingsModal, type ImageToolbarSettingsTool } from "./canvas-image-toolbar-settings-modal";
 import { IMAGE_QUICK_TOOLS_STORAGE_KEY, buildImageToolbarTools, defaultImageQuickToolIds, type ImageQuickToolId } from "./canvas-image-toolbar-tools";
+import { localizeErrorDetails } from "@/lib/canvas/canvas-generation-helpers";
 
 type CanvasNodeHoverToolbarProps = {
     node: CanvasNodeData | null;
@@ -353,7 +354,7 @@ export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeD
                             {imageBytes ? <InfoRow label={t("canvas.nodeToolbar.imageSize")} value={formatBytes(imageBytes)} /> : null}
                             {node.metadata?.errorDetails ? (
                                 <div className="rounded-lg border p-3 text-red-400" style={{ borderColor: theme.node.stroke }}>
-                                    {node.metadata.errorDetails}
+                                    {localizeErrorDetails(node.metadata.errorDetails)}
                                 </div>
                             ) : null}
                         </div>
