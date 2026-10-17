@@ -8,6 +8,7 @@ export default {
     },
     "common": {
         "cancel": "Cancel",
+        "confirm": "Confirm",
         "save": "Save",
         "edit": "Edit",
         "done": "Done",

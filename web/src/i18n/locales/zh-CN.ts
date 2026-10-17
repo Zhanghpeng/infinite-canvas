@@ -8,6 +8,7 @@ export default {
     },
     "common": {
         "cancel": "取消",
+        "confirm": "确定",
         "save": "保存",
         "edit": "编辑",
         "done": "完成",
