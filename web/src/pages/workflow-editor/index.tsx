@@ -4,16 +4,20 @@ import {
     AlertCircle,
     ArrowLeft,
     Check,
+    Code2,
     Copy,
     Download,
     Layers,
+    Network,
     RefreshCw,
     RotateCcw,
     Save,
     Sliders,
     Upload,
 } from "lucide-react";
-import { App, Button, Empty, Input, Select, Spin, Tag, Tooltip } from "antd";
+import { App, Button, Empty, Input, Segmented, Select, Spin, Tag, Tooltip } from "antd";
+
+import { ComfyFlowGraph } from "@/components/workflow-graph/comfy-flow-graph";
 
 import {
     getChannelWorkflows,
@@ -96,6 +100,7 @@ export default function WorkflowEditorPage() {
     const [workflowJson, setWorkflowJson] = useState<ComfyuiWorkflowJson>({});
     const [isDirty, setIsDirty] = useState(false);
     const [copied, setCopied] = useState(false);
+    const [viewMode, setViewMode] = useState<"graph" | "json">("graph");
 
     // 模型数据缓存与加载状态
     const [modelsMap, setModelsMap] = useState<
@@ -466,15 +471,43 @@ export default function WorkflowEditorPage() {
                     </div>
                 </div>
 
-                {/* 右栏：工作流 JSON 预览与代码审查 */}
+                {/* 右栏：工作流可视化流图与代码审查 (双模切换) */}
                 <div className="hidden flex-1 flex-col bg-stone-50/30 lg:flex dark:bg-stone-950/20">
-                    <div className="flex shrink-0 items-center justify-between border-b border-stone-200 bg-white px-5 py-2.5 dark:border-stone-800 dark:bg-stone-900/60">
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs font-semibold text-stone-700 dark:text-stone-300">
-                                {t("workflowEditor.jsonPreview")}
-                            </span>
+                    <div className="flex shrink-0 items-center justify-between border-b border-stone-200 bg-white px-5 py-2 dark:border-stone-800 dark:bg-stone-900/60">
+                        <div className="flex items-center gap-3">
+                            <Segmented
+                                size="small"
+                                value={viewMode}
+                                onChange={(val) => setViewMode(val as "graph" | "json")}
+                                options={[
+                                    {
+                                        value: "graph",
+                                        label: (
+                                            <div className="flex items-center gap-1.5 px-1 py-0.5">
+                                                <Network className="size-3.5 text-blue-500" />
+                                                <span className="font-medium text-xs">节点流图</span>
+                                            </div>
+                                        ),
+                                    },
+                                    {
+                                        value: "json",
+                                        label: (
+                                            <div className="flex items-center gap-1.5 px-1 py-0.5">
+                                                <Code2 className="size-3.5 text-stone-500" />
+                                                <span className="font-medium text-xs">JSON 代码</span>
+                                            </div>
+                                        ),
+                                    },
+                                ]}
+                            />
                             <span className="text-[11px] text-stone-400">
-                                {t("workflowEditor.nodeStats", { count: nodeCount, size: jsonString.length < 1024 ? `${jsonString.length} B` : `${(jsonString.length / 1024).toFixed(1)} KB` })}
+                                {t("workflowEditor.nodeStats", {
+                                    count: nodeCount,
+                                    size:
+                                        jsonString.length < 1024
+                                            ? `${jsonString.length} B`
+                                            : `${(jsonString.length / 1024).toFixed(1)} KB`,
+                                })}
                             </span>
                         </div>
 
@@ -510,11 +543,21 @@ export default function WorkflowEditorPage() {
                         </div>
                     </div>
 
-                    <div className="thin-scrollbar flex-1 overflow-auto p-4">
-                        <pre className="font-mono text-xs leading-relaxed text-stone-800 select-text dark:text-stone-200 whitespace-pre-wrap break-all">
-                            {jsonString}
-                        </pre>
-                    </div>
+                    {viewMode === "graph" ? (
+                        <ComfyFlowGraph
+                            workflowJson={workflowJson}
+                            modelsMap={modelsMap}
+                            onModelChange={handleModelChange}
+                            onReloadModels={loadModels}
+                            className="flex-1"
+                        />
+                    ) : (
+                        <div className="thin-scrollbar flex-1 overflow-auto p-4">
+                            <pre className="font-mono text-xs leading-relaxed text-stone-800 select-text dark:text-stone-200 whitespace-pre-wrap break-all">
+                                {jsonString}
+                            </pre>
+                        </div>
+                    )}
                 </div>
             </div>
         </main>

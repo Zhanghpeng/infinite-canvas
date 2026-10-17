@@ -4,10 +4,12 @@ import { useTranslation } from "react-i18next";
 import {
     AlertCircle,
     Check,
+    Code2,
     Copy,
     Cpu,
     Download,
     Layers,
+    Network,
     RefreshCw,
     RotateCcw,
     Save,
@@ -16,7 +18,9 @@ import {
     Upload,
     Workflow as WorkflowIcon,
 } from "lucide-react";
-import { App, Button, Empty, Input, Select, Tag, Tooltip } from "antd";
+import { App, Button, Empty, Input, Segmented, Select, Tag, Tooltip } from "antd";
+
+import { ComfyFlowGraph } from "@/components/workflow-graph/comfy-flow-graph";
 
 import {
     getChannelWorkflows,
@@ -158,6 +162,7 @@ export default function WorkflowsPage() {
     const [currentDesc, setCurrentDesc] = useState("");
     const [isDirty, setIsDirty] = useState(false);
     const [copied, setCopied] = useState(false);
+    const [viewMode, setViewMode] = useState<"graph" | "json">("graph");
 
     // 切换工作流时重置本地状态
     useEffect(() => {
@@ -688,10 +693,35 @@ export default function WorkflowsPage() {
                                 </div>
 
                                 <div className="mt-5 border-t border-stone-100 pt-4 dark:border-stone-800">
-                                    <div className="mb-2 flex items-center justify-between">
-                                        <span className="text-xs font-semibold text-stone-700 dark:text-stone-300">
-                                            {t("workflowsPage.jsonTitle")}
-                                        </span>
+                                    <div className="mb-3 flex items-center justify-between">
+                                        <div className="flex items-center gap-2.5">
+                                            <Segmented
+                                                size="small"
+                                                value={viewMode}
+                                                onChange={(val) => setViewMode(val as "graph" | "json")}
+                                                options={[
+                                                    {
+                                                        value: "graph",
+                                                        label: (
+                                                            <div className="flex items-center gap-1.5 px-1 py-0.5">
+                                                                <Network className="size-3.5 text-blue-500" />
+                                                                <span className="font-medium text-xs">节点流图</span>
+                                                            </div>
+                                                        ),
+                                                    },
+                                                    {
+                                                        value: "json",
+                                                        label: (
+                                                            <div className="flex items-center gap-1.5 px-1 py-0.5">
+                                                                <Code2 className="size-3.5 text-stone-500" />
+                                                                <span className="font-medium text-xs">JSON 代码</span>
+                                                            </div>
+                                                        ),
+                                                    },
+                                                ]}
+                                            />
+                                        </div>
+
                                         <div className="flex items-center gap-1.5">
                                             <input
                                                 ref={fileInputRef}
@@ -724,9 +754,20 @@ export default function WorkflowsPage() {
                                         </div>
                                     </div>
 
-                                    <div className="thin-scrollbar max-h-64 overflow-y-auto rounded-lg border border-stone-200 bg-stone-50 p-3 font-mono text-[11px] text-stone-700 select-text dark:border-stone-800 dark:bg-stone-950 dark:text-stone-300">
-                                        <pre className="whitespace-pre-wrap break-all">{jsonString}</pre>
-                                    </div>
+                                    {viewMode === "graph" ? (
+                                        <div className="h-[520px] w-full rounded-xl border border-stone-200 overflow-hidden shadow-2xs dark:border-stone-800">
+                                            <ComfyFlowGraph
+                                                workflowJson={currentJson}
+                                                modelsMap={modelsMap}
+                                                onModelChange={handleModelChange}
+                                                onReloadModels={loadModelsForCategory}
+                                            />
+                                        </div>
+                                    ) : (
+                                        <div className="thin-scrollbar max-h-80 overflow-y-auto rounded-lg border border-stone-200 bg-stone-50 p-3 font-mono text-[11px] text-stone-700 select-text dark:border-stone-800 dark:bg-stone-950 dark:text-stone-300">
+                                            <pre className="whitespace-pre-wrap break-all">{jsonString}</pre>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>
