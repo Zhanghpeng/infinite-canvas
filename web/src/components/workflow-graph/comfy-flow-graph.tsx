@@ -5,7 +5,6 @@ import {
     useRef,
     useState,
     type MouseEvent as ReactMouseEvent,
-    type WheelEvent as ReactWheelEvent,
 } from "react";
 import { Button, Modal, Tooltip } from "antd";
 import {
@@ -160,26 +159,36 @@ function ComfyFlowCanvas({
         return () => window.removeEventListener("resize", handleResize);
     }, [handleFitView]);
 
-    // 滚轮缩放 (以鼠标指针为锚点)
-    const handleWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        if (!containerRef.current) return;
-        const rect = containerRef.current.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
+    // 监听原生非 passive 滚轮事件，彻底阻止页面联动滚动并进行平滑缩放
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
 
-        const zoomDelta = e.deltaY < 0 ? 1.1 : 0.9;
-        const nextZoom = Math.min(Math.max(viewport.zoom * zoomDelta, 0.2), 2.5);
+        const onWheel = (e: WheelEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
 
-        const newX = mouseX - (mouseX - viewport.x) * (nextZoom / viewport.zoom);
-        const newY = mouseY - (mouseY - viewport.y) * (nextZoom / viewport.zoom);
+            const rect = container.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
 
-        setViewport({
-            x: Math.round(newX),
-            y: Math.round(newY),
-            zoom: Number(nextZoom.toFixed(2)),
-        });
-    };
+            const zoomDelta = e.deltaY < 0 ? 1.1 : 0.9;
+            setViewport((prev) => {
+                const nextZoom = Math.min(Math.max(prev.zoom * zoomDelta, 0.2), 2.5);
+                const newX = mouseX - (mouseX - prev.x) * (nextZoom / prev.zoom);
+                const newY = mouseY - (mouseY - prev.y) * (nextZoom / prev.zoom);
+
+                return {
+                    x: Math.round(newX),
+                    y: Math.round(newY),
+                    zoom: Number(nextZoom.toFixed(2)),
+                };
+            });
+        };
+
+        container.addEventListener("wheel", onWheel, { passive: false });
+        return () => container.removeEventListener("wheel", onWheel);
+    }, []);
 
     // 画布背景拖拽开始 (Pan)
     const handleCanvasMouseDown = (e: ReactMouseEvent) => {
@@ -258,8 +267,8 @@ function ComfyFlowCanvas({
     return (
         <div
             ref={containerRef}
-            className={`relative size-full overflow-hidden select-none bg-stone-100/70 dark:bg-stone-950/80 ${className}`}
-            onWheel={handleWheel}
+            className={`relative size-full overflow-hidden select-none overscroll-contain bg-stone-100/70 dark:bg-stone-950/80 ${className}`}
+            style={{ overscrollBehavior: "contain" }}
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
