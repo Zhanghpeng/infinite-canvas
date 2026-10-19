@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronRight, Copy, Download, FileText, Group, Image as ImageIcon, Lock, Music2, Plus, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
+import { ChevronRight, Copy, Download, FileText, Group, Image as ImageIcon, Layers, Lock, Music2, Plus, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
@@ -15,6 +15,7 @@ import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-refer
 import { CanvasVideoPlayer } from "./canvas-video-player";
 import { useTranslation } from "react-i18next";
 import { localizeErrorDetails } from "@/lib/canvas/canvas-generation-helpers";
+import { formatTimecode } from "@/lib/canvas/video-timeline";
 
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 const selectionBlue = "#2f80ff";
@@ -831,7 +832,29 @@ function VideoNodeContent({ node, theme, onViewMedia }: NodeContentRendererProps
                 <span className="text-sm">{t("canvas.node.emptyVideo")}</span>
             </div>
         );
-    return <CanvasVideoPlayer nodeId={node.id} src={node.metadata.content} onPreview={onViewMedia} />;
+    // 段与成片都要能一眼认出来：画布上并排躺着十几个视频节点时，靠标题区分太慢。
+    const segment = node.metadata.videoSegment;
+    const composite = node.metadata.videoComposite;
+    const badge = segment
+        ? `${t("canvas.videoTimeline.node.segmentBadge", { index: segment.index + 1 })} · ${formatTimecode(segment.startMs)}–${formatTimecode(segment.endMs)}`
+        : composite
+          ? t("canvas.videoTimeline.node.compositeParts", { count: composite.partNodeIds.length })
+          : "";
+    return (
+        <div className="relative h-full w-full">
+            <CanvasVideoPlayer nodeId={node.id} src={node.metadata.content} onPreview={onViewMedia} />
+            {badge ? (
+                <span
+                    className={`pointer-events-none absolute left-2 top-2 z-20 flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium text-white shadow backdrop-blur ${
+                        composite ? "bg-emerald-600/80" : "bg-indigo-600/80"
+                    }`}
+                >
+                    {composite ? <Layers className="size-2.5" /> : null}
+                    {badge}
+                </span>
+            ) : null}
+        </div>
+    );
 }
 
 function AudioNodeContent({ node, theme }: NodeContentRendererProps) {

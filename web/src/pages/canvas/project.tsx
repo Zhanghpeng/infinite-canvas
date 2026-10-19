@@ -11,7 +11,7 @@ import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audi
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { defaultConfig, findWorkflow, getDefaultComfyWorkflowItems, getDefaultWorkflow, inpaintModelOptions, resolveModelChannel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
-import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
+import { getMediaBlob, resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -21,6 +21,9 @@ import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-i
 import { fitNodeSize, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
 import { captureVideoFrame, type VideoFramePosition } from "@/lib/canvas/canvas-video-frame";
 import { extractAudioFromVideo } from "@/lib/canvas/canvas-video-audio";
+import { concatVideoParts, cutVideoSegment, isMediaProcessingSupported } from "@/lib/canvas/video-clip";
+import { captureFrameDataUrl } from "@/lib/canvas/video-scene-detect";
+import { formatDuration, type VideoRange } from "@/lib/canvas/video-timeline";
 import { App, Button, Modal } from "antd";
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "@/constant/canvas";
 import { ActiveConnectionPath, ConnectionPath } from "@/components/canvas/canvas-connections";
@@ -32,6 +35,7 @@ import { CanvasNodeMaskEditDialog, type CanvasImageMaskEditPayload } from "@/com
 import { CanvasNodeSplitDialog, type CanvasImageSplitParams } from "@/components/canvas/canvas-node-split-dialog";
 import { CanvasNodeUpscaleDialog, type CanvasImageUpscaleParams } from "@/components/canvas/canvas-node-upscale-dialog";
 import { CanvasFaceRefineModal } from "@/components/canvas/canvas-face-refine-modal";
+import { CanvasVideoTimelineModal, type VideoEditPlan } from "@/components/canvas/canvas-video-timeline-modal";
 import { CanvasDepthVideoModal } from "@/components/canvas/canvas-depth-video-modal";
 import { buildNodeGenerationContext, buildNodeGenerationInputs, buildNodeResponseMessages, hydrateNodeGenerationContext, type NodeGenerationContext, type NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import { CanvasNodeHoverToolbar, CanvasNodeInfoModal } from "@/components/canvas/canvas-node-hover-toolbar";
@@ -181,6 +185,17 @@ function groupPreviewSource(node: CanvasNodeData) {
     return node.metadata?.images?.find((image) => image.id === node.metadata?.primaryImageId)?.content || node.metadata?.content;
 }
 
+/** 源视频可能落在 IndexedDB、本地目录或远端，统一取成 Blob 才能切分。 */
+async function loadNodeVideoBlob(node: CanvasNodeData): Promise<Blob> {
+    if (node.metadata?.storageKey) {
+        const stored = await getMediaBlob(node.metadata.storageKey);
+        if (stored) return stored;
+    }
+    const response = await fetch(node.metadata?.content || "");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.blob();
+}
+
 export default function CanvasPage() {
     const [mounted, setMounted] = useState(false);
 
@@ -313,6 +328,8 @@ function InfiniteCanvasPage() {
     const [upscaleNodeId, setUpscaleNodeId] = useState<string | null>(null);
     const [faceRefineNode, setFaceRefineNode] = useState<CanvasNodeData | null>(null);
     const [depthVideoNode, setDepthVideoNode] = useState<CanvasNodeData | null>(null);
+    const [videoTimelineNode, setVideoTimelineNode] = useState<CanvasNodeData | null>(null);
+    const [videoTimelineSubmitting, setVideoTimelineSubmitting] = useState(false);
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
     const [previewImageId, setPreviewImageId] = useState<string | null>(null);
     const [titleEditing, setTitleEditing] = useState(false);
@@ -3265,6 +3282,233 @@ function InfiniteCanvasPage() {
         [message, t],
     );
 
+    /** 可做角色参考的图片节点：画布上有内容的图片，按从左到右、从上到下排，符合「按出场顺序选」的直觉。 */
+    const videoTimelineCastImages = useMemo(
+        () =>
+            nodes
+                .filter((item) => item.type === CanvasNodeType.Image && Boolean(item.metadata?.content))
+                .sort((a, b) => a.position.x - b.position.x || a.position.y - b.position.y),
+        [nodes],
+    );
+
+    const handleOpenVideoTimeline = useCallback(
+        (node: CanvasNodeData) => {
+            setToolbarNodeId(null);
+            setHoveredNodeId(null);
+            setContextMenu(null);
+            if (node.type !== CanvasNodeType.Video || !node.metadata?.content) {
+                message.warning(t("canvas.videoTimeline.toast.noVideo"));
+                return;
+            }
+            if (!isMediaProcessingSupported()) {
+                message.warning(t("canvas.videoTimeline.toast.unsupported"));
+                return;
+            }
+            setVideoTimelineNode(node);
+        },
+        [message, t],
+    );
+
+    /** 就地更新节点，同时同步 ref，避免长流程里读到旧快照。 */
+    const patchCanvasNode = useCallback((nodeId: string, patch: Partial<CanvasNodeData>) => {
+        nodesRef.current = nodesRef.current.map((item) => (item.id === nodeId ? { ...item, ...patch } : item));
+        setNodes(nodesRef.current);
+    }, [setNodes]);
+
+    const appendCanvasNodes = useCallback(
+        (newNodes: CanvasNodeData[], newConnections: CanvasConnection[]) => {
+            nodesRef.current = [...nodesRef.current, ...newNodes];
+            connectionsRef.current = [...connectionsRef.current, ...newConnections];
+            setNodes(nodesRef.current);
+            setConnections(connectionsRef.current);
+        },
+        [setConnections, setNodes],
+    );
+
+    /**
+     * 分段执行：切分 → 逐段生成 → 合成。
+     *
+     * 局部重绘与角色替换共用这条链路，差别只在参考图构成：
+     * - 局部重绘：参考视频 = 原片该段；参考图 = 该段首帧 + 尾帧（钉住接缝）
+     * - 角色替换：参考视频 = 原片该段；参考图 = 角色图 + 该段首尾帧
+     */
+    const handleVideoEditSubmit = useCallback(
+        async (plan: VideoEditPlan) => {
+            const source = videoTimelineNode;
+            if (!source?.metadata?.content) return;
+            const sourceUrl = source.metadata.content;
+            const sourceTitle = source.title || t("canvas.sidePanel.filter.video");
+            const toastKey = `video-edit-${source.id}`;
+            const composeKey = `video-compose-${source.id}`;
+            const controller = new AbortController();
+
+            setVideoTimelineSubmitting(true);
+            const produced: { nodeId: string; blob: Blob; range: VideoRange }[] = [];
+
+            try {
+                const sourceBlob = await loadNodeVideoBlob(source);
+                const castImages = plan.castNodeIds
+                    .map((id) => nodesRef.current.find((item) => item.id === id))
+                    .filter((item): item is CanvasNodeData => Boolean(item?.metadata?.content));
+                const promptText = plan.prompt || (plan.mode === "repaint" ? t("canvas.videoTimeline.prompt.repaint") : t("canvas.videoTimeline.prompt.character"));
+                const config: AiConfig = {
+                    ...effectiveConfig,
+                    videoMode: "omni",
+                    channelId: source.metadata.channelId || effectiveConfig.channelId,
+                    workflowId: source.metadata.workflowId || effectiveConfig.workflowId,
+                };
+                const segmentColumnX = source.position.x + source.width + 96;
+
+                for (let index = 0; index < plan.ranges.length; index += 1) {
+                    if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+                    const range = plan.ranges[index];
+                    message.loading({ content: t("canvas.videoTimeline.toast.segmentRunning", { index: index + 1, count: plan.ranges.length }), key: toastKey, duration: 0 });
+
+                    const segmentId = nanoid();
+                    appendCanvasNodes(
+                        [
+                            {
+                                id: segmentId,
+                                type: CanvasNodeType.Video,
+                                title: t("canvas.videoTimeline.node.segmentTitle", { title: sourceTitle, index: index + 1 }),
+                                position: { x: segmentColumnX, y: source.position.y + index * (source.height + 32) },
+                                width: source.width,
+                                height: source.height,
+                                metadata: {
+                                    status: NODE_STATUS_LOADING,
+                                    generationMode: "video",
+                                    videoMode: "omni",
+                                    prompt: promptText,
+                                    effectivePrompt: promptText,
+                                    channelId: config.channelId,
+                                    workflowId: config.workflowId,
+                                    seconds: ((range.endMs - range.startMs) / 1000).toFixed(1),
+                                    videoSegment: {
+                                        sourceNodeId: source.id,
+                                        sourceDurationMs: source.metadata.durationMs || undefined,
+                                        startMs: range.startMs,
+                                        endMs: range.endMs,
+                                        index,
+                                        sceneStart: range.sceneStart,
+                                        mode: plan.mode,
+                                        anchor: { firstFrameMs: range.startMs, lastFrameMs: range.endMs },
+                                    },
+                                },
+                            },
+                        ],
+                        [{ id: nanoid(), fromNodeId: source.id, toNodeId: segmentId, kind: "lineage" }],
+                    );
+
+                    try {
+                        // 1. 切出这一段：模型吃不了长片，也吃不了整片
+                        const segmentBlob = await cutVideoSegment(sourceBlob, range.startMs, range.endMs);
+                        const segmentUpload = await uploadMediaFile(segmentBlob, "video");
+
+                        // 2. 参考图：角色在前（模型对靠前的参考更敏感），首尾帧在后钉住接缝
+                        const referenceImages: ReferenceImage[] = castImages.map((castNode) => ({
+                            id: castNode.id,
+                            name: `${castNode.title || "cast"}.png`,
+                            type: "image/png",
+                            dataUrl: castNode.metadata?.content || "",
+                            url: castNode.metadata?.content || "",
+                        }));
+                        const headFrame = await captureFrameDataUrl(sourceUrl, range.startMs, { width: 960 });
+                        const tailFrame = await captureFrameDataUrl(sourceUrl, Math.max(range.startMs, range.endMs - 34), { width: 960 });
+                        referenceImages.push(
+                            { id: `head-${segmentId}`, name: "segment_start.jpg", type: "image/jpeg", dataUrl: headFrame, url: headFrame },
+                            { id: `tail-${segmentId}`, name: "segment_end.jpg", type: "image/jpeg", dataUrl: tailFrame, url: tailFrame },
+                        );
+
+                        // 3. 生成：参考视频给内容与节奏，首尾帧给接缝，角色图给外观
+                        const result = await requestVideoGeneration(config, promptText, referenceImages, {
+                            signal: controller.signal,
+                            videoMode: "omni",
+                            referenceVideos: [{ id: segmentId, name: `segment_${index + 1}.mp4`, type: "video/mp4", url: segmentUpload.url, storageKey: segmentUpload.storageKey, durationMs: segmentUpload.durationMs }],
+                            seed: generateRandomSeed(),
+                            onProgress: (status, detail) => {
+                                if (status === "submitted" && detail?.jobId) patchCanvasNode(segmentId, { metadata: { ...nodesRef.current.find((item) => item.id === segmentId)?.metadata, jobId: detail.jobId } });
+                            },
+                        });
+                        const video = await storeGeneratedVideo(result);
+                        const storedBlob = video.storageKey ? await getMediaBlob(video.storageKey) : null;
+                        const videoBlob = storedBlob ?? (await (await fetch(video.url)).blob());
+                        produced.push({ nodeId: segmentId, blob: videoBlob, range });
+
+                        const videoSize = fitNodeSize(video.width || source.width, video.height || source.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                        const currentNode = nodesRef.current.find((item) => item.id === segmentId);
+                        const sizePatch: Partial<CanvasNodeData> = { width: videoSize.width, height: videoSize.height };
+                        if (currentNode) sizePatch.position = { x: currentNode.position.x + currentNode.width / 2 - videoSize.width / 2, y: currentNode.position.y };
+                        patchCanvasNode(segmentId, {
+                            ...sizePatch,
+                            metadata: { ...currentNode?.metadata, ...videoMetadata(video), status: NODE_STATUS_SUCCESS, prompt: promptText, effectivePrompt: promptText, errorDetails: undefined, jobId: undefined, isTimeout: undefined },
+                        });
+                        message.loading({ content: t("canvas.videoTimeline.toast.segmentDone", { index: index + 1, count: plan.ranges.length }), key: toastKey, duration: 1.2 });
+                    } catch (error) {
+                        if (isGenerationCanceled(error)) throw error;
+                        const errorDetails = error instanceof Error ? error.message : t("canvas.videoTimeline.toast.cutFailed", { error: "" });
+                        const currentNode = nodesRef.current.find((item) => item.id === segmentId);
+                        patchCanvasNode(segmentId, { metadata: { ...currentNode?.metadata, status: NODE_STATUS_ERROR, errorDetails } });
+                        message.error({ content: t("canvas.videoTimeline.toast.segmentFailed", { index: index + 1, error: errorDetails }), key: toastKey });
+                        // 一段失败就停：继续只会产出一堆接不上的碎片。
+                        break;
+                    }
+                }
+
+                if (produced.length === plan.ranges.length && produced.length > 0) {
+                    message.loading({ content: t("canvas.videoTimeline.toast.composing"), key: composeKey, duration: 0 });
+                    const merged = await concatVideoParts(
+                        produced.map((part) => ({ blob: part.blob, sceneStart: part.range.sceneStart })),
+                        {
+                            crossfadeFrames: plan.crossfadeFrames,
+                            audio: plan.keepAudio ? sourceBlob : null,
+                            signal: controller.signal,
+                            onProgress: (ratio) => {
+                                message.loading({ content: `${t("canvas.videoTimeline.toast.composing")} ${Math.round(ratio * 100)}%`, key: composeKey, duration: 0 });
+                            },
+                        },
+                    );
+                    const uploaded = await uploadMediaFile(merged, "video");
+                    const compositeId = nanoid();
+                    appendCanvasNodes(
+                        [
+                            {
+                                id: compositeId,
+                                type: CanvasNodeType.Video,
+                                title: t("canvas.videoTimeline.node.compositeTitle", { title: sourceTitle }),
+                                position: { x: segmentColumnX + source.width + 96, y: source.position.y },
+                                width: source.width,
+                                height: source.height,
+                                metadata: {
+                                    ...videoMetadata(uploaded),
+                                    prompt: promptText,
+                                    effectivePrompt: promptText,
+                                    videoComposite: {
+                                        partNodeIds: produced.map((part) => part.nodeId),
+                                        crossfadeMs: Math.round((plan.crossfadeFrames / 30) * 1000),
+                                        sourceNodeId: source.id,
+                                    },
+                                },
+                            },
+                        ],
+                        produced.map((part) => ({ id: nanoid(), fromNodeId: part.nodeId, toNodeId: compositeId, kind: "lineage" as const })),
+                    );
+                    message.success({ content: t("canvas.videoTimeline.toast.composed"), key: composeKey });
+                }
+                setVideoTimelineNode(null);
+            } catch (error) {
+                if (isGenerationCanceled(error)) {
+                    message.info({ content: t("canvas.videoTimeline.toast.cancelled"), key: toastKey });
+                } else {
+                    const errorDetails = error instanceof Error ? error.message : String(error);
+                    message.error({ content: t("canvas.videoTimeline.toast.composeFailed", { error: errorDetails }), key: composeKey });
+                }
+            } finally {
+                setVideoTimelineSubmitting(false);
+            }
+        },
+        [appendCanvasNodes, effectiveConfig, isGenerationCanceled, message, patchCanvasNode, t, videoTimelineNode],
+    );
+
     const handleExecuteFaceRefine = useCallback(
         async (node: CanvasNodeData, options: { channelId: string; workflowId: string; prompt: string }) => {
             const { channelId, workflowId, prompt } = options;
@@ -5634,6 +5878,7 @@ function InfiniteCanvasPage() {
                     onViewImage={handleNodeViewImage}
                     onReversePrompt={createImageReversePromptNodes}
                     onFaceRefine={handleOpenFaceRefineModal}
+                    onVideoTimeline={handleOpenVideoTimeline}
                     onDepthVideo={handleOpenDepthVideoModal}
                     onSeparateAudio={handleSeparateAudio}
                     onRetry={handleNodeRetry}
@@ -5792,6 +6037,17 @@ function InfiniteCanvasPage() {
                 {upscaleNode?.metadata?.content ? (
                     <CanvasNodeUpscaleDialog dataUrl={upscaleNode.metadata.content} open={Boolean(upscaleNode)} onClose={() => setUpscaleNodeId(null)} onConfirm={(params) => void upscaleImageNode(upscaleNode!, params)} />
                 ) : null}
+
+                <CanvasVideoTimelineModal
+                    open={Boolean(videoTimelineNode)}
+                    node={videoTimelineNode}
+                    imageNodes={videoTimelineCastImages}
+                    submitting={videoTimelineSubmitting}
+                    onClose={() => {
+                        if (!videoTimelineSubmitting) setVideoTimelineNode(null);
+                    }}
+                    onSubmit={(plan) => void handleVideoEditSubmit(plan)}
+                />
 
                 <CanvasFaceRefineModal
                     open={Boolean(faceRefineNode)}
