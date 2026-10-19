@@ -69,6 +69,8 @@ export interface ComfyFlowGraphLayout {
         maxY: number;
         width: number;
         height: number;
+        centerX: number;
+        centerY: number;
     };
     stats: {
         totalNodes: number;

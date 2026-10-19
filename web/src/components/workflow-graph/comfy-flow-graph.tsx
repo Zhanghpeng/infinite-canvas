@@ -98,8 +98,37 @@ function ComfyFlowCanvas({
         };
     }, [rawLayout, draggedPositions]);
 
-    // 视口状态 (平移与缩放)
-    const [viewport, setViewport] = useState({ x: 60, y: 60, zoom: 0.85 });
+    // 计算当前所有节点的动态绝对外接矩形与几何中心（兼容用户手动拖拽位移）
+    const currentBounds = useMemo(() => {
+        if (nodes.length === 0) return rawLayout.bounds;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const n of nodes) {
+            if (n.x < minX) minX = n.x;
+            if (n.y < minY) minY = n.y;
+            if (n.x + n.width > maxX) maxX = n.x + n.width;
+            if (n.y + n.height > maxY) maxY = n.y + n.height;
+        }
+        return {
+            minX,
+            minY,
+            maxX,
+            maxY,
+            width: Math.max(maxX - minX, 400),
+            height: Math.max(maxY - minY, 300),
+            centerX: (minX + maxX) / 2,
+            centerY: (minY + maxY) / 2,
+        };
+    }, [nodes, rawLayout.bounds]);
+
+    // 视口状态 (平移与缩放，全屏模式默认 1.0)
+    const [viewport, setViewport] = useState(() => ({
+        x: 60,
+        y: 60,
+        zoom: isFullscreen ? 1.0 : 0.85,
+    }));
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
@@ -122,44 +151,107 @@ function ComfyFlowCanvas({
         hasMoved: false,
     });
 
-    // 自适应居中视口 (Fit View)
-    const handleFitView = useCallback(() => {
-        if (!containerRef.current || rawLayout.nodes.length === 0) return;
+    // 获取视口容器当前物理像素尺寸
+    const getContainerSize = useCallback(() => {
+        if (!containerRef.current) {
+            return {
+                width: isFullscreen ? window.innerWidth : 800,
+                height: isFullscreen ? window.innerHeight : 600,
+            };
+        }
         const rect = containerRef.current.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return;
+        return {
+            width: rect.width > 0 ? rect.width : (isFullscreen ? window.innerWidth : 800),
+            height: rect.height > 0 ? rect.height : (isFullscreen ? window.innerHeight : 600),
+        };
+    }, [isFullscreen]);
 
-        const padding = 80;
-        const graphWidth = rawLayout.bounds.width;
-        const graphHeight = rawLayout.bounds.height;
-
-        const scaleX = (rect.width - padding * 2) / graphWidth;
-        const scaleY = (rect.height - padding * 2) / graphHeight;
-        const nextZoom = Math.min(Math.max(Math.min(scaleX, scaleY), 0.2), 1.2);
-
-        const centerX = (rect.width - graphWidth * nextZoom) / 2 - rawLayout.bounds.minX * nextZoom;
-        const centerY = (rect.height - graphHeight * nextZoom) / 2 - rawLayout.bounds.minY * nextZoom;
+    // 重置并以 100% 原始比例在屏幕正中居中呈现（全屏模式默认）
+    const handleCenter100 = useCallback(() => {
+        if (nodes.length === 0) return;
+        const { width, height } = getContainerSize();
+        const zoom = 1.0;
+        const centerX = width / 2 - currentBounds.centerX * zoom;
+        const centerY = height / 2 - currentBounds.centerY * zoom;
 
         setViewport({
             x: Math.round(centerX),
             y: Math.round(centerY),
-            zoom: Number(nextZoom.toFixed(2)),
+            zoom: 1.0,
         });
-    }, [rawLayout]);
+    }, [nodes.length, getContainerSize, currentBounds]);
 
-    // 初始化以及容器尺寸准备就绪时自动 Fit View
+    // 自适应居中视口 (Fit View)
+    const handleFitView = useCallback(() => {
+        if (nodes.length === 0) return;
+        const { width, height } = getContainerSize();
+
+        const padding = 60;
+        const availableW = Math.max(width - padding * 2, 200);
+        const availableH = Math.max(height - padding * 2, 200);
+
+        const scaleX = availableW / currentBounds.width;
+        const scaleY = availableH / currentBounds.height;
+        const fitZoom = Math.min(Math.max(Math.min(scaleX, scaleY), 0.2), 1.0);
+
+        const centerX = width / 2 - currentBounds.centerX * fitZoom;
+        const centerY = height / 2 - currentBounds.centerY * fitZoom;
+
+        setViewport({
+            x: Math.round(centerX),
+            y: Math.round(centerY),
+            zoom: Number(fitZoom.toFixed(2)),
+        });
+    }, [nodes.length, getContainerSize, currentBounds]);
+
+    // 根据模式执行初始对齐：全屏模式以 100% 比例在屏幕正中居中呈现，小窗口模式 Fit View 看全
+    const applyInitialView = useCallback(() => {
+        if (isFullscreen) {
+            handleCenter100();
+        } else {
+            handleFitView();
+        }
+    }, [isFullscreen, handleCenter100, handleFitView]);
+
+    // 初始化时执行初始对齐（微任务定时器兼容模态框过渡）
     useEffect(() => {
-        const timer = setTimeout(handleFitView, 60);
-        return () => clearTimeout(timer);
-    }, [handleFitView]);
+        const timer1 = setTimeout(applyInitialView, 30);
+        const timer2 = setTimeout(applyInitialView, 120);
+        return () => {
+            clearTimeout(timer1);
+            clearTimeout(timer2);
+        };
+    }, [applyInitialView]);
 
-    // 窗口尺寸变化时重新自适应
+    // 使用 ResizeObserver 监听容器真实尺寸变化
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        let hasHandledFirstResize = false;
+        const observer = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+                    if (!hasHandledFirstResize) {
+                        hasHandledFirstResize = true;
+                        applyInitialView();
+                    }
+                }
+            }
+        });
+
+        observer.observe(container);
+        return () => observer.disconnect();
+    }, [applyInitialView]);
+
+    // 窗口尺寸变化时重新自适应居中
     useEffect(() => {
         const handleResize = () => {
-            handleFitView();
+            applyInitialView();
         };
         window.addEventListener("resize", handleResize);
         return () => window.removeEventListener("resize", handleResize);
-    }, [handleFitView]);
+    }, [applyInitialView]);
 
     // 监听原生非 passive 滚轮事件，彻底阻止页面联动滚动并进行平滑缩放
     useEffect(() => {
@@ -439,14 +531,14 @@ function ComfyFlowCanvas({
                     />
                 </Tooltip>
 
-                <Tooltip title="重置为 100%">
+                <Tooltip title="重置为 100% 居中">
                     <Button
                         size="small"
                         type="text"
                         icon={<RotateCcw className="size-3.5" />}
                         onClick={(e) => {
                             e.stopPropagation();
-                            setViewport({ x: 60, y: 60, zoom: 1.0 });
+                            handleCenter100();
                         }}
                     />
                 </Tooltip>

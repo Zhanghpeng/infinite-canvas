@@ -76,7 +76,7 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
         return {
             nodes: [],
             edges: [],
-            bounds: { minX: 0, minY: 0, maxX: 600, maxY: 400, width: 600, height: 400 },
+            bounds: { minX: 0, minY: 0, maxX: 600, maxY: 400, width: 600, height: 400, centerX: 300, centerY: 200 },
             stats: { totalNodes: 0, totalEdges: 0, detectedSlots: 0 },
         };
     }
@@ -373,16 +373,41 @@ export function parseWorkflowToGraph(workflow: Record<string, unknown>): ComfyFl
         currentX += COMFY_NODE_LAYOUT.WIDTH + COMFY_NODE_LAYOUT.LAYER_GAP_X;
     }
 
+    // 精准推导所有节点的绝对外接包围盒及几何中心
+    let boundsMinX = Infinity;
+    let boundsMinY = Infinity;
+    let boundsMaxX = -Infinity;
+    let boundsMaxY = -Infinity;
+
+    for (const node of nodes) {
+        if (node.x < boundsMinX) boundsMinX = node.x;
+        if (node.y < boundsMinY) boundsMinY = node.y;
+        if (node.x + node.width > boundsMaxX) boundsMaxX = node.x + node.width;
+        if (node.y + node.height > boundsMaxY) boundsMaxY = node.y + node.height;
+    }
+
+    if (nodes.length === 0) {
+        boundsMinX = 0;
+        boundsMinY = 0;
+        boundsMaxX = 600;
+        boundsMaxY = 400;
+    }
+
+    const boundsWidth = Math.max(boundsMaxX - boundsMinX, 400);
+    const boundsHeight = Math.max(boundsMaxY - boundsMinY, 300);
+
     return {
         nodes,
         edges,
         bounds: {
-            minX,
-            minY,
-            maxX,
-            maxY,
-            width: Math.max(maxX - minX + 160, 400),
-            height: Math.max(maxY - minY + 160, 300),
+            minX: boundsMinX,
+            minY: boundsMinY,
+            maxX: boundsMaxX,
+            maxY: boundsMaxY,
+            width: boundsWidth,
+            height: boundsHeight,
+            centerX: (boundsMinX + boundsMaxX) / 2,
+            centerY: (boundsMinY + boundsMaxY) / 2,
         },
         stats: {
             totalNodes: nodes.length,
