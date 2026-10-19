@@ -397,6 +397,7 @@ export default {
             "current": "Workspace: {{name}}",
             "none": "not selected",
             "browser": "Using browser storage",
+            "service": "Local service workspace: {{path}}",
             "switch": "Switch workspace",
             "open": "Open local directory",
             "openOther": "Open another directory…"

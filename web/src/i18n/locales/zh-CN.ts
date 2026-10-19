@@ -397,6 +397,7 @@ export default {
             "current": "工作区：{{name}}",
             "none": "未选择",
             "browser": "当前使用浏览器存储",
+            "service": "本地服务工作区：{{path}}",
             "switch": "切换工作区",
             "open": "打开本地目录",
             "openOther": "打开其他目录…"

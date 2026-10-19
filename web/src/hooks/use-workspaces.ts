@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { forgetWorkspace, hasDirectoryPermission, isFileSystemAccessSupported, listWorkspaces, loadWorkspaceHandle, pickDirectory, rememberWorkspace, requestDirectoryPermission, type WorkspaceSummary } from "@/lib/storage/fsa-handle";
+import { readWorkspaceManifest } from "@/services/api/local-workspace";
 import { useStorageStore } from "@/stores/use-storage-store";
 
 // 本地目录工作区的一等公民操作：最近列表、打开新目录、一键切换、移除记录。
@@ -13,6 +14,8 @@ export function useWorkspaces() {
     const store = useStorageStore();
     const [list, setList] = useState<WorkspaceSummary[]>([]);
     const [busy, setBusy] = useState(false);
+    // 本地服务模式下的工作区路径：只有服务端知道真实目录，前端需读清单才能显示。
+    const [servicePath, setServicePath] = useState("");
 
     const refresh = useCallback(async () => {
         setList(isFileSystemAccessSupported() ? await listWorkspaces() : []);
@@ -21,6 +24,24 @@ export function useWorkspaces() {
     useEffect(() => {
         void refresh();
     }, [refresh]);
+
+    useEffect(() => {
+        if (store.mode !== "service" || !store.serviceUrl) {
+            setServicePath("");
+            return;
+        }
+        let alive = true;
+        void readWorkspaceManifest(store.serviceUrl, store.serviceToken)
+            .then((info) => {
+                if (alive) setServicePath(info.workspacePath);
+            })
+            .catch(() => {
+                if (alive) setServicePath("");
+            });
+        return () => {
+            alive = false;
+        };
+    }, [store.mode, store.serviceUrl, store.serviceToken]);
 
     const confirmReload = useCallback(() => {
         modal.confirm({
@@ -96,6 +117,7 @@ export function useWorkspaces() {
         mode: store.mode,
         currentId: store.directoryId,
         currentName: store.directoryName,
+        servicePath,
         list,
         busy,
         openWorkspace,
