@@ -70,6 +70,12 @@ await buildPlugin(import.meta.url);
 
 插件 `tsconfig.json` 关键项:`"jsx": "react-jsx"`、`"jsxImportSource": "@infinite-canvas/plugin-sdk"`、`"moduleResolution": "bundler"`。
 
+本包的 `.ts` 源码会被拉进插件的编译程序,而 `react` 类型是按「从自身目录往上找」解析的,插件目录下的 `@types/react` 对它不可见。所以插件 tsconfig 需要显式映射一次(否则 `npm run typecheck` 会报一片 `TS7026` + `TS2307`):
+
+```jsonc
+"paths": { "react": ["./node_modules/@types/react"] }
+```
+
 ## 设计约束
 
 - **React 单例**:JSX 与 hooks 惰性读取 `globalThis.InfiniteCanvasRuntime.React`(宿主在加载插件前注入),react 全程 external,绝不打包第二份。

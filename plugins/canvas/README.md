@@ -139,7 +139,7 @@ ctx.applyOps([
     { type: "add_node", id?, nodeType, title?, x?, y?, width?, height?, metadata? },
     { type: "update_node", id, patch?, metadata? },
     { type: "delete_node", id? | ids? },
-    { type: "connect_nodes", fromNodeId, toNodeId },
+    { type: "connect_nodes", fromNodeId, toNodeId, slot? }, // slot: "first_frame" | "last_frame"
     { type: "delete_connections", id? | ids? | all? },
     { type: "select_nodes", ids },
     { type: "set_viewport", viewport },
@@ -150,6 +150,7 @@ ctx.applyOps([
 ## 重依赖 / 资源
 
 - **重依赖**(three.js、marked 等):不要打进 bundle,运行时 `await import("https://esm.sh/...")` 动态加载(esbuild 自动 external);在 `src/env.d.ts` 声明该模块以通过 tsc。参考 `panorama/`、`markdown/`。
+- **例外:离网环境可打包。** 插件若要在内网 / 无外网访问的画布里用,CDN 动态导入会直接失败。此时把依赖列进 `devDependencies` 正常 `import`,让 esbuild 打进 bundle(`three` 全量约 900KB,可接受)。参考 `director-stage/`,`env.d.ts` 里有对应说明。
 - **CSS**:写独立 `.css`,`import css from "./styles.css"` 拿到字符串(esbuild `text` loader),放到 `css` 字段自动注入/清理;`src/env.d.ts` 声明 `*.css`。参考 `markdown/`。
 - **HTML**:HTML 节点把 HTML 字符串塞进 sandbox iframe 的 `srcDoc`,自带 `<style>`,不需要插件级 CSS。参考 `html/`。
 
