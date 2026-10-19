@@ -15,7 +15,7 @@ import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
-import { useAssetStore, type BundleConnection, type BundleSlot } from "@/stores/use-asset-store";
+import { useAssetStore, type BundleConnection, type BundleItem, type BundleSlot } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
@@ -2639,6 +2639,98 @@ function InfiniteCanvasPage() {
         [addAsset, message, t],
     );
 
+    // 把画布分组里的素材整体收藏成一个「组合资产」：原子素材引用原 storageKey 入库（不复制文件），
+    // 组合只记录各自的 id、槽位，以及相对分组的偏移和原始节点尺寸 —— 有这些信息，在别的画布里插入时
+    // 才能 1:1 还原原始布局，而不是按默认尺寸重新堆一遍。
+    const saveGroupAsset = useCallback(
+        async (group: CanvasNodeData) => {
+            const members = getGroupResourceNodes(group.id, nodesRef.current);
+            let minX = Infinity;
+            let minY = Infinity;
+            for (const member of members) {
+                if (!member.position) continue;
+                minX = Math.min(minX, member.position.x);
+                minY = Math.min(minY, member.position.y);
+            }
+            const hasLayout = Number.isFinite(minX) && Number.isFinite(minY);
+            const items: BundleItem[] = [];
+            // 记录"原始画布节点 id → 入库资产 id"，用来把组内连线映射成组合内部连线。
+            const memberNodeIdToAssetId = new Map<string, string>();
+            let imageIndex = 0;
+            for (const member of members) {
+                const meta = member.metadata;
+                if (!meta?.content) continue;
+                const title = (member.title || t("canvas.projectPage.canvasImage")).slice(0, 24);
+                const offset = hasLayout && member.position ? { x: member.position.x - minX, y: member.position.y - minY } : undefined;
+                // 原节点尺寸一起存：插入端按它还原，避免按默认尺寸/图片原始分辨率重算把布局撑乱。
+                const size = { width: member.width, height: member.height };
+                const base = { title, coverUrl: "", tags: [] as string[], source: "Canvas", metadata: { source: "canvas", nodeId: member.id } };
+                let assetId: string | undefined;
+                if (member.type === CanvasNodeType.Text) {
+                    const content = meta.content.trim();
+                    if (content) assetId = addAsset({ ...base, kind: "text", data: { content } });
+                } else if (member.type === CanvasNodeType.Video) {
+                    assetId = addAsset({
+                        ...base,
+                        kind: "video",
+                        data: { url: meta.content, storageKey: meta.storageKey, width: member.width, height: member.height, bytes: meta.bytes || 0, mimeType: meta.mimeType || "video/mp4" },
+                    });
+                } else if (member.type === CanvasNodeType.Audio) {
+                    assetId = addAsset({
+                        ...base,
+                        kind: "audio",
+                        data: { url: meta.content, storageKey: meta.storageKey, durationMs: meta.durationMs, bytes: meta.bytes || 0, mimeType: meta.mimeType || "audio/mpeg" },
+                    });
+                } else {
+                    const rawDataUrl = meta.storageKey ? "" : meta.content;
+                    assetId = addAsset({
+                        ...base,
+                        kind: "image",
+                        coverUrl: meta.content,
+                        data: {
+                            dataUrl: rawDataUrl,
+                            storageKey: meta.storageKey,
+                            width: meta.naturalWidth || member.width,
+                            height: meta.naturalHeight || member.height,
+                            bytes: meta.bytes || getDataUrlByteSize(rawDataUrl),
+                            mimeType: meta.mimeType || "image/png",
+                        },
+                    });
+                }
+                if (!assetId) continue;
+                memberNodeIdToAssetId.set(member.id, assetId);
+                const slot: BundleSlot = member.type === CanvasNodeType.Image ? (imageIndex === 0 ? "primary" : "reference") : member.type === CanvasNodeType.Audio ? "voice" : "reference";
+                items.push({ assetId, slot, order: items.length, position: offset, size });
+                if (member.type === CanvasNodeType.Image) imageIndex += 1;
+            }
+            if (!items.length) return message.error(t("canvas.projectPage.emptyGroupSave"));
+            // 只取两端都在本组内的连线，映射成 assetId 之间的连线随组合一起存。
+            const memberNodeIds = new Set(memberNodeIdToAssetId.keys());
+            const connections: BundleConnection[] = connectionsRef.current
+                .filter((conn) => memberNodeIds.has(conn.fromNodeId) && memberNodeIds.has(conn.toNodeId))
+                .map((conn) => {
+                    const fromAssetId = memberNodeIdToAssetId.get(conn.fromNodeId);
+                    const toAssetId = memberNodeIdToAssetId.get(conn.toNodeId);
+                    if (!fromAssetId || !toAssetId) return undefined;
+                    const mapped: BundleConnection = { fromAssetId, toAssetId, kind: conn.kind };
+                    if (conn.slot) mapped.slot = conn.slot;
+                    return mapped;
+                })
+                .filter((conn): conn is BundleConnection => Boolean(conn));
+            addAsset({
+                kind: "bundle",
+                title: (group.title || t("canvas.node.group")).slice(0, 24),
+                coverUrl: "",
+                tags: [],
+                source: "Canvas",
+                data: { items, coverAssetId: items[0].assetId, connections: connections.length ? connections : undefined },
+                metadata: { source: "canvas", nodeId: group.id },
+            });
+            message.success(t("common.addedToAssets"));
+        },
+        [addAsset, message, t],
+    );
+
     const createImageReversePromptNodes = useCallback(
         (node: CanvasNodeData) => {
             if (node.type !== CanvasNodeType.Image || !node.metadata?.content) {
@@ -5084,6 +5176,7 @@ function InfiniteCanvasPage() {
                     onCaptureGroupNodes={(node) => handleCaptureGroupNodes(node.id)}
                     onFitGroup={(node) => handleFitGroup(node.id)}
                     onUngroup={(node) => ungroupSelected(node.id)}
+                    onSaveGroupAsset={(node) => void saveGroupAsset(node)}
                 />
 
                 {isViewer ? (
@@ -5175,6 +5268,10 @@ function InfiniteCanvasPage() {
                         }}
                         onFitGroup={() => {
                             if (contextMenuNode) handleFitGroup(contextMenuNode.id);
+                            setContextMenu(null);
+                        }}
+                        onSaveGroupAsset={() => {
+                            if (contextMenuNode) void saveGroupAsset(contextMenuNode);
                             setContextMenu(null);
                         }}
                         onDelete={() => {
