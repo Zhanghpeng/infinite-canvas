@@ -70,7 +70,182 @@ export function buildCanvasToolRequest(name: ToolName, input: Record<string, unk
         const data = input as { nodeId: string; mode?: string; prompt?: string };
         return applyOps([runGenerationOp(data.nodeId, generationMode(data.mode), data.prompt)]);
     }
+    if (name === "canvas_director_stage") {
+        const data = input as DirectorStageInput;
+        // 指令型参数（sceneId / exportMode / check）：不在这里展开模板、也不在这里渲染/自检，
+        // 只写一条 metadata 指令，由插件执行（模板数据只在插件里，导出需要渲染，自检要有真实节点）。
+        // 一次调用只发一条指令，优先级：sceneId > exportMode > check。
+        const command = data.sceneId
+            ? { id: `stage-cmd-${crypto.randomUUID()}`, type: "applyScene", sceneId: data.sceneId }
+            : data.exportMode
+              ? { id: `stage-cmd-${crypto.randomUUID()}`, type: "export", mode: data.exportMode }
+              : data.check
+                ? { id: `stage-cmd-${crypto.randomUUID()}`, type: "check" }
+                : null;
+        if (command) {
+            if (data.nodeId) return applyOps([{ type: "update_node", id: data.nodeId, metadata: { directorStageCommand: command, directorStageCommandAck: undefined } }]);
+            // 自检必须有节点可查：没有 nodeId 时不要凭空建一个空节点，直接告诉调用方怎么做
+            if (data.check) throw new Error("canvas_director_stage 的 check 需要 nodeId：先用 canvas_get_state 拿到导演台节点 id，再带 nodeId 调一次");
+            const id = `director-stage:stage-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+            return applyOps([
+                {
+                    type: "add_node",
+                    id,
+                    nodeType: "director-stage:stage",
+                    title: data.title,
+                    position: { x: data.x ?? nextCanvasX(state), y: data.y ?? 0 },
+                    width: data.width,
+                    height: data.height,
+                    metadata: { directorStageCommand: command },
+                },
+            ]);
+        }
+        const stageState = buildStageState(data, state);
+        if (data.nodeId) return applyOps([{ type: "update_node", id: data.nodeId, metadata: { stageState } }]);
+        return applyOps([
+            {
+                type: "add_node",
+                nodeType: "director-stage:stage",
+                title: data.title,
+                position: { x: data.x ?? nextCanvasX(state), y: data.y ?? 0 },
+                width: data.width,
+                height: data.height,
+                metadata: { stageState },
+            },
+        ]);
+    }
     throw new Error(`未知工具：${name}`);
+}
+
+// --- 3D 导演台：把模型给的部分字段归一化成插件能直接吃的 stageState ---
+
+export type DirectorStageInput = {
+    nodeId?: string;
+    title?: string;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    objects?: Array<Record<string, unknown>>;
+    camera?: Record<string, unknown>;
+    shots?: Array<Record<string, unknown>>;
+    motion?: Record<string, unknown>;
+    lighting?: "day" | "night" | "indoor" | "backlit";
+    sceneId?: string;
+    exportMode?: "prompt" | "current" | "firstLast" | "multiView" | "video";
+    /** 让插件对 nodeId 指向的导演台做一次几何自检（结果写在节点 metadata.directorStageCheck）。 */
+    check?: boolean;
+    /** 把画布上这个图片节点当背景板（空串 = 清除）。 */
+    backdropNodeId?: string;
+    /** 背景板打开时环境类素材是否不渲染（默认 true）。 */
+    backdropHideEnvironment?: boolean;
+    exportFormat?: "jpeg" | "png";
+    exportHeight?: 720 | 1080;
+    promptLocale?: "zh" | "en";
+};
+
+const STAGE_OBJECT_LIMIT = 8;
+const STAGE_SHOT_LIMIT = 8;
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number) {
+    const num = Number(value);
+    return Number.isFinite(num) ? Math.min(max, Math.max(min, num)) : fallback;
+}
+
+/** 角度要归一化而不是夹取：把 200° 夹成 180° 会静默改掉朝向。 */
+function normalizeAngle(value: unknown, fallback: number) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return fallback;
+    let angle = num % 360;
+    if (angle > 180) angle -= 360;
+    if (angle < -180) angle += 360;
+    return angle;
+}
+
+function normalizeStageCamera(raw: Record<string, unknown>) {
+    return {
+        azimuthDeg: normalizeAngle(raw.azimuthDeg, 35),
+        elevationDeg: clampNumber(raw.elevationDeg, -20, 80, 14),
+        distance: clampNumber(raw.distance, 0.8, 30, 5.2),
+        targetY: clampNumber(raw.targetY, 0, 6, 0.95),
+        focalMm: clampNumber(raw.focalMm, 8, 300, 35),
+    };
+}
+
+/**
+ * 只覆盖模型显式给出的字段，其余沿用节点上原有的 stageState（配合插件的 normalizeStageState 兜底）。
+ * 数值一律夹到插件文档里的合法范围，避免模型写出坏数据把画布节点打崩。
+ */
+export function buildStageState(input: DirectorStageInput, snapshot: CanvasSnapshot | null) {
+    const existing = input.nodeId ? findNode(snapshot, input.nodeId)?.metadata?.stageState : undefined;
+    const state: Record<string, unknown> = existing && typeof existing === "object" ? { ...(existing as Record<string, unknown>) } : {};
+
+    if (Array.isArray(input.objects)) {
+        state.objects = input.objects.slice(0, STAGE_OBJECT_LIMIT).map((raw, index) => {
+            const object = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+            return {
+                id: typeof object.id === "string" && object.id ? object.id : `agent-obj-${index + 1}`,
+                name: typeof object.name === "string" && object.name ? object.name : `对象 ${index + 1}`,
+                kind: object.kind === "prop" || object.kind === "model" || object.kind === "env" ? object.kind : "person",
+                ...(typeof object.assetId === "string" && object.assetId ? { assetId: object.assetId } : {}),
+                ...(Array.isArray(object.track) && object.track.length ? { track: normalizeAgentTrack(object.track) } : {}),
+                visible: object.visible !== false,
+                x: clampNumber(object.x, -12, 12, 0),
+                z: clampNumber(object.z, -12, 12, 0),
+                rotationYDeg: normalizeAngle(object.rotationYDeg, 0),
+                scale: clampNumber(object.scale, 0.2, 5, 1),
+            };
+        });
+    }
+    if (input.camera && typeof input.camera === "object") state.camera = normalizeStageCamera(input.camera);
+    if (Array.isArray(input.shots)) {
+        state.shots = input.shots.slice(0, STAGE_SHOT_LIMIT).map((raw, index) => {
+            const shot = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+            const camera = shot.camera && typeof shot.camera === "object" ? normalizeStageCamera(shot.camera as Record<string, unknown>) : undefined;
+            return {
+                id: typeof shot.id === "string" && shot.id ? shot.id : `agent-shot-${index + 1}`,
+                name: typeof shot.name === "string" && shot.name ? shot.name : `机位 ${index + 1}`,
+                ...(camera ? { camera } : {}),
+                holdMs: clampNumber(shot.holdMs, 0, 5000, 0),
+            };
+        });
+        // 旧的 cameraA/cameraB 与新 shots 并存会让插件不知道怎么取，交给 shots
+        delete state.cameraA;
+        delete state.cameraB;
+    }
+    if (input.motion && typeof input.motion === "object") {
+        state.motion = {
+            durationMs: clampNumber(input.motion.durationMs, 400, 20000, 3000),
+            fps: clampNumber(input.motion.fps, 6, 60, 24),
+            easing: input.motion.easing === "linear" ? "linear" : "easeInOut",
+        };
+    }
+    if (typeof input.backdropNodeId === "string") {
+        // 传空串 = 清除背景板；否则指向一个画布图片节点（活链：那张图重新生成后自动更新）
+        if (input.backdropNodeId.trim()) {
+            state.backdrop = { nodeId: input.backdropNodeId.trim(), ...(input.backdropHideEnvironment === false ? { hideEnvironment: false } : {}) };
+        } else {
+            delete state.backdrop;
+        }
+    }
+    if (input.lighting === "day" || input.lighting === "night" || input.lighting === "indoor" || input.lighting === "backlit") state.lighting = input.lighting;
+    if (input.exportFormat === "jpeg" || input.exportFormat === "png") state.exportFormat = input.exportFormat;
+    if (input.exportHeight === 720 || input.exportHeight === 1080) state.exportHeight = input.exportHeight;
+    if (input.promptLocale === "zh" || input.promptLocale === "en") state.promptLocale = input.promptLocale;
+    return state;
+}
+
+/** 走位点归一化：数值夹取、朝向归一化、最多 12 个点（与插件端同规则）。 */
+function normalizeAgentTrack(raw: unknown[]) {
+    return raw
+        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+        .slice(0, 12)
+        .map((item) => ({
+            x: clampNumber(item.x, -12, 12, 0),
+            z: clampNumber(item.z, -12, 12, 0),
+            rotationYDeg: normalizeAngle(item.rotationYDeg, 0),
+            holdMs: clampNumber(item.holdMs, 0, 5000, 0),
+        }));
 }
 
 /** 按最大边限制计算附件图片节点尺寸，并保持原始比例。 */

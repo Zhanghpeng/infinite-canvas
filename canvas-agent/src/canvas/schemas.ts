@@ -1,6 +1,14 @@
 import { z } from "zod";
 
 const recordSchema = z.record(z.unknown());
+/** 机位：方位角/仰角/距离/视线高度/等效焦距（与插件 StageCamera 一致）。 */
+const stageCameraSchema = z.object({
+    azimuthDeg: z.number().optional(),
+    elevationDeg: z.number().optional(),
+    distance: z.number().optional(),
+    targetY: z.number().optional(),
+    focalMm: z.number().optional(),
+});
 const positionSchema = z.object({ x: z.number(), y: z.number() });
 const viewportSchema = z.object({ x: z.number(), y: z.number(), k: z.number() });
 const nodeTypeSchema = z.enum(["image", "text", "config", "video", "audio"]);
@@ -35,6 +43,7 @@ export const toolNames = [
     "canvas_select_nodes",
     "canvas_set_viewport",
     "canvas_run_generation",
+    "canvas_director_stage",
     "generation_get_status",
     "workbench_image_get_config",
     "workbench_image_generate",
@@ -117,6 +126,47 @@ export const toolInputSchemas = {
     canvas_select_nodes: z.object({ ids: z.array(z.string()) }),
     canvas_set_viewport: z.object({ viewport: viewportSchema }),
     canvas_run_generation: z.object({ nodeId: z.string(), mode: generationModeSchema.optional(), prompt: z.string().optional() }),
+    // 3D 导演台（本地画布插件 director-stage）：摆位/机位/运镜参数，服务端会归一化后再落到节点 metadata.stageState
+    canvas_director_stage: z.object({
+        nodeId: z.string().optional(),
+        title: z.string().optional(),
+        x: z.number().optional(),
+        y: z.number().optional(),
+        width: z.number().optional(),
+        height: z.number().optional(),
+        objects: z
+            .array(
+                z.object({
+                    id: z.string().optional(),
+                    name: z.string().optional(),
+                    kind: z.enum(["person", "prop", "model", "env"]).optional(),
+                    assetId: z.string().optional(),
+                    // 走位点（blocking）：≥2 个点就按时间轴动起来，与相机关键帧共用同一条时间轴
+                    track: z
+                        .array(z.object({ x: z.number(), z: z.number(), rotationYDeg: z.number().optional(), holdMs: z.number().optional() }))
+                        .optional(),
+                    x: z.number().optional(),
+                    z: z.number().optional(),
+                    rotationYDeg: z.number().optional(),
+                    scale: z.number().optional(),
+                    visible: z.boolean().optional(),
+                }),
+            )
+            .optional(),
+        camera: stageCameraSchema.optional(),
+        shots: z.array(z.object({ id: z.string().optional(), name: z.string().optional(), camera: stageCameraSchema.optional(), holdMs: z.number().optional() })).optional(),
+        motion: z.object({ durationMs: z.number().optional(), fps: z.number().optional(), easing: z.enum(["linear", "easeInOut"]).optional() }).optional(),
+        lighting: z.enum(["day", "night", "indoor", "backlit"]).optional(),
+        // 三个"指令型"参数：真正的展开/导出/自检都由插件执行（模板数据只在插件里）
+        sceneId: z.string().optional(),
+        exportMode: z.enum(["prompt", "current", "firstLast", "multiView", "video"]).optional(),
+        check: z.boolean().optional(),
+        backdropNodeId: z.string().optional(),
+        backdropHideEnvironment: z.boolean().optional(),
+        exportFormat: z.enum(["jpeg", "png"]).optional(),
+        exportHeight: z.union([z.literal(720), z.literal(1080)]).optional(),
+        promptLocale: z.enum(["zh", "en"]).optional(),
+    }),
     generation_get_status: z.object({ scope: z.enum(["all", "canvas", "image", "video"]).optional(), taskId: z.string().optional(), nodeIds: z.array(z.string()).optional(), limit: z.number().optional() }),
     workbench_image_get_config: z.object({}).passthrough(),
     workbench_image_generate: z.object({ prompt: z.string(), model: z.string().optional(), quality: z.string().optional(), size: z.string().optional(), count: z.number().optional(), run: z.boolean().optional() }),
@@ -154,6 +204,7 @@ export const toolDescriptions: Record<ToolName, string> = {
     canvas_connect_nodes: "批量连接节点。",
     canvas_select_nodes: "设置当前选中节点。",
     canvas_set_viewport: "调整画布视口。",
+    canvas_director_stage: "创建或更新一个「3D 导演台」节点（本地画布插件 director-stage）：用 objects 摆人物/道具/环境（x/z 单位米，rotationYDeg 朝向，0=面向 +Z），camera 设当前机位，shots 记关键帧机位序列（可带 holdMs 停留），motion 设运镜时长/帧率/缓动。传 nodeId 则更新已有导演台节点（未给的字段保留原值）。两种用法：① 直接给 objects/camera/shots/motion 摆场景；② 传 sceneId 让插件**套用内置场景模板**（推荐先套模板再微调，比从零拼坐标稳得多），模板 id：dialogue-over-shoulder 过肩正反打 / dialogue-external-reverse 外反打 / solo-monologue-push-in 单人独白推近 / hero-low-angle-crane 英雄低角度上摇 / rooftop-lookout-crane 天台摇臂拉起 / tracking-street-walk 横移跟拍 / chase-low-night 雨夜对峙 / group-pan 群像横扫 / product-orbit 静物环绕 / seaside-lookout 海边缓推。sceneId 也可以是用户在导演台里存过的「我的模板」id（节点 metadata.stageTemplateIds 里能读到 id 与名字，套用后会带上用户自己的模型与人物走位）。摆好之后可以传 exportMode 让插件导出（prompt 运镜提示词文本节点 / current 当前机位参考图 / firstLast 首尾帧 / multiView 多视图 / video 运镜视频），导出是异步的，节点与连线会自动出现。objects[].track 可以给人物记走位点（x/z/rotationYDeg/holdMs，≥2 个点就按 motion 的时间轴移动，与相机关键帧同步）。推荐用内置素材（objects[].assetId）而不是裸占位体，素材 id：人物 person-man / person-woman / person-child / person-sitting；道具 prop-table / prop-chair / prop-sofa / prop-box / prop-pillar / prop-door / prop-tree / prop-streetlamp / prop-car；环境 env-room（6m 房间）/ env-street（10m 街道）/ env-terrain（12m 地形）/ env-skyline（远景楼群，放在原点即可 —— 楼群自身已在 z≈-9）。环境类 kind 用 env、放在原点让人物站进去。摆好之后可以再用 canvas_create_node 建参考图/视频节点并连线，或让用户在导演台大窗口里微调。backdropNodeId 可以把画布上某个图片节点（通常是刚生成的环境/空镜）设为导演台的**背景板** —— 导出时人物就合成在真画面里，那张图重新生成后背景板会自动更新；传空串清除。backdropHideEnvironment（默认 true）表示背景板打开时环境类素材不再渲染（真环境就是那张图）。搭完/改完之后可以传 check: true（需要 nodeId）让插件做一次**几何自检** —— 检查主体是否出画、占比是否过小过大、机位是否贴脸、两个物体是否重叠、走位过程是否出画；自检是纯计算，一两秒后用 canvas_get_state 读回该节点 metadata 的 directorStageCheck（含 ok / issues / text），按 text 里的 ✗ 提示调机位或位置后再 check 一次；交付前不要留 ✗ 级问题。",
     canvas_run_generation: "触发指定节点生成（mode 可选 text/image/video），通常用于配置节点或文本/图片/视频节点。",
     generation_get_status: "查询当前活动网页的生成任务状态。默认返回画布、生图工作台和视频工作台最近任务；可用 scope 过滤来源，用 taskId 查询工作台任务，用 nodeIds 查询画布节点。",
     workbench_image_get_config: "读取生图工作台的当前参数和可选项（可用模型、质量、尺寸/宽高比、张数范围），在调用 workbench_image_generate 前先了解可选值。",
