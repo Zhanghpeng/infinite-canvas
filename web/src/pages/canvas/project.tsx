@@ -56,6 +56,12 @@ import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { buildNodeMentionReferences, getGroupResourceNodes, isCanvasReferenceNode, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { collectCollapsedNodeIds, collectGroupDescendantIds, isNodeLocked } from "@/lib/canvas/canvas-group-collapse";
+import { applyOptimizedText, appendOptimizedTextSlot, assistantOutputSummaryText, buildNodeOutputRequest, buildPromptAssistantRequest, cleanOptimizedPrompt, collectWorkflowSlots, MAX_ASSISTANT_SOURCE_CHARS, readNodeText, resolveAssistantTargetCategory, resolveSkillProduces, resolveWorkflowConstraint, revertOptimizedTextSlot, summarizeAssistantOutput, type PromptAssistantConfig } from "@/lib/canvas/canvas-prompt-assistant";
+import type { BuiltinPromptSkillId } from "@/lib/canvas/prompt-skills";
+import { readAgentClientId } from "@/lib/agent/agent-client-id";
+import { AgentApiError, fetchAgentJson, interruptCodexTurn } from "@/services/api/canvas-agent";
+import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
+import { usePromptAssistantStore } from "@/stores/use-prompt-assistant-store";
 import { exportCanvasProjects, safeFileName } from "@/lib/canvas/canvas-export";
 import { applyNodeConfigPatch, audioMetadata, buildAudioGenerationMetadata, buildImageGenerationMetadata, cloneNodeMetadata, createCanvasNode, imageMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
 import {
@@ -319,6 +325,8 @@ function InfiniteCanvasPage() {
     const [referencePickerNodeId, setReferencePickerNodeId] = useState<string | null>(null);
     const [interruptedBannerDismissed, setInterruptedBannerDismissed] = useState(false);
     const [isResumingInterrupted, setIsResumingInterrupted] = useState(false);
+    // 提示词助手：当前正在改写的节点（按钮切「停止优化」）与进行中的请求。
+    const [promptAssistantNodeId, setPromptAssistantNodeId] = useState<string | null>(null);
 
     const nodesRef = useRef(nodes);
     const connectionsRef = useRef(connections);
@@ -331,6 +339,7 @@ function InfiniteCanvasPage() {
     const selectionBoxRef = useRef(selectionBox);
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
+    const promptAssistantAbortRef = useRef<AbortController | null>(null);
     // 交互回调（鼠标事件、拖拽）里不便依赖 state，用 ref 兜住折叠/锁定集合。
     const collapsedNodeIdsRef = useRef<Set<string>>(new Set());
     const lockedNodeIdsRef = useRef<Set<string>>(new Set());
@@ -2255,6 +2264,313 @@ function InfiniteCanvasPage() {
 
     const handleNodeTitleChange = useCallback((nodeId: string, title: string) => {
         setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, title } : node)));
+    }, []);
+
+    // 提示词助手：组装「技能指令 + 工作流约束 + 原文」交给本地文本链路，流式写进一条新备选，完成后设为主文本。
+    const promptAssistantConstraintFor = useCallback(
+        (node: CanvasNodeData) => {
+            const category = resolveAssistantTargetCategory(node.id, nodesRef.current, connectionsRef.current);
+            if (!category) return "";
+            const channel = resolveModelChannel(effectiveConfig, effectiveConfig.textModel || effectiveConfig.model);
+            const workflow = getDefaultWorkflow(channel, category);
+            return resolveWorkflowConstraint(category, workflow ? collectWorkflowSlots(workflow.json) : []);
+        },
+        [effectiveConfig],
+    );
+
+    /** 提示词助手的 agent 超时：长文本改写比生成侧慢，120s 后按超时处理。 */
+    const PROMPT_ASSISTANT_AGENT_TIMEOUT_MS = 120_000;
+
+    /** 走本地 Agent：把组装好的指令交给当前会话，等这一轮结束再取回助手正文（结果同时会出现在助手面板里）。 */
+    const runPromptAssistantTurn = useCallback((prompt: string, config: PromptAssistantConfig, signal: AbortSignal, contextImages: string[] = []) => {
+        const agent = useAgentStore.getState();
+        const endpoint = agent.url;
+        if (!agent.connected || !agent.token || !endpoint) return Promise.reject(new Error("AGENT_OFFLINE"));
+        const messageId = nanoid();
+        return fetchAgentJson<{ threadId?: string }>(endpoint, agent.token, "/agent/codex/turn", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+                prompt,
+                messageText: prompt.slice(0, 200),
+                messageId,
+                clientId: readAgentClientId(),
+                threadId: agent.activeThreadId,
+                conversationId: agent.conversation.conversationId,
+                expectedRevision: agent.conversation.revision,
+                // 改提示词不需要文件/网络权限：固定用最保守的模式，不继承对话面板里的设置。
+                permissionMode: "request",
+                model: config.model || agent.model || undefined,
+                effort: config.effort || agent.reasoningEffort || undefined,
+                skill: config.skill?.kind === "agent" ? { name: config.skill.name, path: config.skill.path } : undefined,
+                attachments: contextImages.map((dataUrl, index) => ({ id: `assistant-${index}`, name: `reference-${index + 1}.png`, type: "image/png", size: 0, width: 0, height: 0, dataUrl })),
+            }),
+        }).then(
+            () =>
+                new Promise<string>((resolve, reject) => {
+                    const startedAt = Date.now();
+                    let started = false;
+                    const cleanup = () => {
+                        window.clearInterval(timer);
+                        signal.removeEventListener("abort", onAbort);
+                    };
+                    const onAbort = () => {
+                        cleanup();
+                        reject(new Error("ABORTED"));
+                    };
+                    const timer = window.setInterval(() => {
+                        const state = useAgentStore.getState();
+                        if (state.waiting) started = true;
+                        if (signal.aborted) return onAbort();
+                        if (Date.now() - startedAt > PROMPT_ASSISTANT_AGENT_TIMEOUT_MS) {
+                            cleanup();
+                            reject(new Error("TIMEOUT"));
+                            return;
+                        }
+                        if (!started || state.waiting) return;
+                        cleanup();
+                        const answer = [...state.messages].reverse().find((item) => item.role === "assistant" && item.text?.trim());
+                        resolve(answer?.text || "");
+                    }, 500);
+                    signal.addEventListener("abort", onAbort);
+                }),
+        );
+    }, []);
+
+    /** 中断服务端那一轮：超时或用户取消都要调，否则会话会一直 busy，下一次会撞 CONVERSATION_BUSY。 */
+    const interruptAgentTurn = useCallback(() => {
+        const agent = useAgentStore.getState();
+        const endpoint = agent.url;
+        if (agent.connected && agent.token && endpoint && agent.activeThreadId) void interruptCodexTurn(endpoint, agent.token, agent.activeThreadId).catch(() => undefined);
+    }, []);
+
+    /**
+     * nodes 形态：不回写当前节点，让 Agent 用画布工具自己建节点，前端只负责喂上下文 + 按画布 diff 报产出。
+     * 只走 Agent（ComfyUI 文本工作流只会返回一段文字，建不了节点）。
+     */
+    const runPromptAssistantNodes = useCallback(
+        async (node: CanvasNodeData, assistantConfig: PromptAssistantConfig, skillId?: BuiltinPromptSkillId, options?: { quiet?: boolean }) => {
+            if (promptAssistantAbortRef.current) return null;
+            if (node.type !== CanvasNodeType.Text) return null;
+            if (isNodeLocked(node, nodesRef.current)) {
+                if (!options?.quiet) message.warning(t("canvas.promptAssistant.disabledLocked"));
+                return null;
+            }
+            const sourceText = readNodeText(node);
+            if (!sourceText) {
+                if (!options?.quiet) message.warning(t("canvas.promptAssistant.disabledEmpty"));
+                return null;
+            }
+            if (sourceText.length > MAX_ASSISTANT_SOURCE_CHARS) {
+                if (!options?.quiet) message.warning(t("canvas.promptAssistant.sourceTooLong", { max: MAX_ASSISTANT_SOURCE_CHARS }));
+                return null;
+            }
+
+            const agent = useAgentStore.getState();
+            if (!agent.connected) {
+                if (!options?.quiet) message.warning(t("canvas.promptAssistant.nodesDisabledAgent"));
+                return null;
+            }
+            if (agent.url && agent.token) void useAgentSkillStore.getState().loadSkills(agent.url, agent.token).catch(() => undefined);
+
+            const config: PromptAssistantConfig = skillId ? { ...assistantConfig, skill: { kind: "builtin", id: skillId } } : assistantConfig;
+            const before = { nodes: nodesRef.current, connections: connectionsRef.current };
+            const { prompt } = buildNodeOutputRequest({ config, nodeId: node.id, nodeTitle: node.title, nodeText: sourceText });
+            setPromptAssistantNodeId(node.id);
+            const controller = new AbortController();
+            promptAssistantAbortRef.current = controller;
+            try {
+                const answer = await runPromptAssistantTurn(prompt, { ...config, backend: "agent" }, controller.signal);
+                const summary = summarizeAssistantOutput(before, { nodes: nodesRef.current, connections: connectionsRef.current });
+                if (summary.addedNodes) {
+                    setSelectedNodeIds(new Set(summary.addedIds));
+                    setSelectedConnectionId(null);
+                    if (!options?.quiet) message.success(assistantOutputSummaryText(summary));
+                } else if (!options?.quiet) {
+                    message.info(t("canvas.promptAssistant.nodesNone", { answer: cleanOptimizedPrompt(answer).slice(0, 120) }));
+                }
+                return summary;
+            } catch (error) {
+                if (controller.signal.aborted) {
+                    message.info(t("canvas.promptAssistant.reverted"));
+                } else if (error instanceof Error && error.message === "TIMEOUT") {
+                    interruptAgentTurn();
+                    message.warning(t("canvas.promptAssistant.timeout"));
+                } else if (error instanceof AgentApiError && error.response?.code === "CONVERSATION_BUSY") {
+                    message.warning(t("canvas.promptAssistant.agentBusy"));
+                } else if (!options?.quiet) {
+                    message.warning(t("canvas.promptAssistant.nodesRollbackHint"));
+                }
+                return null;
+            } finally {
+                promptAssistantAbortRef.current = null;
+                setPromptAssistantNodeId(null);
+            }
+        },
+        [interruptAgentTurn, message, runPromptAssistantTurn, t],
+    );
+
+    const runNodeSkillBatchRef = useRef<((node: CanvasNodeData, config: PromptAssistantConfig) => Promise<void>) | null>(null);
+
+    /** 节点级配置覆盖全局默认（执行者 / 技能 / 模型 / 附加指令）。 */
+    const promptAssistantConfigOf = useCallback(
+        (node: CanvasNodeData): PromptAssistantConfig => ({ ...usePromptAssistantStore.getState().config, ...(node.metadata?.promptAssistant || {}) }),
+        [],
+    );
+
+    const runPromptAssistant = useCallback(
+        async (node: CanvasNodeData, config: PromptAssistantConfig, skillId?: BuiltinPromptSkillId, options?: { sourceText?: string; contextImages?: string[]; scope?: "chapter" | "group" }) => {
+            if (promptAssistantAbortRef.current) return;
+            if (node.type !== CanvasNodeType.Text) return;
+            if (isNodeLocked(node, nodesRef.current)) return message.warning(t("canvas.promptAssistant.disabledLocked"));
+            const sourceText = options?.sourceText ?? readNodeText(node);
+            const contextImages = options?.contextImages || [];
+            if (!sourceText && !contextImages.length) return message.warning(t("canvas.promptAssistant.disabledEmpty"));
+
+            const assistantConfig: PromptAssistantConfig = skillId ? { ...config, skill: { kind: "builtin", id: skillId } } : config;
+            // 形态由技能/配置决定：产出节点走另一条路径（不做写回）。
+            if (!options?.sourceText && !contextImages.length && resolveSkillProduces(assistantConfig) === "nodes") {
+                if (options?.scope === "group") return runNodeSkillBatchRef.current?.(node, assistantConfig);
+                return runPromptAssistantNodes(node, assistantConfig, skillId);
+            }
+            const { prompt, truncated } = buildPromptAssistantRequest({ config: assistantConfig, nodeText: sourceText, workflowConstraint: promptAssistantConstraintFor(node), hasImages: contextImages.length > 0 });
+            if (truncated) message.info(t("canvas.promptAssistant.truncatedHint"));
+
+            // 原文不动：先挂一条空备选承接流式结果，显示仍留在原文上，直到第一个字回来。
+            const { slotId, texts } = appendOptimizedTextSlot(node);
+            setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, texts } } : item)));
+            setPromptAssistantNodeId(node.id);
+
+            const controller = new AbortController();
+            promptAssistantAbortRef.current = controller;
+            if (assistantConfig.backend === "agent") {
+                // Agent 通道不发画布工具：结果由前端写回，保证「新增备选不覆盖原文」这条规则对两种后端一致。
+                const agentOnline = useAgentStore.getState().connected;
+                if (!agentOnline) {
+                    setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...revertOptimizedTextSlot(item, slotId) } } : item)));
+                    promptAssistantAbortRef.current = null;
+                    setPromptAssistantNodeId(null);
+                    message.warning(t("canvas.promptAssistant.agentOffline"));
+                    return;
+                }
+                try {
+                    // 顺手刷新「我的技能」列表，设置弹层里才能选到用户自己装的技能。
+                    const agentState = useAgentStore.getState();
+                    if (agentState.url && agentState.token) void useAgentSkillStore.getState().loadSkills(agentState.url, agentState.token).catch(() => undefined);
+                    const answer = await runPromptAssistantTurn(prompt, assistantConfig, controller.signal, contextImages);
+                    const finalText = cleanOptimizedPrompt(answer) || answer.trim();
+                    if (!finalText) throw new Error("EMPTY_ANSWER");
+                    setNodes((prev) =>
+                        prev.map((item) =>
+                            item.id === node.id ? { ...item, metadata: { ...item.metadata, ...applyOptimizedText(item, slotId, finalText), promptAssistant: { ...assistantConfig, optimizedAt: new Date().toISOString() } } } : item,
+                        ),
+                    );
+                    message.success(t("canvas.promptAssistant.applied"));
+                } catch (error) {
+                    setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...revertOptimizedTextSlot(item, slotId) } } : item)));
+                    if (controller.signal.aborted) {
+                        message.info(t("canvas.promptAssistant.reverted"));
+                    } else if (error instanceof Error && error.message === "TIMEOUT") {
+                        // 超时也要把服务端那一轮中断掉，否则会话一直忙。
+                        interruptAgentTurn();
+                        message.warning(t("canvas.promptAssistant.timeout"));
+                    } else if (error instanceof AgentApiError && error.response?.code === "CONVERSATION_BUSY") {
+                        message.warning(t("canvas.promptAssistant.agentBusy"));
+                    } else if (error instanceof AgentApiError && (error.response?.code === "CONVERSATION_NOT_READY" || error.status === 409)) {
+                        message.warning(t("canvas.promptAssistant.agentOffline"));
+                    } else {
+                        message.error(t("canvas.promptAssistant.failed"));
+                    }
+                } finally {
+                    promptAssistantAbortRef.current = null;
+                    setPromptAssistantNodeId(null);
+                }
+                return;
+            }
+            try {
+                let streamed = "";
+                const answer = await requestImageQuestion(
+                    buildGenerationConfig(effectiveConfig, node, "text"),
+                    [{ role: "user", content: contextImages.length ? [{ type: "text" as const, text: prompt }, ...contextImages.map((url) => ({ type: "image_url" as const, image_url: { url } }))] : prompt }],
+                    (delta) => {
+                        streamed = delta;
+                        setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...applyOptimizedText(item, slotId, delta, NODE_STATUS_LOADING) } } : item)));
+                    },
+                    { signal: controller.signal, seed: generateRandomSeed() },
+                );
+                const finalText = cleanOptimizedPrompt(answer || streamed) || streamed;
+                setNodes((prev) =>
+                    prev.map((item) =>
+                        item.id === node.id
+                            ? {
+                                  ...item,
+                                  metadata: {
+                                      ...item.metadata,
+                                      ...applyOptimizedText(item, slotId, finalText),
+                                      promptAssistant: { ...assistantConfig, optimizedAt: new Date().toISOString() },
+                                  },
+                              }
+                            : item,
+                    ),
+                );
+                message.success(t("canvas.promptAssistant.applied"));
+            } catch (error) {
+                setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...revertOptimizedTextSlot(item, slotId) } } : item)));
+                if (!isGenerationCanceled(error)) message.error(t("canvas.promptAssistant.failed"));
+            } finally {
+                promptAssistantAbortRef.current = null;
+                setPromptAssistantNodeId(null);
+            }
+        },
+        [effectiveConfig, interruptAgentTurn, message, promptAssistantConstraintFor, runPromptAssistantNodes, runPromptAssistantTurn, t],
+    );
+
+    /** 产出类技能跑「整个分组」：逐条串行执行（一次只喂一条，避免上下文爆掉）。 */
+    const runNodeSkillBatch = useCallback(
+        async (node: CanvasNodeData, config: PromptAssistantConfig) => {
+            if (promptAssistantAbortRef.current) return;
+            const targets = node.metadata?.groupId ? nodesRef.current.filter((item) => item.metadata?.groupId === node.metadata?.groupId) : [node];
+            if (!targets.length) return;
+            const batch = targets.length > 1;
+            const totals = { addedNodes: 0, addedTextNodes: 0, addedGroups: 0, addedOtherNodes: 0, addedConnections: 0 };
+            for (let index = 0; index < targets.length; index += 1) {
+                if (promptAssistantAbortRef.current) break;
+                if (batch) message.loading(t("canvas.promptAssistant.groupProgress", { done: index + 1, total: targets.length, title: targets[index].title }), 1.2);
+                const summary = await runPromptAssistantNodes(targets[index], { ...config, backend: "agent" }, undefined, { quiet: batch });
+                if (!summary) {
+                    if (promptAssistantAbortRef.current) break;
+                    continue;
+                }
+                totals.addedNodes += summary.addedNodes;
+                totals.addedTextNodes += summary.addedTextNodes;
+                totals.addedOtherNodes += summary.addedOtherNodes;
+                totals.addedGroups += summary.addedGroups;
+                totals.addedConnections += summary.addedConnections;
+            }
+            if (batch && totals.addedNodes) message.success(assistantOutputSummaryText(totals));
+            else if (batch && !totals.addedNodes) message.info(t("canvas.promptAssistant.nodesNone", { answer: "" }));
+        },
+        [message, runPromptAssistantNodes, t],
+    );
+
+    useEffect(() => {
+        runNodeSkillBatchRef.current = runNodeSkillBatch;
+    }, [runNodeSkillBatch]);
+
+    const cancelPromptAssistant = useCallback(() => {
+        const controller = promptAssistantAbortRef.current;
+        promptAssistantAbortRef.current = null;
+        controller?.abort();
+        interruptAgentTurn();
+        setPromptAssistantNodeId(null);
+    }, [interruptAgentTurn]);
+
+    const handlePromptAssistantChange = useCallback((node: CanvasNodeData, config: PromptAssistantConfig) => {
+        // 同时记住这次选择作为新节点的默认：否则每开一个文本节点都要重选执行者与技能，技能入口等于半残。
+        // 只写回配置字段（节点 metadata 里还挂着 optimizedAt 之类的运行记录，别带进全局默认）。
+        const { backend, skill, channelId, agentId, model, effort, instruction } = config;
+        usePromptAssistantStore.getState().setConfig({ backend, skill, channelId, agentId, model, effort, instruction });
+        setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, promptAssistant: config } } : item)));
     }, []);
 
     const handleNodeEditingTitleChange = useCallback((nodeId: string, isEditing: boolean) => {
@@ -5050,13 +5366,29 @@ function InfiniteCanvasPage() {
                     onReorderReferences={reorderNodeReferences}
                     onLocateNode={focusNode}
                     modeOverride={getNodeDefinition(panelNode.type)?.useBuiltinPanel?.mode}
+                    promptAssistantConfig={panelNode.type === CanvasNodeType.Text ? promptAssistantConfigOf(panelNode) : undefined}
+                    onPromptAssistantChange={panelNode.type === CanvasNodeType.Text ? (patch) => handlePromptAssistantChange(panelNode, { ...promptAssistantConfigOf(panelNode), ...patch }) : undefined}
+                    onOptimizePrompt={panelNode.type === CanvasNodeType.Text ? (scope) => void runPromptAssistant(panelNode, promptAssistantConfigOf(panelNode), undefined, { scope }) : undefined}
+                    isOptimizingPrompt={promptAssistantNodeId === panelNode.id}
+                    onCancelOptimizePrompt={cancelPromptAssistant}
+                    promptAssistantDisabledReason={
+                        panelNode.type !== CanvasNodeType.Text
+                            ? undefined
+                            : isNodeLocked(panelNode, nodes)
+                              ? t("canvas.promptAssistant.disabledLocked")
+                              : !readNodeText(panelNode)
+                                ? t("canvas.promptAssistant.disabledEmpty")
+                                : resolveSkillProduces(promptAssistantConfigOf(panelNode)) === "nodes" && !useAgentStore.getState().connected
+                                  ? t("canvas.promptAssistant.nodesDisabledAgent")
+                                  : undefined
+                    }
                     onSettingsOpenChange={(open) => {
                         setNodeImageSettingsOpen(open);
                         if (open) setToolbarNodeId(null);
                     }}
                 />
             ),
-        [configInputsById, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, focusNode, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, nodes, renderPluginPanel, reorderNodeReferences, runningNodeIds, startNodeReferenceSelection],
+        [cancelPromptAssistant, configInputsById, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, focusNode, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, handlePromptAssistantChange, mentionReferencesByNodeId, nodes, promptAssistantConfigOf, promptAssistantNodeId, renderPluginPanel, reorderNodeReferences, runPromptAssistant, runningNodeIds, startNodeReferenceSelection, t],
     );
 
     const renderNodeContentPanel = useCallback(

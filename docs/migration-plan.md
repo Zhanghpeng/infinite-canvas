@@ -450,3 +450,61 @@ docs/content/docs/development/director-stage-state{,.zh-CN}.mdx
 - `project.tsx` 报 `CanvasNodeHoverToolbarProps` 缺 `onSuperResolve` / `onAngle`（基线自带，
   批次二起就存在，属于"超分 / 角度节点"那条线，不在本批范围）
 - `prompt-skills` 体系 → 批次四
+
+## 10. 批次四执行记录：提示词技能体系
+
+分支 `feat/prompt-skills`，4 个提交，目标打通「一句话摆导演台」。
+
+### 迁入内容
+
+| 文件 | 说明 |
+| --- | --- |
+| `lib/canvas/prompt-skills.ts` | 10 个内置技能的结构定义（产出形态 / 是否需要图 / 建议分类） |
+| `lib/canvas/canvas-prompt-assistant.ts` | 请求组装、工作流约束、备选写回、产出统计 |
+| `lib/agent/agent-client-id.ts` | 从助手面板抽出的浏览器客户端身份（两处共用） |
+| `stores/use-prompt-assistant-store.ts` | 全局默认配置（persist） |
+| `components/canvas/canvas-prompt-skill-picker.tsx` | 执行者下拉 + 技能下拉 |
+
+- 面板：文本节点的底部换成「执行者 + 技能」；技能为 `nodes` 形态时主按钮变「用技能执行」，
+  分组内多出「本条 / 整个分组」选择；执行中变「停止优化」并中断服务端那一轮
+- 宿主：`project.tsx` 接 `runPromptAssistant`（改写写回）/ `runPromptAssistantNodes`
+  （让 Agent 建节点、按画布 diff 报产出）/ 分组串行批量 / 取消
+- 类型：`CanvasNodeMetadata.promptAssistant` 记录最近一次改写配置
+- 文案：中英各 64 键，含 10 个技能的说明与指令、导演台专属产出契约
+
+### 与合并版的四处偏差
+
+1. **`activeEndpoint` → `url`**：合并版 Agent store 有多个端点，主干只有一个 `url`；
+   6 处调用改读 `agent.url`，`loadSkills` 的入参同步
+2. **全局默认回写**：合并版 `promptAssistantConfigOf` 只读全局、`setConfig` 从无调用点
+   （dead code），导致每开一个文本节点都要重选执行者与技能、技能入口等于半残。
+   本批在 `handlePromptAssistantChange` 里把配置字段写回全局（只挑配置字段，
+   不带 `optimizedAt` 这类运行记录）
+3. **`workflowCategoryNames` 补全**：合并版该表缺 `depthVideo`（主干有该分类），已补
+   「深度视频提取 / Depth video extraction」，避免出现裸 key
+4. **不迁的回退**：面板的全屏编辑、`onSettingsOpenChange` 兜底语义、引用判据
+   （`r.type` vs `r.kind`、含子项的分组）、`canvas-prompt-chip-input` 的 `containerClassName`、
+   `videoSeconds` 的 6→5 秒特化，一律保留主干版本
+
+### 验收
+
+- `tsc --noEmit`：60 个错误，与主干基线逐条比对 `comm` 差量为空（零新增零消失）
+- `vitest run`：9 失败（基线 9，全在 `comfyui.test.ts` / `use-config-store.test.ts`）、
+  342 通过（新增 30 例全过）
+- `vite build`：通过；产物里含 `canvas_director_stage` 指令
+- 浏览器：`vite preview` + headless Chrome 打开 `/canvas`，DOM 185KB 正常渲染，无报错
+
+### 踩坑
+
+- **不要对这两个仓库跑 `prettier --write`**：`web/.prettierrc.json` 的
+  `quoteProps: "as-needed"` 会把 i18n 里成百上千个带引号的键改成裸键，
+  `project.tsx` 的 `setSearchParams` 等也会被重排。实测主干 `zh-CN.ts` / `project.tsx`
+  本身就不符合当前 prettier 配置（`--check` 直接报两文件不合规），
+  所以格式化只会制造几千行无意义 diff。**改完只做语义 diff 自查**。
+
+### 遗留
+
+- 反推提示词仍是主干旧实现（建文本+配置节点），未切到 `prompt-from-image` 技能
+- 「按章节拆分」与 `novel-deconstruct` 依赖 `lib/canvas/canvas-novel-split.ts`（未迁），
+  所以小说解构技能目前在 UI 里可选但会因超长源文被拦
+- `storyboard` 技能依赖通用契约建文本卡，未验证分组落位

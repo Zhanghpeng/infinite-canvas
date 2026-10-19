@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { ArrowUp, LoaderCircle, Maximize2, Minimize2, RefreshCw, Square } from "lucide-react";
-import { Button, Modal, Tooltip } from "antd";
+import { ArrowUp, LoaderCircle, Maximize2, Minimize2, RefreshCw, Sparkles, Square } from "lucide-react";
+import { Button, Modal, Select, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -15,6 +15,8 @@ import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas
 import { CanvasPromptChipInput } from "./canvas-prompt-chip-input";
 import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
 import { CanvasTextSettingsPopover } from "./canvas-text-settings-popover";
+import { CanvasPromptExecutorPicker, CanvasPromptSkillPicker } from "./canvas-prompt-skill-picker";
+import { resolveSkillProduces, type PromptAssistantConfig } from "@/lib/canvas/canvas-prompt-assistant";
 import { CanvasNodeType, type CanvasGenerationIntent, type CanvasGenerationMode, type CanvasNodeData } from "@/types/canvas";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasNodeReferenceBar } from "./canvas-node-reference-bar";
@@ -37,6 +39,13 @@ type CanvasNodePromptPanelProps = {
     onLocateNode?: (nodeId: string) => void;
     onSettingsOpenChange?: (open: boolean) => void;
     onImageSettingsOpenChange?: (open: boolean) => void;
+    /** 文本节点：底部的「执行者 / 技能」选择与按技能执行。 */
+    promptAssistantConfig?: PromptAssistantConfig;
+    onPromptAssistantChange?: (patch: Partial<PromptAssistantConfig>) => void;
+    onOptimizePrompt?: (scope: "chapter" | "group") => void;
+    isOptimizingPrompt?: boolean;
+    onCancelOptimizePrompt?: () => void;
+    promptAssistantDisabledReason?: string;
     modeOverride?: CanvasNodeGenerationMode; // Plugin nodes set their generation type through useBuiltinPanel.mode.
 };
 
@@ -56,10 +65,17 @@ export function CanvasNodePromptPanel({
     onLocateNode,
     onSettingsOpenChange,
     onImageSettingsOpenChange,
+    promptAssistantConfig,
+    onPromptAssistantChange,
+    onOptimizePrompt,
+    isOptimizingPrompt = false,
+    onCancelOptimizePrompt,
+    promptAssistantDisabledReason,
     modeOverride,
 }: CanvasNodePromptPanelProps) {
     const handleSettingsOpenChange = onSettingsOpenChange || onImageSettingsOpenChange;
     const { t } = useTranslation();
+    const [scope, setScope] = useState<"chapter" | "group">("chapter");
     const globalConfig = useEffectiveConfig();
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -86,9 +102,21 @@ export function CanvasNodePromptPanel({
         else onPromptChange(node.id, value);
     };
 
+    // 选了技能就走技能执行（执行者/形态由技能决定），没选就是原来的文本生成。
+    const canSkillRun = Boolean(mode === "text" && promptAssistantConfig?.backend === "agent" && promptAssistantConfig.skill && onOptimizePrompt);
+    // 执行者已是本地 Agent 但还没选技能：按钮置灰并说明先选技能，避免落到「渠道生成」的歧义上。
+    const agentNeedsSkill = Boolean(mode === "text" && promptAssistantConfig?.backend === "agent" && !promptAssistantConfig.skill);
+    const promptAssistantScopeVisible = Boolean(canSkillRun && resolveSkillProduces(promptAssistantConfig!) === "nodes" && node.metadata?.groupId);
+
     const submit = (intent: CanvasGenerationIntent = canRepeat ? "repeat" : "new") => {
+        if (isGenerating || isOptimizingPrompt) return;
+        // 选了技能（且执行者是本地 Agent）时，回车与主按钮都按技能执行。
+        if (canSkillRun) {
+            onOptimizePrompt?.(scope);
+            return;
+        }
         const text = prompt.trim();
-        if ((!text && intent !== "repeat") || isGenerating) return;
+        if (!text && intent !== "repeat") return;
         onGenerate(node.id, mode, text, intent);
     };
 
@@ -200,24 +228,68 @@ export function CanvasNodePromptPanel({
                         </>
                     ) : (
                         <>
-                            <ChannelWorkflowPicker
-                                category="text"
-                                channelId={node.metadata?.channelId}
-                                workflowId={node.metadata?.workflowId}
-                                onChange={(channelId, workflowId) => onConfigChange(node.id, { channelId, workflowId })}
-                            />
-                            <CanvasTextSettingsPopover
-                                config={config}
-                                count={node.metadata?.textCount || 1}
-                                buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
-                                onConfigChange={(_, value) => onConfigChange(node.id, { reasoningEffort: value })}
-                                onCountChange={(textCount) => onConfigChange(node.id, { textCount })}
-                                onOpenChange={handleSettingsOpenChange}
-                            />
+                            {promptAssistantConfig && onPromptAssistantChange ? (
+                                <>
+                                    <CanvasPromptExecutorPicker
+                                        config={{ ...promptAssistantConfig, channelId: promptAssistantConfig.channelId || node.metadata?.channelId }}
+                                        onChange={onPromptAssistantChange}
+                                        onChannelChange={(channelId) => onConfigChange(node.id, { channelId })}
+                                    />
+                                    {/* 渠道执行时保留原来的文本工作流下拉（只渲染工作流，渠道已在上面的执行者里选）；选了技能就不需要它了。 */}
+                                    {promptAssistantConfig.backend === "comfyui" ? (
+                                        <ChannelWorkflowPicker
+                                            category="text"
+                                            showChannel={false}
+                                            channelId={node.metadata?.channelId}
+                                            workflowId={node.metadata?.workflowId}
+                                            onChange={(channelId, workflowId) => onConfigChange(node.id, { channelId, workflowId })}
+                                        />
+                                    ) : null}
+                                    {promptAssistantConfig.backend === "agent" ? <CanvasPromptSkillPicker config={promptAssistantConfig} onChange={onPromptAssistantChange} /> : null}
+                                    {promptAssistantScopeVisible ? (
+                                        <Select
+                                            size="small"
+                                            className="w-[104px] shrink-0"
+                                            popupMatchSelectWidth={false}
+                                            value={scope}
+                                            onChange={setScope}
+                                            options={[
+                                                { value: "chapter", label: t("canvas.promptAssistant.scopeSingle") },
+                                                { value: "group", label: t("canvas.promptAssistant.scopeGroup") },
+                                            ]}
+                                        />
+                                    ) : null}
+                                </>
+                            ) : null}
+                            {promptAssistantConfig ? null : (
+                                <ChannelWorkflowPicker
+                                    category="text"
+                                    channelId={node.metadata?.channelId}
+                                    workflowId={node.metadata?.workflowId}
+                                    onChange={(channelId, workflowId) => onConfigChange(node.id, { channelId, workflowId })}
+                                />
+                            )}
+                            {promptAssistantConfig && promptAssistantConfig.backend === "agent" ? null : (
+                                <CanvasTextSettingsPopover
+                                    config={config}
+                                    count={node.metadata?.textCount || 1}
+                                    buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
+                                    onConfigChange={(_, value) => onConfigChange(node.id, { reasoningEffort: value })}
+                                    onCountChange={(textCount) => onConfigChange(node.id, { textCount })}
+                                    onOpenChange={handleSettingsOpenChange}
+                                />
+                            )}
                         </>
                     )}
                 </div>
-                {isGenerating ? (
+                {isOptimizingPrompt ? (
+                    <Button type="primary" danger className="ml-auto !h-10 shrink-0 !rounded-full !px-3" onClick={() => onCancelOptimizePrompt?.()} aria-label={t("canvas.promptAssistant.cancel")}>
+                        <span className="flex items-center gap-1.5">
+                            <LoaderCircle className="size-4 animate-spin" />
+                            <Square className="size-3.5 fill-current" />
+                        </span>
+                    </Button>
+                ) : isGenerating ? (
                     <Button type="primary" danger className="ml-auto !h-10 shrink-0 !rounded-full !px-3" onClick={() => onStop(node.id)} aria-label={t("canvas.promptPanel.stopGeneration")}>
                         <span className="flex items-center gap-1.5">
                             <LoaderCircle className="size-4 animate-spin" />
@@ -225,6 +297,12 @@ export function CanvasNodePromptPanel({
                             <span className="text-xs font-medium">{t("canvas.promptPanel.stop")}</span>
                         </span>
                     </Button>
+                ) : canSkillRun ? (
+                    <Tooltip title={promptAssistantDisabledReason || t("canvas.promptAssistant.entryHint")}>
+                        <Button type="primary" className="ml-auto !h-10 !min-w-16 shrink-0 !rounded-full !px-3" disabled={Boolean(promptAssistantDisabledReason)} onClick={() => onOptimizePrompt?.(scope)} aria-label={t("canvas.promptAssistant.runSkill")}>
+                            <Sparkles className="size-4" />
+                        </Button>
+                    </Tooltip>
                 ) : canRepeat ? (
                     <Button
                         type="primary"
@@ -235,9 +313,11 @@ export function CanvasNodePromptPanel({
                         {t("canvas.promptPanel.repeatGeneration")}
                     </Button>
                 ) : (
-                    <Button type="primary" className="ml-auto !h-10 !min-w-16 shrink-0 !rounded-full !px-3" disabled={!prompt.trim()} onClick={() => submit("new")} aria-label={t("canvas.promptPanel.generate")}>
-                        <ArrowUp className="size-4" />
-                    </Button>
+                    <Tooltip title={agentNeedsSkill ? t("canvas.promptAssistant.pickSkillFirst") : undefined}>
+                        <Button type="primary" className="ml-auto !h-10 !min-w-16 shrink-0 !rounded-full !px-3" disabled={agentNeedsSkill || !prompt.trim()} onClick={() => submit("new")} aria-label={t("canvas.promptPanel.generate")}>
+                            <ArrowUp className="size-4" />
+                        </Button>
+                    </Tooltip>
                 )}
             </div>
             <Modal
