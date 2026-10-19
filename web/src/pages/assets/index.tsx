@@ -1,15 +1,18 @@
 import { Copy, Download, PencilLine, Search, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { App, Button, Card, Drawer, Empty, Form, Image, Input, Modal, Pagination, Select, Space, Tag, Typography } from "antd";
+import { App, Button, Card, Checkbox, Drawer, Empty, Form, Image, Input, Modal, Pagination, Select, Space, Tag, Typography } from "antd";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { useCopyText } from "@/hooks/use-copy-text";
+import { AUDIO_FILE_EXTENSIONS } from "@/lib/canvas/canvas-generation-helpers";
 import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
 import { uploadImage } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
-import { useAssetStore, type Asset, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
-import { exportAssets, readAssetPackage } from "./asset-transfer";
+import i18n from "@/i18n";
+import { uploadMediaFile } from "@/services/file-storage";
+import { resolveBundleCover, useAssetStore, type Asset, type AssetKind, type AudioAsset, type BundleAsset, type BundleItem, type ImageAsset, type VideoAsset } from "@/stores/use-asset-store";
+import { exportAssets, readAssetPackage, remapBundleIds } from "./asset-transfer";
 
 type AssetFormValues = {
     kind: AssetKind;
@@ -22,8 +25,10 @@ type AssetFormValues = {
 };
 
 type ImageDraft = ImageAsset["data"] | null;
+type AudioDraft = AudioAsset["data"] | null;
+type VideoDraft = VideoAsset["data"] | null;
 
-const kindOptions = ["all", "text", "image", "video"] as const;
+const kindOptions = ["all", "text", "image", "video", "audio", "bundle"] as const;
 
 export default function AssetsPage() {
     const { message } = App.useApp();
@@ -32,11 +37,14 @@ export default function AssetsPage() {
     const [form] = Form.useForm<AssetFormValues>();
     const coverInputRef = useRef<HTMLInputElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
+    const audioInputRef = useRef<HTMLInputElement>(null);
+    const videoInputRef = useRef<HTMLInputElement>(null);
     const assetInputRef = useRef<HTMLInputElement>(null);
     const assets = useAssetStore((state) => state.assets);
     const addAsset = useAssetStore((state) => state.addAsset);
     const updateAsset = useAssetStore((state) => state.updateAsset);
     const removeAsset = useAssetStore((state) => state.removeAsset);
+    const removeAssets = useAssetStore((state) => state.removeAssets);
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState<AssetKind | "all">("all");
     const [page, setPage] = useState(1);
@@ -45,22 +53,28 @@ export default function AssetsPage() {
     const [isAssetOpen, setIsAssetOpen] = useState(false);
     const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
     const [deletingAsset, setDeletingAsset] = useState<Asset | null>(null);
+    const [batchDeleting, setBatchDeleting] = useState(false);
     const [formKind, setFormKind] = useState<AssetKind>("text");
     const [imageDraft, setImageDraft] = useState<ImageDraft>(null);
+    const [audioDraft, setAudioDraft] = useState<AudioDraft>(null);
+    const [videoDraft, setVideoDraft] = useState<VideoDraft>(null);
+    const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
     const coverUrl = Form.useWatch("coverUrl", form) || "";
     const title = Form.useWatch("title", form) || "";
     const tags = Form.useWatch("tags", form) || [];
     const content = Form.useWatch("content", form) || "";
-    const validAssets = useMemo(() => assets.filter((asset) => asset.kind === "text" || asset.kind === "image" || asset.kind === "video"), [assets]);
+    const validAssets = useMemo(() => assets.filter((asset) => asset.kind === "text" || asset.kind === "image" || asset.kind === "video" || asset.kind === "audio" || asset.kind === "bundle"), [assets]);
+
+    const assetsById = useMemo(() => new Map(validAssets.map((asset) => [asset.id, asset])), [validAssets]);
 
     const filteredAssets = useMemo(() => {
         const query = keyword.trim().toLowerCase();
         return validAssets.filter((asset) => {
             if (kindFilter !== "all" && asset.kind !== kindFilter) return false;
             if (!query) return true;
-            return assetSearchText(asset).includes(query);
+            return assetSearchText(asset, assetsById).includes(query);
         });
-    }, [validAssets, keyword, kindFilter]);
+    }, [validAssets, keyword, kindFilter, assetsById]);
 
     const visibleAssets = useMemo(() => {
         const start = (page - 1) * pageSize;
@@ -75,6 +89,8 @@ export default function AssetsPage() {
     const openCreate = () => {
         setEditingAsset(null);
         setImageDraft(null);
+        setAudioDraft(null);
+        setVideoDraft(null);
         setFormKind("text");
         form.setFieldsValue({ kind: "text", title: "", coverUrl: "", tags: [], source: t("assets.manual"), note: "", content: "" });
         setIsAssetOpen(true);
@@ -84,6 +100,8 @@ export default function AssetsPage() {
         setEditingAsset(asset);
         setFormKind(asset.kind);
         setImageDraft(asset.kind === "image" ? asset.data : null);
+        setAudioDraft(asset.kind === "audio" ? asset.data : null);
+        setVideoDraft(asset.kind === "video" ? asset.data : null);
         form.setFieldsValue({
             kind: asset.kind,
             title: asset.title,
@@ -109,6 +127,20 @@ export default function AssetsPage() {
 
         if (values.kind === "text") {
             const asset = { ...base, kind: "text" as const, data: { content: (values.content || "").trim() } };
+            editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset);
+        } else if (values.kind === "video") {
+            if (!videoDraft) {
+                message.error(t("assets.noVideoSelected"));
+                return;
+            }
+            const asset = { ...base, kind: "video" as const, data: videoDraft };
+            editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset);
+        } else if (values.kind === "audio") {
+            if (!audioDraft) {
+                message.error(t("assets.noAudioSelected"));
+                return;
+            }
+            const asset = { ...base, kind: "audio" as const, data: audioDraft };
             editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset);
         } else {
             if (!imageDraft) {
@@ -138,14 +170,29 @@ export default function AssetsPage() {
         if (!form.getFieldValue("title")) form.setFieldValue("title", file.name);
     };
 
+    const readAudioFile = async (file?: File) => {
+        if (!file || !file.type.startsWith("audio/")) return;
+        const audio = await uploadMediaFile(file, "audio");
+        setAudioDraft({ url: audio.url, storageKey: audio.storageKey, durationMs: audio.durationMs, bytes: audio.bytes, mimeType: audio.mimeType });
+        if (!form.getFieldValue("title")) form.setFieldValue("title", file.name);
+    };
+
+    const readVideoFile = async (file?: File) => {
+        if (!file || !file.type.startsWith("video/")) return;
+        const video = await uploadMediaFile(file, "video");
+        setVideoDraft({ url: video.url, storageKey: video.storageKey, width: video.width || 0, height: video.height || 0, bytes: video.bytes, mimeType: video.mimeType });
+        if (!form.getFieldValue("title")) form.setFieldValue("title", file.name);
+    };
+
     const copyAssetText = async (asset: Asset) => {
         if (asset.kind !== "text") return;
         copyText(asset.data.content, t("assets.textCopied"));
     };
 
     const downloadImage = (asset: Asset) => {
-        if (asset.kind !== "image" && asset.kind !== "video") return;
-        saveAs(asset.kind === "video" ? asset.data.url : asset.data.dataUrl, `${asset.title || "asset"}.${asset.data.mimeType.split("/")[1] || "png"}`);
+        if (asset.kind !== "image" && asset.kind !== "video" && asset.kind !== "audio") return;
+        const url = asset.kind === "image" ? asset.data.dataUrl : asset.data.url;
+        saveAs(url, `${asset.title || "asset"}.${asset.data.mimeType.split("/")[1] || "png"}`);
     };
 
     const exportAllAssets = async () => {
@@ -160,13 +207,20 @@ export default function AssetsPage() {
         if (!file) return;
         try {
             const importedAssets = await readAssetPackage(file);
-            importedAssets.forEach((asset) => {
-                const payload = { ...asset } as Record<string, unknown>;
-                delete payload.id;
-                delete payload.createdAt;
-                delete payload.updatedAt;
-                addAsset(payload as Parameters<typeof addAsset>[0]);
-            });
+            const idMap = new Map<string, string>();
+            // 先导入原子资产，记录 oldId → newId；再导入组合，把条目重映射到新 id。
+            importedAssets
+                .filter((asset) => asset.kind !== "bundle")
+                .forEach((asset) => {
+                    const { id, createdAt, updatedAt, ...rest } = asset;
+                    idMap.set(id, addAsset(rest as Parameters<typeof addAsset>[0]));
+                });
+            importedAssets
+                .filter((asset): asset is BundleAsset => asset.kind === "bundle")
+                .forEach((bundle) => {
+                    const { id, createdAt, updatedAt, ...rest } = bundle;
+                    addAsset(remapBundleIds(rest as BundleAsset, idMap) as Parameters<typeof addAsset>[0]);
+                });
             message.success(t("assets.imported", { count: importedAssets.length }));
         } catch {
             message.error(t("assets.importFailed"));
@@ -181,6 +235,59 @@ export default function AssetsPage() {
         message.success(t("assets.deleted"));
         setDeletingAsset(null);
     };
+
+    const toggleAssetSelection = (id: string) =>
+        setSelectedAssetIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+
+    const buildBundleItems = (ids: string[]) => ids.map((assetId, index) => ({ assetId, slot: "reference" as const, order: index }));
+
+    const packSelectedIntoBundle = () => {
+        if (!selectedAssetIds.length) return;
+        addAsset({
+            kind: "bundle",
+            title: t("assets.bundleDefaultTitle"),
+            coverUrl: "",
+            tags: [],
+            source: t("assets.manual"),
+            data: { items: buildBundleItems(selectedAssetIds), coverAssetId: selectedAssetIds[0] },
+        });
+        setSelectedAssetIds([]);
+        message.success(t("assets.saved"));
+    };
+
+    const addSelectedToBundle = (bundle: BundleAsset) => {
+        if (!selectedAssetIds.length) return;
+        const existing = new Set(bundle.data.items.map((item) => item.assetId));
+        const additions = selectedAssetIds.filter((id) => !existing.has(id)).map((assetId, index) => ({ assetId, slot: "reference" as const, order: bundle.data.items.length + index }));
+        if (!additions.length) {
+            setSelectedAssetIds([]);
+            return;
+        }
+        updateAsset(bundle.id, { data: { ...bundle.data, items: [...bundle.data.items, ...additions] } });
+        setSelectedAssetIds([]);
+    };
+
+    const removeBundleItem = (bundle: BundleAsset, assetId: string) => {
+        const items = bundle.data.items.filter((item) => item.assetId !== assetId).map((item, index) => ({ ...item, order: index }));
+        updateAsset(bundle.id, { data: { items, coverAssetId: bundle.data.coverAssetId === assetId ? items[0]?.assetId : bundle.data.coverAssetId } });
+    };
+
+    const setBundleCover = (bundle: BundleAsset, assetId: string) => updateAsset(bundle.id, { data: { ...bundle.data, coverAssetId: assetId } });
+
+    const setBundleItemSlot = (bundle: BundleAsset, assetId: string, slot: BundleItem["slot"]) =>
+        updateAsset(bundle.id, { data: { ...bundle.data, items: bundle.data.items.map((item) => (item.assetId === assetId ? { ...item, slot } : item)) } });
+
+    const moveBundleItem = (bundle: BundleAsset, index: number, delta: number) => {
+        const items = [...bundle.data.items].sort((a, b) => a.order - b.order);
+        const target = index + delta;
+        if (target < 0 || target >= items.length) return;
+        const swapped = [...items];
+        [swapped[index], swapped[target]] = [swapped[target], swapped[index]];
+        updateAsset(bundle.id, { data: { ...bundle.data, items: swapped.map((item, order) => ({ ...item, order })) } });
+    };
+
+    // 抽屉里的资产从 store 取最新一份，增删条目后自动刷新。
+    const previewAssetLive = previewAsset ? validAssets.find((item) => item.id === previewAsset.id) || previewAsset : null;
 
     return (
         <div className="flex h-full flex-col overflow-hidden bg-background text-stone-900 dark:text-stone-100">
@@ -260,13 +367,39 @@ export default function AssetsPage() {
                 <div className="mx-auto flex max-w-7xl flex-col gap-5">
                     <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                         {visibleAssets.map((asset) => (
-                            <AssetCard key={asset.id} asset={asset} onOpen={() => setPreviewAsset(asset)} onEdit={() => openEdit(asset)} onCopy={copyAssetText} onDownload={downloadImage} onDelete={() => setDeletingAsset(asset)} />
+                            <AssetCard
+                                key={asset.id}
+                                asset={asset}
+                                assetsById={assetsById}
+                                selected={selectedAssetIds.includes(asset.id)}
+                                onToggleSelect={() => toggleAssetSelection(asset.id)}
+                                onOpen={() => setPreviewAsset(asset)}
+                                onEdit={() => openEdit(asset)}
+                                onCopy={copyAssetText}
+                                onDownload={downloadImage}
+                                onDelete={() => setDeletingAsset(asset)}
+                            />
                         ))}
                     </div>
 
                     {!visibleAssets.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("assets.empty")} className="py-20" /> : null}
 
                     <div className="flex justify-center">
+                        {selectedAssetIds.length ? (
+                            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900">
+                                <span className="font-medium">{t("assets.selectedCount", { count: selectedAssetIds.length })}</span>
+                                <Button size="small" type="primary" onClick={packSelectedIntoBundle}>
+                                    {t("assets.packSelected", { count: selectedAssetIds.length })}
+                                </Button>
+                                <Button size="small" danger onClick={() => setBatchDeleting(true)}>
+                                    {t("assets.deleteSelected", { count: selectedAssetIds.length })}
+                                </Button>
+                                <button type="button" className="cursor-pointer text-xs underline underline-offset-4" onClick={() => setSelectedAssetIds([])}>
+                                    {t("assets.clearSelection")}
+                                </button>
+                            </div>
+                        ) : null}
+
                         <Pagination
                             current={page}
                             pageSize={pageSize}
@@ -290,6 +423,8 @@ export default function AssetsPage() {
                                 options={[
                                     { label: t("assets.kinds.text"), value: "text" },
                                     { label: t("assets.kinds.image"), value: "image" },
+                                    { label: t("assets.kinds.audio"), value: "audio" },
+                                    { label: t("assets.kinds.video"), value: "video" },
                                 ]}
                                 onChange={(value) => setFormKind(value)}
                             />
@@ -319,6 +454,40 @@ export default function AssetsPage() {
                         {formKind === "text" ? (
                             <Form.Item name="content" label={t("assets.fields.textContent")} rules={[{ required: true, message: t("assets.fields.textRequired") }]}>
                                 <Input.TextArea rows={8} placeholder={t("assets.fields.textPlaceholder")} />
+                            </Form.Item>
+                        ) : formKind === "video" ? (
+                            <Form.Item label={t("assets.fields.imageContent")} required>
+                                <div className="rounded-lg border border-dashed border-stone-300 p-4 dark:border-stone-700">
+                                    <Button icon={<Upload className="size-4" />} onClick={() => videoInputRef.current?.click()}>
+                                        {t("assets.selectVideoFile")}
+                                    </Button>
+                                    {videoDraft ? (
+                                        <Typography.Text type="secondary" className="ml-3 text-xs">
+                                            {videoDraft.width}x{videoDraft.height} · {formatBytes(videoDraft.bytes)}
+                                        </Typography.Text>
+                                    ) : (
+                                        <Typography.Text type="secondary" className="ml-3 text-xs">
+                                            {t("assets.noVideoSelected")}
+                                        </Typography.Text>
+                                    )}
+                                </div>
+                            </Form.Item>
+                        ) : formKind === "audio" ? (
+                            <Form.Item label={t("assets.fields.imageContent")} required>
+                                <div className="rounded-lg border border-dashed border-stone-300 p-4 dark:border-stone-700">
+                                    <Button icon={<Upload className="size-4" />} onClick={() => audioInputRef.current?.click()}>
+                                        {t("assets.selectAudioFile")}
+                                    </Button>
+                                    {audioDraft ? (
+                                        <Typography.Text type="secondary" className="ml-3 text-xs">
+                                            {formatBytes(audioDraft.bytes)} · {audioDraft.mimeType}
+                                        </Typography.Text>
+                                    ) : (
+                                        <Typography.Text type="secondary" className="ml-3 text-xs">
+                                            {t("assets.noAudioSelected")}
+                                        </Typography.Text>
+                                    )}
+                                </div>
                             </Form.Item>
                         ) : (
                             <Form.Item label={t("assets.fields.imageContent")} required>
@@ -386,22 +555,88 @@ export default function AssetsPage() {
                         event.target.value = "";
                     }}
                 />
+                <input
+                    ref={audioInputRef}
+                    type="file"
+                    accept={`audio/*,${AUDIO_FILE_EXTENSIONS.map((ext) => `.${ext}`).join(",")}`}
+                    className="hidden"
+                    onChange={(event) => {
+                        void readAudioFile(event.target.files?.[0]);
+                        event.target.value = "";
+                    }}
+                />
+                <input
+                    ref={videoInputRef}
+                    type="file"
+                    accept="video/*"
+                    className="hidden"
+                    onChange={(event) => {
+                        void readVideoFile(event.target.files?.[0]);
+                        event.target.value = "";
+                    }}
+                />
             </Modal>
 
-            <AssetDrawer asset={previewAsset} onClose={() => setPreviewAsset(null)} onCopy={copyAssetText} onDownload={downloadImage} />
+            <AssetDrawer
+                asset={previewAssetLive}
+                assetsById={assetsById}
+                selectedCount={selectedAssetIds.length}
+                onClose={() => setPreviewAsset(null)}
+                onCopy={copyAssetText}
+                onDownload={downloadImage}
+                onOpenAsset={(target) => setPreviewAsset(target)}
+                onAddSelected={addSelectedToBundle}
+                onRemoveItem={removeBundleItem}
+                onSetCover={setBundleCover}
+                onSetSlot={setBundleItemSlot}
+                onMoveItem={moveBundleItem}
+            />
 
             <input ref={assetInputRef} type="file" accept="application/zip,.zip" className="hidden" onChange={(event) => void importAssetZip(event.target.files?.[0])} />
 
             <Modal title={t("assets.deleteTitle")} open={Boolean(deletingAsset)} onCancel={() => setDeletingAsset(null)} onOk={confirmDelete} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelText={t("common.cancel")}>
                 {t("assets.deleteConfirm", { name: deletingAsset?.title })}
             </Modal>
+
+            <Modal title={t("assets.deleteSelectedTitle")} open={batchDeleting} onCancel={() => setBatchDeleting(false)} onOk={() => { removeAssets(selectedAssetIds); message.success(t("assets.deleted")); setSelectedAssetIds([]); setBatchDeleting(false); }} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelText={t("common.cancel")}>
+                {t("assets.deleteSelectedConfirm", { count: selectedAssetIds.length })}
+            </Modal>
         </div>
     );
 }
 
-function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { asset: Asset; onOpen: () => void; onEdit: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void; onDelete: () => void }) {
+/** 资产封面：组合资产用"显式封面条目 → 第一个有条目封面的资产"来解析。 */
+const BUNDLE_SLOT_OPTIONS: BundleItem["slot"][] = ["primary", "outfit", "accessory", "voice", "reference"];
+
+function assetCover(asset: Asset, assetsById: Map<string, Asset>): string {
+    if (asset.kind === "bundle") return resolveBundleCover(asset, [...assetsById.values()]);
+    if (asset.kind === "image") return asset.coverUrl || asset.data.dataUrl;
+    return asset.coverUrl;
+}
+
+function AssetCard({
+    asset,
+    assetsById,
+    selected,
+    onToggleSelect,
+    onOpen,
+    onEdit,
+    onCopy,
+    onDownload,
+    onDelete,
+}: {
+    asset: Asset;
+    assetsById: Map<string, Asset>;
+    selected: boolean;
+    onToggleSelect: () => void;
+    onOpen: () => void;
+    onEdit: () => void;
+    onCopy: (asset: Asset) => void;
+    onDownload: (asset: Asset) => void;
+    onDelete: () => void;
+}) {
     const { t } = useTranslation();
-    const cover = asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "");
+    const cover = assetCover(asset, assetsById);
     const summary = assetSummary(asset);
     return (
         <Card
@@ -409,13 +644,18 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
             className="overflow-hidden"
             styles={{ body: { padding: 0 } }}
             cover={
-                <button type="button" className="block w-full text-left" onClick={onOpen}>
-                    {cover ? (
-                        <img src={cover} alt={asset.title} className="aspect-[4/3] w-full object-cover" />
-                    ) : (
-                        <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-5 text-center text-sm leading-6 text-stone-600 dark:bg-stone-900 dark:text-stone-300">{asset.kind === "text" ? asset.data.content : t("assets.noCover")}</div>
-                    )}
-                </button>
+                <div className="relative">
+                    <button type="button" className="block w-full text-left" onClick={onOpen}>
+                        {cover ? (
+                            <img src={cover} alt={asset.title} className="aspect-[4/3] w-full object-cover" />
+                        ) : (
+                            <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-5 text-center text-sm leading-6 text-stone-600 dark:bg-stone-900 dark:text-stone-300">{asset.kind === "text" ? asset.data.content : t("assets.noCover")}</div>
+                        )}
+                    </button>
+                    <span className="absolute left-2 top-2 rounded bg-white/85 px-1.5 py-1 dark:bg-black/60">
+                        <Checkbox checked={selected} aria-label={asset.title} onChange={onToggleSelect} />
+                    </span>
+                </div>
             }
         >
             <button type="button" className="block w-full text-left" onClick={onOpen}>
@@ -469,9 +709,36 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
     );
 }
 
-function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | null; onClose: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void }) {
+function AssetDrawer({
+    asset,
+    assetsById,
+    selectedCount,
+    onClose,
+    onCopy,
+    onDownload,
+    onOpenAsset,
+    onAddSelected,
+    onRemoveItem,
+    onSetCover,
+    onSetSlot,
+    onMoveItem,
+}: {
+    asset: Asset | null;
+    assetsById: Map<string, Asset>;
+    selectedCount: number;
+    onClose: () => void;
+    onCopy: (asset: Asset) => void;
+    onDownload: (asset: Asset) => void;
+    onOpenAsset: (asset: Asset) => void;
+    onAddSelected: (bundle: BundleAsset) => void;
+    onRemoveItem: (bundle: BundleAsset, assetId: string) => void;
+    onSetCover: (bundle: BundleAsset, assetId: string) => void;
+    onSetSlot: (bundle: BundleAsset, assetId: string, slot: BundleItem["slot"]) => void;
+    onMoveItem: (bundle: BundleAsset, index: number, delta: number) => void;
+}) {
     const { t } = useTranslation();
-    const cover = asset ? asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "") : "";
+    const cover = asset ? assetCover(asset, assetsById) : "";
+    const bundleItems = asset?.kind === "bundle" ? [...asset.data.items].sort((a, b) => a.order - b.order) : [];
     return (
         <Drawer title={t("assets.details")} open={Boolean(asset)} size="large" onClose={onClose}>
             {asset ? (
@@ -500,12 +767,83 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                             <Typography.Paragraph className="mt-2 whitespace-pre-wrap">{asset.data.content}</Typography.Paragraph>
                         ) : asset.kind === "video" ? (
                             <video src={asset.data.url} controls className="mt-2 aspect-video w-full rounded-lg bg-black" />
+                        ) : asset.kind === "audio" ? (
+                            <audio src={asset.data.url} controls className="mt-2 w-full" />
+                        ) : asset.kind === "bundle" ? (
+                            <Typography.Text className="mt-2 block">
+                                {i18n.t("assets.bundleItemCount", { count: asset.data.items.length })}
+                            </Typography.Text>
                         ) : (
                             <Typography.Text className="mt-2 block">
                                 {asset.data.width}x{asset.data.height} · {formatBytes(asset.data.bytes)} · {asset.data.mimeType}
                             </Typography.Text>
                         )}
                     </div>
+                    {asset.kind === "bundle" ? (
+                        <div className="rounded-lg border border-stone-200 p-4 dark:border-stone-800">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <Typography.Text type="secondary" className="block text-xs">
+                                    {t("assets.bundleItems")}
+                                </Typography.Text>
+                                {selectedCount ? (
+                                    <Button size="small" type="primary" onClick={() => onAddSelected(asset)}>
+                                        {t("assets.addSelectedToBundle", { count: selectedCount })}
+                                    </Button>
+                                ) : null}
+                            </div>
+                            <div className="mt-3 space-y-2">
+                                {bundleItems.length ? (
+                                    bundleItems.map((item, index) => {
+                                        const target = assetsById.get(item.assetId);
+                                        const isCover = asset.data.coverAssetId === item.assetId;
+                                        return (
+                                            <div key={`${item.assetId}-${index}`} className="flex items-center gap-3 rounded-lg border border-stone-200 p-2 dark:border-stone-800">
+                                                <div className="size-10 shrink-0 overflow-hidden rounded bg-stone-100 dark:bg-stone-900">
+                                                    {target && assetCover(target, assetsById) ? <img src={assetCover(target, assetsById)} alt="" className="size-full object-cover" /> : null}
+                                                </div>
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="truncate text-xs font-medium">{target?.title || t("assets.itemMissing")}</div>
+                                                    <div className="mt-1 flex items-center gap-2 text-[11px] text-stone-500 dark:text-stone-400">
+                                                        <Select
+                                                            size="small"
+                                                            className="min-w-[104px]"
+                                                            value={item.slot}
+                                                            onChange={(value: BundleItem["slot"]) => onSetSlot(asset, item.assetId, value)}
+                                                            options={BUNDLE_SLOT_OPTIONS.map((slot) => ({ value: slot, label: i18n.t(`assets.slots.${slot}`) }))}
+                                                        />
+                                                        <span>{target ? t(`assets.kinds.${target.kind}`) : ""}{isCover ? ` · ${t("assets.setAsCover")}` : ""}</span>
+                                                    </div>
+                                                </div>
+                                                <Space size={2}>
+                                                    <Button size="small" type="text" disabled={index === 0} onClick={() => onMoveItem(asset, index, -1)}>
+                                                        {t("assets.moveUp")}
+                                                    </Button>
+                                                    <Button size="small" type="text" disabled={index === bundleItems.length - 1} onClick={() => onMoveItem(asset, index, 1)}>
+                                                        {t("assets.moveDown")}
+                                                    </Button>
+                                                    <Button size="small" type="text" disabled={!target || isCover} onClick={() => onSetCover(asset, item.assetId)}>
+                                                        {t("assets.setAsCover")}
+                                                    </Button>
+                                                    {target ? (
+                                                        <Button size="small" type="text" onClick={() => onOpenAsset(target)}>
+                                                            {t("assets.preview")}
+                                                        </Button>
+                                                    ) : null}
+                                                    <Button size="small" type="text" danger onClick={() => onRemoveItem(asset, item.assetId)}>
+                                                        {t("assets.removeItem")}
+                                                    </Button>
+                                                </Space>
+                                            </div>
+                                        );
+                                    })
+                                ) : (
+                                    <Typography.Text type="secondary" className="text-xs">
+                                        {t("assets.bundleEmpty")}
+                                    </Typography.Text>
+                                )}
+                            </div>
+                        </div>
+                    ) : null}
                     {asset.note ? (
                         <div>
                             <Typography.Text type="secondary">{t("assets.fields.note")}</Typography.Text>
@@ -518,9 +856,9 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                                 {t("assets.copyText")}
                             </Button>
                         ) : null}
-                        {asset.kind === "image" || asset.kind === "video" ? (
+                        {asset.kind === "image" || asset.kind === "video" || asset.kind === "audio" ? (
                             <Button type="primary" icon={<Download className="size-4" />} onClick={() => onDownload(asset)}>
-                                {asset.kind === "video" ? t("assets.downloadVideo") : t("assets.downloadImage")}
+                                {asset.kind === "video" ? t("assets.downloadVideo") : asset.kind === "audio" ? t("assets.downloadAudio") : t("assets.downloadImage")}
                             </Button>
                         ) : null}
                     </Space>
@@ -532,9 +870,19 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
 
 function assetSummary(asset: Asset) {
     if (asset.kind === "text") return asset.data.content;
+    if (asset.kind === "bundle") return i18n.t("assets.bundleItemCount", { count: asset.data.items.length });
+    if (asset.kind === "audio") {
+        const seconds = asset.data.durationMs ? `${Math.round(asset.data.durationMs / 1000)}s · ` : "";
+        return `${seconds}${formatBytes(asset.data.bytes)} · ${asset.data.mimeType}`;
+    }
     return `${asset.data.width}x${asset.data.height} · ${formatBytes(asset.data.bytes)} · ${asset.data.mimeType}`;
 }
 
-function assetSearchText(asset: Asset) {
+function assetSearchText(asset: Asset, assetsById?: Map<string, Asset>) {
+    if (asset.kind === "bundle") {
+        // 组合资产要能被"内含资产的标题"搜到。
+        const itemTitles = asset.data.items.map((item) => assetsById?.get(item.assetId)?.title || "").join(" ");
+        return [asset.title, asset.source || "", asset.note || "", (asset.tags || []).join(" "), itemTitles].join(" ").toLowerCase();
+    }
     return [asset.title, asset.source || "", asset.note || "", (asset.tags || []).join(" "), asset.kind === "text" ? asset.data.content : asset.data.mimeType].join(" ").toLowerCase();
 }

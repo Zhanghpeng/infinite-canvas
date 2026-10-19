@@ -1,25 +1,26 @@
 import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { App, Empty, Input, Popconfirm, Select, Spin, Tag } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Check, ChevronRight, Download, Eye, FileText, Image as ImageIcon, ListChecks, Music, Music2, Plus, Search, Settings2, Square, Trash2, Type, Video } from "lucide-react";
+import { BookOpen, Check, ChevronRight, Download, Eye, FileText, Image as ImageIcon, Layers, ListChecks, Music, Music2, Plus, Search, Settings2, Square, Trash2, Type, Video } from "lucide-react";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { exportCanvasNodes, safeFileName } from "@/lib/canvas/canvas-export";
+import { AUDIO_FILE_EXTENSIONS, isAudioFile } from "@/lib/canvas/canvas-generation-helpers";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { cn } from "@/lib/utils";
 import { PromptDetailDialog } from "@/pages/prompts/components/prompt-detail-dialog";
 import { fetchSourcePrompts, type Prompt } from "@/services/api/prompts";
 import { uploadMediaFile } from "@/services/file-storage";
 import { uploadImage } from "@/services/image-storage";
-import { useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-store";
+import { useAssetStore, resolveBundleCover, type Asset, type AssetKind } from "@/stores/use-asset-store";
 import { usePromptSourceStore } from "@/stores/use-prompt-source-store";
 import { CANVAS_SIDE_PANEL_MAX_WIDTH, CANVAS_SIDE_PANEL_MIN_WIDTH, CANVAS_SIDE_PANEL_MOTION_MS, useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 
-import type { InsertAssetPayload } from "./asset-picker-modal";
+import { toBundleEntries, type InsertAssetPayload } from "./asset-picker-modal";
 
 const PANEL_MOTION_SECONDS = CANVAS_SIDE_PANEL_MOTION_MS / 1000;
 const PANEL_EASE = [0.22, 1, 0.36, 1] as const;
@@ -197,6 +198,9 @@ function CanvasNodesTab({
         const query = keyword.trim().toLowerCase();
         return nodes.filter((node) => (typeFilter === "all" || node.type === typeFilter) && (!query || [node.title, node.metadata?.content, node.metadata?.prompt].filter(Boolean).join(" ").toLowerCase().includes(query)));
     }, [nodes, keyword, typeFilter]);
+    // 画布上折叠的分组，其子节点在列表里也一起收起，两边视图保持一致。
+    const canvasCollapsedGroups = useMemo(() => new Set(nodes.filter((node) => node.metadata?.collapsed).map((node) => node.id)), [nodes]);
+    const hiddenInList = useMemo(() => new Set([...collapsedGroups, ...canvasCollapsedGroups]), [collapsedGroups, canvasCollapsedGroups]);
     const treeRows = useMemo(() => {
         const filteredIds = new Set(filtered.map((node) => node.id));
         const groups = new Set(nodes.filter((node) => node.type === CanvasNodeType.Group).map((node) => node.id));
@@ -210,9 +214,9 @@ function CanvasNodesTab({
             if (node.type !== CanvasNodeType.Group) return filteredIds.has(node.id) ? [{ node, depth: 0, hasChildren: false }] : [];
             const groupChildren = children.get(node.id) || [];
             if (!filteredIds.has(node.id) && !groupChildren.length) return [];
-            return [{ node, depth: 0, hasChildren: groupChildren.length > 0 }, ...(collapsedGroups.has(node.id) ? [] : groupChildren.map((child) => ({ node: child, depth: 1, hasChildren: false })))];
+            return [{ node, depth: 0, hasChildren: groupChildren.length > 0 }, ...(hiddenInList.has(node.id) ? [] : groupChildren.map((child) => ({ node: child, depth: 1, hasChildren: false })))];
         });
-    }, [collapsedGroups, filtered, nodes]);
+    }, [hiddenInList, filtered, nodes]);
 
     const exitSelect = () => {
         setSelectMode(false);
@@ -429,13 +433,19 @@ const ASSET_GROUPS: { kind: AssetKind; icon: typeof Square }[] = [
     { kind: "video", icon: Video },
     { kind: "audio", icon: Music },
     { kind: "text", icon: FileText },
+    { kind: "bundle", icon: Layers },
 ];
 
-function buildInsertPayload(asset: Asset): InsertAssetPayload {
+function buildInsertPayload(asset: Asset, assetsById: Map<string, Asset>): InsertAssetPayload | null {
     if (asset.kind === "text") return { kind: "text", content: asset.data.content, title: asset.title };
     if (asset.kind === "video") return { kind: "video", url: asset.data.url, storageKey: asset.data.storageKey, title: asset.title, width: asset.data.width, height: asset.data.height };
     if (asset.kind === "audio") return { kind: "audio", url: asset.data.url, storageKey: asset.data.storageKey, title: asset.title, durationMs: asset.data.durationMs };
-    return { kind: "image", dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, title: asset.title };
+    if (asset.kind === "bundle") {
+        const entries = toBundleEntries(asset, assetsById);
+        return entries.length ? { kind: "bundle", title: asset.title, entries, connections: asset.data.connections } : null;
+    }
+    if (asset.kind === "image") return { kind: "image", dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, title: asset.title };
+    return null;
 }
 
 const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetPayload) => void; theme: CanvasTheme }) {
@@ -444,6 +454,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
     const assets = useAssetStore((state) => state.assets);
     const addAsset = useAssetStore((state) => state.addAsset);
     const removeAsset = useAssetStore((state) => state.removeAsset);
+    const assetsById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
     const [keyword, setKeyword] = useState("");
     const [tagFilter, setTagFilter] = useState<string>("all");
     const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -475,9 +486,9 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
                     const media = await uploadMediaFile(file, "video");
                     addAsset({ kind: "video", title: file.name || t("assets.kinds.video"), coverUrl: "", tags: [], data: { url: media.url, storageKey: media.storageKey, width: media.width || 0, height: media.height || 0, bytes: media.bytes, mimeType: media.mimeType } });
                     added += 1;
-                } else if (file.type.startsWith("audio/")) {
+                } else if (isAudioFile(file)) {
                     const media = await uploadMediaFile(file, "audio");
-                    addAsset({ kind: "audio", title: file.name || t("assets.kinds.audio"), coverUrl: "", tags: [], data: { url: media.url, storageKey: media.storageKey, bytes: media.bytes, mimeType: media.mimeType || "audio/mpeg", durationMs: media.durationMs } });
+                    addAsset({ kind: "audio", title: file.name || t("assets.kinds.audio"), coverUrl: "", tags: [], data: { url: media.url, storageKey: media.storageKey, durationMs: media.durationMs, bytes: media.bytes, mimeType: media.mimeType || "audio/mpeg" } });
                     added += 1;
                 }
             }
@@ -507,7 +518,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
                     <Plus className="size-3.5" />
                     {t("canvas.sidePanel.add")}
                 </button>
-                <input ref={fileInputRef} type="file" accept="image/*,video/*,audio/*" multiple className="hidden" onChange={(e) => void handleFiles(e.target.files)} />
+                <input ref={fileInputRef} type="file" accept={`image/*,video/*,audio/*,${AUDIO_FILE_EXTENSIONS.map((ext) => `.${ext}`).join(",")}`} multiple className="hidden" onChange={(e) => void handleFiles(e.target.files)} />
             </div>
             {allTags.length ? (
                 <div className="flex flex-wrap gap-1.5 px-3 pb-2">
@@ -541,7 +552,17 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
                                     {isCollapsed ? null : (
                                         <div className="grid grid-cols-2 gap-2 px-1 pb-2 pt-1">
                                             {group.items.map((asset) => (
-                                                <AssetCard key={asset.id} asset={asset} theme={theme} onInsert={() => onInsert(buildInsertPayload(asset))} onRemove={() => (removeAsset(asset.id), message.success(t("canvas.sidePanel.assetRemoved")))} />
+                                                <AssetCard
+                                                    key={asset.id}
+                                                    asset={asset}
+                                                    assets={assets}
+                                                    theme={theme}
+                                                    onInsert={() => {
+                                                        const payload = buildInsertPayload(asset, assetsById);
+                                                        if (payload) onInsert(payload);
+                                                    }}
+                                                    onRemove={() => (removeAsset(asset.id), message.success(t("canvas.sidePanel.assetRemoved")))}
+                                                />
                                             ))}
                                         </div>
                                     )}
@@ -557,10 +578,16 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
     );
 });
 
-function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: CanvasTheme; onInsert: () => void; onRemove: () => void }) {
+function AssetCard({ asset, assets, theme, onInsert, onRemove }: { asset: Asset; assets: Asset[]; theme: CanvasTheme; onInsert: () => void; onRemove: () => void }) {
     const { t } = useTranslation();
+    const assetsById = useMemo(() => new Map(assets.map((item) => [item.id, item])), [assets]);
     const handleDragStart = (e: React.DragEvent) => {
-        e.dataTransfer.setData("application/infinite-canvas-asset", JSON.stringify(buildInsertPayload(asset)));
+        const payload = buildInsertPayload(asset, assetsById);
+        if (!payload) {
+            e.preventDefault();
+            return;
+        }
+        e.dataTransfer.setData("application/infinite-canvas-asset", JSON.stringify(payload));
         e.dataTransfer.effectAllowed = "copy";
     };
     return (
@@ -571,7 +598,7 @@ function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: 
             style={{ borderColor: theme.node.stroke, background: theme.node.panel }}
             title={t("canvas.sidePanel.dragOrClickToInsert")}
         >
-            <AssetCover asset={asset} />
+            <AssetCover asset={asset} assets={assets} />
             <div className="absolute inset-0 flex items-center justify-center gap-2.5 opacity-0 transition duration-200 group-hover:opacity-100">
                 <button
                     type="button"
@@ -595,7 +622,7 @@ function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: 
     );
 }
 
-function AssetCover({ asset }: { asset: Asset }) {
+function AssetCover({ asset, assets }: { asset: Asset; assets: Asset[] }) {
     if (asset.kind === "text") return <div className="size-full overflow-hidden whitespace-pre-wrap break-words p-2.5 text-[11px] leading-snug opacity-80">{asset.data.content}</div>;
     if (asset.kind === "video") {
         if (asset.coverUrl) return <img src={asset.coverUrl} alt="" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
@@ -605,6 +632,23 @@ function AssetCover({ asset }: { asset: Asset }) {
         return (
             <div className="flex size-full flex-col items-center justify-center gap-1.5 p-2 text-center text-stone-500 dark:text-stone-400">
                 <Music className="size-6 text-stone-400 dark:text-stone-500" />
+                <span className="line-clamp-2 text-[10px] leading-tight font-medium">{asset.title}</span>
+            </div>
+        );
+    }
+    if (asset.kind === "bundle") {
+        const cover = resolveBundleCover(asset, assets);
+        if (cover) {
+            return (
+                <div className="relative size-full">
+                    <img src={cover} alt="" className="size-full object-cover opacity-90 transition duration-300 group-hover:scale-[1.04]" />
+                    <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">{asset.data.items.length}</span>
+                </div>
+            );
+        }
+        return (
+            <div className="flex size-full flex-col items-center justify-center gap-1.5 p-2 text-center text-stone-500 dark:text-stone-400">
+                <Layers className="size-6 text-stone-400 dark:text-stone-500" />
                 <span className="line-clamp-2 text-[10px] leading-tight font-medium">{asset.title}</span>
             </div>
         );

@@ -323,8 +323,11 @@ export function sourceNodeReferenceImages(node: CanvasNodeData | null) {
     ];
 }
 
+export const AUDIO_FILE_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "ogg", "oga", "opus", "flac", "aif", "aiff", "wma", "weba", "amr", "ape"];
+const AUDIO_FILE_PATTERN = new RegExp(`\\.(${AUDIO_FILE_EXTENSIONS.join("|")})$`, "i");
+
 export function isAudioFile(file: File) {
-    return file.type.startsWith("audio/") || /\.(mp3|wav)$/i.test(file.name);
+    return file.type.startsWith("audio/") || AUDIO_FILE_PATTERN.test(file.name);
 }
 
 export function buildAngleLabel(params: CanvasImageAngleParams) {

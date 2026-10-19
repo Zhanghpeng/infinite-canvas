@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { ReactNode } from "react";
-import { BetweenHorizontalStart, CheckSquare, FolderPlus, GalleryHorizontal, GalleryHorizontalEnd, Group, Maximize2, Plus, Split, Trash2, Ungroup } from "lucide-react";
+import { BetweenHorizontalStart, CheckSquare, ChevronsDownUp, ChevronsUpDown, FolderPlus, GalleryHorizontal, GalleryHorizontalEnd, Group, Lock, LockOpen, Maximize2, PackagePlus, Plus, Split, Trash2, Ungroup } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -23,6 +23,11 @@ export function CanvasNodeContextMenu({
     onSelectGroupChildren,
     onCaptureGroupNodes,
     onFitGroup,
+    onSaveGroupAsset,
+    onToggleGroupCollapse,
+    onToggleGroupLock,
+    groupCollapsed,
+    groupLocked,
     onSplitBatchImages,
 }: {
     menu: ContextMenuState;
@@ -39,6 +44,11 @@ export function CanvasNodeContextMenu({
     onSelectGroupChildren?: () => void;
     onCaptureGroupNodes?: () => void;
     onFitGroup?: () => void;
+    onSaveGroupAsset?: () => void;
+    groupCollapsed?: boolean;
+    groupLocked?: boolean;
+    onToggleGroupCollapse?: () => void;
+    onToggleGroupLock?: () => void;
     onSplitBatchImages?: () => void;
 }) {
     const { t } = useTranslation();
@@ -76,6 +86,17 @@ export function CanvasNodeContextMenu({
                     {onSelectGroupChildren ? <MenuButton icon={<CheckSquare className="size-4" />} label={t("canvas.node.selectGroupChildren")} onClick={onSelectGroupChildren} /> : null}
                     {onCaptureGroupNodes ? <MenuButton icon={<FolderPlus className="size-4" />} label={t("canvas.node.captureGroupNodes")} onClick={onCaptureGroupNodes} /> : null}
                     {onFitGroup ? <MenuButton icon={<Maximize2 className="size-4" />} label={t("canvas.node.fitGroupContent")} onClick={onFitGroup} /> : null}
+                    {onToggleGroupCollapse ? (
+                        <MenuButton
+                            icon={groupCollapsed ? <ChevronsUpDown className="size-4" /> : <ChevronsDownUp className="size-4" />}
+                            label={`${groupCollapsed ? t("canvas.node.expand") : t("canvas.node.collapse")} (⌘⇧E)`}
+                            onClick={onToggleGroupCollapse}
+                        />
+                    ) : null}
+                    {onToggleGroupLock ? (
+                        <MenuButton icon={groupLocked ? <LockOpen className="size-4" /> : <Lock className="size-4" />} label={`${groupLocked ? t("canvas.node.unlock") : t("canvas.node.lock")} (⌘⇧L)`} onClick={onToggleGroupLock} />
+                    ) : null}
+                    {onSaveGroupAsset ? <MenuButton icon={<PackagePlus className="size-4" />} label={t("canvas.nodeToolbar.saveGroupAsset")} onClick={onSaveGroupAsset} /> : null}
                     {onUngroup ? <MenuButton icon={<Ungroup className="size-4" />} label={`${t("canvas.node.ungroup")} (⇧⌘G)`} onClick={onUngroup} /> : null}
                     <div className="my-1 border-t" style={{ borderColor: theme.toolbar.border }} />
                 </>
