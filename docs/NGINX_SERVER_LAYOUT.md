@@ -103,8 +103,9 @@ server {
     index index.html;
 
     # SPA 路由回退（React/Vue 等前端必须）
+    # 注意：不要写 `$uri/`，否则 `public/` 下与路由同名的目录会遮蔽前端路由
     location / {
-        try_files $uri $uri/ /index.html;
+        try_files $uri /index.html;
     }
 
     # 运行期配置禁止缓存
@@ -136,7 +137,8 @@ server {
 
 要点：
 
-- **SPA 回退**：`try_files $uri $uri/ /index.html;` 保证前端路由直达不 404。
+- **SPA 回退**：`try_files $uri /index.html;` 保证前端路由直达不 404。
+  **不要加 `$uri/`**：一旦 `public/` 里有与前端路由同名的目录，nginx 会命中目录并 301 补尾斜杠，随后因目录无 `index` 返回 403，导致该页面刷新/直达打不开（仅站内 `<Link>` 跳转正常）。
 - **`/config.js` 禁缓存**：运行期配置改了即时生效，不需要重新构建。
 - **`/assets/` 长缓存**：文件名带内容 hash，可 `immutable` 缓存一年。
 - **HTTP → HTTPS 301**：单独一个 80 端口 server 块。
@@ -187,3 +189,21 @@ tail -f /var/log/nginx/access.log /var/log/nginx/error.log
 - **备份习惯**：发版前在 `/var/www/` 生成 `<域名>_<YYYYMMDD_HHMMSS>.tar.gz`，回滚依赖这些备份，清理磁盘时保留最近若干份。
 - **改动前先 `nginx -t`**：配置有误时 `reload` 会失败，先校验再加载。
 - 该服务器**未安装 `unzip`**，解压 zip 用 `python3 -c "import zipfile; ..."`（见 `DEPLOY.md`）。
+- **`public/` 目录名不能与 SPA 路由同名**：例如前端有 `/workflows` 路由，同时 `web/public/workflows/` 存放内置工作流 JSON，构建后 `dist/workflows/` 会与路由冲突。nginx 侧必须用 `try_files $uri /index.html;`（去掉 `$uri/`）；如需彻底避免，可把 `public/` 子目录改名（如 `workflow-assets/`）并同步更新引用。
+
+### 已验证案例（v0.19.16 ~ v0.19.19）
+
+```
+GET /workflows            → 301 → /workflows/ → 403   （try_files 含 $uri/ 时）
+GET /workflows            → 200（SPA index.html）      （改为 try_files $uri /index.html 后）
+GET /workflows/*.json     → 200（静态文件不受影响）
+```
+
+排查命令：
+
+```bash
+nginx -T | grep -n "try_files"        # 确认生效的是站点配置而非缓存旧配置
+curl -skI https://127.0.0.1/workflows -H "Host: canvas.imihoo.com"
+```
+
+> 改配置后确认生效：`nginx -t && systemctl reload nginx`；reload 完成前的一两次探测可能仍返回旧结果，需重测确认。
