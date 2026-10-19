@@ -388,3 +388,65 @@ docs/content/docs/development/director-stage-state{,.zh-CN}.mdx
   导入重映射）共 10 例全部通过
 - `vite build`：通过
 - headless Chrome 实测 `/assets`、`/canvas`：六个类型筛选（含音频、组合）正常渲染，无运行时错误
+
+---
+
+## 9. 批次三执行记录：3D 导演台插件
+
+分支 `feat/director-stage`，五个提交：
+
+| 提交 | 内容 |
+| --- | --- |
+| `3777daf` | 插件 SDK：connect_nodes 加 slot、jsx-runtime 以参数传 children、README 补 react types 映射 |
+| `ee7c8cd` | 宿主：connect_nodes 支持首尾帧 slot + 生成上下文按槽位重排 |
+| `7def58a` | 插件本体 24 文件（源码 5412 行 + 配置 + lock），three / mp4-muxer 打包进 bundle |
+| `3f34400` | 14 组单测（导演台 13 组 + SDK jsx-runtime 1 组） |
+| `d692e55` | canvas-agent：canvas_director_stage 工具 + 8 例测试 |
+
+### 与原方案的一处修正
+
+原方案判断"只需 SDK 两处改动"，实际还需要**三处宿主侧配套**，否则功能是残的：
+
+1. `sdk/src/types.ts` 的 `connect_nodes` 加 `slot` —— 插件用它表达"机位 A 是首帧、B 是尾帧"。
+2. 宿主 `canvas-agent-ops.ts` 必须把 `slot` 写进 `CanvasConnection`，否则插件发来的槽位被静默丢弃。
+3. `canvas-node-generation.ts` 必须按槽位重排输入（`orderFrameSlotInputs`）——
+   否则即使连线带上了槽位，上传给模型的参考图顺序仍按连线先后，用户先连尾帧就反。
+
+只改 SDK 不改宿主，表现是"插件不报错、但首尾帧顺序随机"，比崩掉更难查。
+
+### 关键判断
+
+- **three 打包进 bundle，而非 CDN 动态导入。** README 原本的约定是"重依赖走 esm.sh"，
+  但内网 / 离线环境访问不到，插件会直接起不来。这里把 `three` 与 `mp4-muxer` 列为
+  devDependency 正常 import，产物 896KB（gzip 后更小）。已在 `plugins/canvas/README.md`
+  把这个例外写进约定，避免后来者照着"不要打包"的规则改回去。
+- **SDK 的 `esbuild` 必须单独装。** `@infinite-canvas/plugin-sdk` 是 `file:` 链接，
+  Node 按真实路径解析依赖 → 插件目录里的 esbuild 对它不可见，
+  `node build.mjs` 会报 `Cannot find package 'esbuild' imported from .../sdk/build.mjs`。
+  所以 `plugins/canvas/sdk` 也要 `npm ci` 一次（CI 里同样需要）。
+- **不登记进官方插件注册表。** `registry/build.mjs` 的 `OFFICIAL` 列表保持原样：
+  director-stage 有独立 `build.mjs` 与独立依赖（three 体积大，不宜每次全量重建），
+  靠 `npm run build` 同步到 `web/public/plugins/`，走本地自动发现。
+- **`prompt-skills` 体系推迟。** 合并版里 `director-stage-scene`（"一句话摆出一个导演台"）
+  依赖整套提示词技能框架：`prompt-skills.ts`(66) + `canvas-prompt-assistant.ts`(216)
+  + `canvas-prompt-skill-picker.tsx`(153) + 四组 i18n 文案 + `project.tsx` 接线。
+  那是"提示词工作台"的能力，不是导演台的一部分，作为独立批次做。
+- **i18n 无改动。** 插件是独立分发的产物，宿主 i18n 管不到它的文案（节点名由
+  `definePlugin({name})` 提供）；`canvas_director_stage` 也不在 `agentOps` 列表里。
+
+### 验收
+
+- `web`：`tsc --noEmit` 60 个错误 = 批次二后基线 60，**无新增**；
+  `vitest run` 9 个失败 = 基线 9（comfyui 6 + use-config-store 3），**无回归**；
+  19 个测试文件 206 例通过；`vite build` 通过
+- 插件自身：`npm run typecheck` 0 错误、`npm run build` 产出 896KB
+- `canvas-agent`：`npm run build` 通过，`npm test` 136 例 0 失败（含 8 例导演台）
+- 浏览器实测：headless Chrome 打开探针页 import 产物，返回
+  `{ok:true, id:"director-stage", name:"3D 导演台", version:"0.15.0", nodes:[{type:"director-stage:stage", hasContent:true, 480×340}]}`；
+  `/canvas` 页面渲染正常、无插件加载错误
+
+### 遗留
+
+- `project.tsx` 报 `CanvasNodeHoverToolbarProps` 缺 `onSuperResolve` / `onAngle`（基线自带，
+  批次二起就存在，属于"超分 / 角度节点"那条线，不在本批范围）
+- `prompt-skills` 体系 → 批次四
