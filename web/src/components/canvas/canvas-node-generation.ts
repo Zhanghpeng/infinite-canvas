@@ -44,7 +44,7 @@ export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData
         return buildComposerGenerationContext(inputs, nodes, prompt);
     }
 
-    const resourceInputs = flattenGenerationInputs(inputs);
+    const resourceInputs = orderFrameSlotInputs(flattenGenerationInputs(inputs), nodeId, connections);
     const referenceImages = resourceInputs.map((input) => input.image).filter((image): image is ReferenceImage => Boolean(image));
     const referenceVideos = resourceInputs.map((input) => input.video).filter((video): video is ReferenceVideo => Boolean(video));
     const referenceAudios = resourceInputs.map((input) => input.audio).filter((audio): audio is ReferenceAudio => Boolean(audio));
@@ -222,6 +222,16 @@ export function buildNodeGenerationInputs(nodeId: string, nodes: CanvasNodeData[
 function flattenGenerationInputs(inputs: NodeGenerationInput[]) {
     const resources = inputs.flatMap((input) => (input.type === "group" ? input.children : [input]));
     return [...new Map(resources.map((input) => [input.nodeId, input])).values()];
+}
+
+/** 首帧必须在尾帧之前：把显式标记了槽位的输入提到最前，其余保持连线顺序（sort 稳定）。 */
+export function orderFrameSlotInputs(inputs: NodeGenerationResourceInput[], nodeId: string, connections: CanvasConnection[]) {
+    const rankByNodeId = new Map<string, number>();
+    for (const connection of connections) {
+        if (connection.toNodeId !== nodeId) continue;
+        rankByNodeId.set(connection.fromNodeId, connection.slot === "first_frame" ? 0 : 1);
+    }
+    return [...inputs].sort((a, b) => (rankByNodeId.get(a.nodeId) ?? 2) - (rankByNodeId.get(b.nodeId) ?? 2));
 }
 
 function resolveMediaLabel(resource: NodeGenerationResourceInput, resourceInputs: NodeGenerationResourceInput[]): string {

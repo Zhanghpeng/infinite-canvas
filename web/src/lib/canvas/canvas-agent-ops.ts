@@ -3,14 +3,14 @@ import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { getNodeSpec, isRegisteredNodeType } from "@/lib/canvas/node-registry";
 import { validateInputConnection } from "@/lib/canvas/canvas-node-geometry";
-import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type CanvasNodeTypeId, type ViewportTransform } from "@/types/canvas";
+import { CanvasNodeType, type CanvasConnection, type CanvasFrameSlot, type CanvasNodeData, type CanvasNodeMetadata, type CanvasNodeTypeId, type ViewportTransform } from "@/types/canvas";
 
 export type CanvasAgentOp =
     | { type: "add_node"; id?: string; nodeType?: CanvasNodeTypeId; title?: string; position?: { x: number; y: number }; x?: number; y?: number; width?: number; height?: number; metadata?: CanvasNodeMetadata }
     | { type: "update_node"; id: string; patch?: Partial<CanvasNodeData>; metadata?: CanvasNodeMetadata }
     | { type: "delete_node"; id?: string; ids?: string[]; nodeType?: CanvasNodeTypeId }
     | { type: "delete_connections"; id?: string; ids?: string[]; all?: boolean }
-    | { type: "connect_nodes"; id?: string; fromNodeId: string; toNodeId: string }
+    | { type: "connect_nodes"; id?: string; fromNodeId: string; toNodeId: string; slot?: CanvasFrameSlot }
     | { type: "set_viewport"; viewport: ViewportTransform }
     | { type: "select_nodes"; ids: string[] }
     | { type: "run_generation"; nodeId: string; mode?: "text" | "image" | "video" | "audio"; prompt?: string };
@@ -75,7 +75,8 @@ export function applyCanvasAgentOps(snapshot: CanvasAgentSnapshot, ops?: CanvasA
         if (op.type === "connect_nodes") {
             if (!op.fromNodeId || !op.toNodeId) return;
             const connection = validateInputConnection(op.fromNodeId, op.toNodeId, nodes, connections);
-            if (connection) connections = [...connections, { id: op.id || nanoid(), ...connection, kind: "input" }];
+            // slot 可选：显式声明首/尾帧，避免只靠连线先后顺序决定（插件/Agent 都用得到）。
+            if (connection) connections = [...connections, { id: op.id || nanoid(), ...connection, kind: "input", ...(op.slot ? { slot: op.slot } : {}) }];
         }
         if (op.type === "set_viewport" && op.viewport) viewport = op.viewport;
         if (op.type === "select_nodes") selectedNodeIds = (op.ids || []).filter((id) => nodes.some((node) => node.id === id));
