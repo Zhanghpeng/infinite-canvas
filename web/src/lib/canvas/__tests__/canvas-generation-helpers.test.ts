@@ -3,10 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
     buildGeneratedNodeConnections,
     buildPastedNodeConnections,
+    countInterruptedTasks,
     duplicateIncomingConnections,
     findRetrySourceNode,
     generateNextSeed,
+    hasInterruptedGeneration,
     isGenerationCanceled,
+    isInterruptedGenerationError,
+    resetInterruptedGeneration,
     restoreGenerationContext,
     shouldMarkGenerationSourceStatus,
 } from "@/lib/canvas/canvas-generation-helpers";
@@ -336,4 +340,75 @@ describe("buildPastedNodeConnections", () => {
         expect(result).toHaveLength(0);
     });
 });
+
+describe("hasInterruptedGeneration and countInterruptedTasks", () => {
+    it("detects node-level interrupted generation", () => {
+        const interruptedNode = makeNode(CanvasNodeType.Image, {
+            status: "error",
+            errorDetails: "页面刷新后生成已中断，请重新生成。",
+        });
+        const normalNode = makeNode(CanvasNodeType.Image, {
+            status: "success",
+            content: "data:image/png;base64,xx",
+        });
+        const otherErrorNode = makeNode(CanvasNodeType.Image, {
+            status: "error",
+            errorDetails: "Server error 500",
+        });
+
+        expect(hasInterruptedGeneration(interruptedNode)).toBe(true);
+        expect(hasInterruptedGeneration(normalNode)).toBe(false);
+        expect(hasInterruptedGeneration(otherErrorNode)).toBe(false);
+    });
+
+    it("detects batch image slot interrupted generation", () => {
+        const batchNode = makeNode(CanvasNodeType.Image, {
+            status: "error",
+            images: [
+                { id: "img-1", status: "success", content: "data:1" },
+                { id: "img-2", status: "error", errorDetails: "页面刷新后生成已中断，请重新生成。" },
+            ],
+        });
+        expect(hasInterruptedGeneration(batchNode)).toBe(true);
+    });
+
+    it("counts interrupted tasks correctly including batch slots", () => {
+        const node1 = makeNode(CanvasNodeType.Image, {
+            status: "error",
+            errorDetails: "页面刷新后生成已中断，请重新生成。",
+        });
+        const node2 = makeNode(CanvasNodeType.Image, {
+            status: "error",
+            images: [
+                { id: "img-1", status: "success", content: "data:1" },
+                { id: "img-2", status: "error", errorDetails: "页面刷新后生成已中断，请重新生成。" },
+                { id: "img-3", status: "error", errorDetails: "页面刷新后生成已中断，请重新生成。" },
+            ],
+        });
+        const node3 = makeNode(CanvasNodeType.Video, {
+            status: "error",
+            errorDetails: "Generation was interrupted by a page refresh. Generate again.",
+        });
+        const nodeNormal = makeNode(CanvasNodeType.Text, { status: "success", content: "hi" });
+
+        expect(countInterruptedTasks([node1, node2, node3, nodeNormal])).toBe(4);
+    });
+
+    it("resets loading and interrupted sub-items properly", () => {
+        const loadingNode = makeNode(CanvasNodeType.Image, {
+            status: "loading",
+            images: [
+                { id: "img-1", status: "loading" },
+                { id: "img-2", status: "success", content: "data:2" },
+            ],
+        });
+        const [reset] = resetInterruptedGeneration([loadingNode]);
+        expect(reset.metadata?.status).toBe("error");
+        expect(isInterruptedGenerationError(reset.metadata?.errorDetails)).toBe(true);
+        expect(reset.metadata?.images?.[0].status).toBe("error");
+        expect(isInterruptedGenerationError(reset.metadata?.images?.[0].errorDetails)).toBe(true);
+        expect(reset.metadata?.images?.[1].status).toBe("success");
+    });
+});
+
 

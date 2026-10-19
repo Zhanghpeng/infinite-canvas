@@ -7,6 +7,18 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- Canvas Interrupted Tasks One-Click Batch Resume & Retry Verification (画布刷新中断任务一键恢复与批量重试验证):
+  - **刷新后顶部悬浮条展示与一键恢复**:
+    - 在画布中同时生成多个节点（例如 3 个图片或视频节点），在生成过程中刷新页面；
+    - 页面加载后，验证画布顶部导航栏正下方居中弹出半透明胶囊提示条，显示「检测到 3 个生成任务因刷新中断」；
+    - 点击「一键恢复全部」按钮，验证所有中断任务并发恢复，已向 ComfyUI 提交的任务自动无缝拉取结果（无需重新跑图），提示条自动消失；
+  - **忽略交互**:
+    - 再次触发刷新中断，点击提示条的「忽略」按钮；
+    - 验证提示条关闭，各节点保持错误中断状态，且节点的单独重试按钮依然可用；
+  - **多选/框选工具栏批量重试**:
+    - 在画布上框选包含中断节点的多个节点，验证底部工具栏出现「重试所选中断节点」按钮；
+    - 点击该按钮，验证仅选中的中断节点被批量触发恢复。
+
 - Canvas Generation Interrupted Error i18n Verification (画布生成中断与持久化错误信息国际化验证):
   - **动态中英语言切换同步**:
     - 在画布生成过程中刷新页面，使节点进入中断错误状态；

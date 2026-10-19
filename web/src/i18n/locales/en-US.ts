@@ -440,6 +440,7 @@ export default {
             "upload": "Upload assets",
             "appearance": "Canvas appearance",
             "clear": "Clear canvas",
+            "retrySelectedInterrupted": "Retry selected interrupted nodes",
             "themeMode": "Theme",
             "light": "Light",
             "dark": "Dark",
@@ -920,6 +921,12 @@ export default {
             "lowAngle": "{{angle}}-degree low-angle view",
             "angleLabel": "AI multi-angle: {{horizontal}}, {{pitch}}, camera distance {{distance}}, {{lens}} lens",
             "anglePrompt": "Regenerate a new view of the same subject from the reference image. Preserve the subject, colors, materials, and visual style; do not merely apply perspective distortion. {{angle}}."
+        },
+        "interruptedBanner": {
+            "title": "{{count}} generation task(s) interrupted by refresh",
+            "resumeAll": "Resume All",
+            "ignore": "Dismiss",
+            "resuming": "Resuming {{count}} task(s)..."
         },
         "agentOps": {
             "add_node": "Add node",

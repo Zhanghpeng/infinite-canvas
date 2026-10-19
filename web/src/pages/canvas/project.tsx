@@ -82,15 +82,19 @@ import {
     getInputSummary,
     hydrateAssistantImages,
     hydrateCanvasImages,
+    countInterruptedTasks,
+    hasInterruptedGeneration,
     imageExtension,
     isAudioFile,
     isGenerationCanceled,
+    isInterruptedGenerationError,
     resetInterruptedGeneration,
     restoreGenerationContext,
     shouldMarkGenerationSourceStatus,
 } from "@/lib/canvas/canvas-generation-helpers";
 import { getNodeDefinition, isBuiltinNodeType as isBuiltinType, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
 import { registerBuiltinNodes } from "@/components/canvas/nodes/builtin-nodes";
+import { CanvasInterruptedBanner } from "@/components/canvas/canvas-interrupted-banner";
 import { CanvasPluginManagerModal } from "@/components/canvas/canvas-plugin-manager-modal";
 import { CanvasRefreshShell } from "@/components/canvas/canvas-refresh-shell";
 import { CanvasTopBar } from "@/components/canvas/canvas-top-bar";
@@ -294,6 +298,8 @@ function InfiniteCanvasPage() {
     const [isNodeResizing, setIsNodeResizing] = useState(false);
     const [dropTargetGroupId, setDropTargetGroupId] = useState<string | null>(null);
     const [referencePickerNodeId, setReferencePickerNodeId] = useState<string | null>(null);
+    const [interruptedBannerDismissed, setInterruptedBannerDismissed] = useState(false);
+    const [isResumingInterrupted, setIsResumingInterrupted] = useState(false);
 
     const nodesRef = useRef(nodes);
     const connectionsRef = useRef(connections);
@@ -579,6 +585,7 @@ function InfiniteCanvasPage() {
                 showImageInfo: project.showImageInfo || false,
             };
             setHistoryState({ canUndo: false, canRedo: false });
+            setInterruptedBannerDismissed(false);
             setProjectLoaded(true);
         };
         void restore();
@@ -4278,7 +4285,7 @@ function InfiniteCanvasPage() {
                               ...item,
                               metadata: {
                                   ...item.metadata,
-                                  status: imageId ? item.metadata?.status : NODE_STATUS_LOADING,
+                                  status: imageId ? (item.metadata?.status === "error" ? NODE_STATUS_LOADING : item.metadata?.status) : NODE_STATUS_LOADING,
                                   errorDetails: undefined,
                                   ...(intent === "retry" ? { jobId: undefined } : {}),
                                   isTimeout: undefined,
@@ -4593,6 +4600,42 @@ function InfiniteCanvasPage() {
         },
         [handleRetryNode],
     );
+
+    const interruptedNodes = useMemo(() => nodes.filter(hasInterruptedGeneration), [nodes]);
+    const interruptedTaskCount = useMemo(() => countInterruptedTasks(interruptedNodes), [interruptedNodes]);
+    const selectedInterruptedNodes = useMemo(
+        () => nodes.filter((n) => selectedNodeIds.has(n.id) && hasInterruptedGeneration(n)),
+        [nodes, selectedNodeIds],
+    );
+
+    const handleBatchRetryInterrupted = useCallback(
+        async (targetNodes?: CanvasNodeData[]) => {
+            const list = targetNodes && targetNodes.length > 0 ? targetNodes : interruptedNodes;
+            if (list.length === 0) return;
+            setIsResumingInterrupted(true);
+            try {
+                const tasks: Promise<void>[] = [];
+                for (const node of list) {
+                    const interruptedImages = node.metadata?.images?.filter(
+                        (img) => img.status === "error" && isInterruptedGenerationError(img.errorDetails),
+                    );
+                    if (interruptedImages && interruptedImages.length > 0) {
+                        for (const img of interruptedImages) {
+                            const intent = Boolean(img.jobId) ? "resume" : "retry";
+                            tasks.push(Promise.resolve(handleRetryNode(node, img.id, intent)));
+                        }
+                    } else {
+                        const intent = Boolean(node.metadata?.jobId) ? "resume" : "retry";
+                        tasks.push(Promise.resolve(handleRetryNode(node, undefined, intent)));
+                    }
+                }
+                await Promise.allSettled(tasks);
+            } finally {
+                setIsResumingInterrupted(false);
+            }
+        },
+        [handleRetryNode, interruptedNodes],
+    );
     const handleNodeContextMenu = useCallback((event: ReactMouseEvent, nodeId: string) => {
         event.preventDefault();
         event.stopPropagation();
@@ -4697,6 +4740,15 @@ function InfiniteCanvasPage() {
                     compactAgentStatus={{ connected: localAgentConnected, enabled: localAgentEnabled, activity: localAgentActivity }}
                     onToggleAgent={toggleAgentPanel}
                 />
+
+                {!interruptedBannerDismissed && interruptedTaskCount > 0 && !isViewer ? (
+                    <CanvasInterruptedBanner
+                        count={interruptedTaskCount}
+                        resuming={isResumingInterrupted}
+                        onResumeAll={() => void handleBatchRetryInterrupted()}
+                        onDismiss={() => setInterruptedBannerDismissed(true)}
+                    />
+                ) : null}
 
                 <InfiniteCanvas
                     containerRef={containerRef}
@@ -4905,6 +4957,7 @@ function InfiniteCanvasPage() {
                 ) : (
                     <CanvasToolbar
                         selectedCount={selectedNodeIds.size}
+                        interruptedSelectedCount={selectedInterruptedNodes.length}
                         canvasTool={canvasTool}
                         canUndo={historyState.canUndo}
                         canRedo={historyState.canRedo}
@@ -4922,6 +4975,7 @@ function InfiniteCanvasPage() {
                         onUpload={() => handleUploadRequest()}
                         onDelete={() => confirmDeleteNodes(new Set(selectedNodeIds))}
                         onClear={() => setClearConfirmOpen(true)}
+                        onRetryInterrupted={() => void handleBatchRetryInterrupted(selectedInterruptedNodes)}
                         onCanvasToolChange={setCanvasTool}
                         onBackgroundModeChange={setBackgroundMode}
                         onShowImageInfoChange={setShowImageInfo}

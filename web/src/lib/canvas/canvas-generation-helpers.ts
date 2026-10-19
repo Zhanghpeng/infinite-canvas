@@ -223,9 +223,42 @@ export function localizeErrorDetails(errorDetails?: string): string | undefined 
     return errorDetails;
 }
 
+export function hasInterruptedGeneration(node: CanvasNodeData): boolean {
+    if (node.metadata?.status === "error" && isInterruptedGenerationError(node.metadata?.errorDetails)) {
+        return true;
+    }
+    if (node.metadata?.images?.some((image) => image.status === "error" && isInterruptedGenerationError(image.errorDetails))) {
+        return true;
+    }
+    if (node.metadata?.texts?.some((text) => text.status === "error" && isInterruptedGenerationError(text.errorDetails))) {
+        return true;
+    }
+    return false;
+}
+
+export function countInterruptedTasks(nodes: CanvasNodeData[]): number {
+    let count = 0;
+    for (const node of nodes) {
+        if (!hasInterruptedGeneration(node)) continue;
+        const interruptedImages = node.metadata?.images?.filter((img) => img.status === "error" && isInterruptedGenerationError(img.errorDetails));
+        if (interruptedImages && interruptedImages.length > 0) {
+            count += interruptedImages.length;
+        } else {
+            count += 1;
+        }
+    }
+    return count;
+}
+
 export function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
     return nodes.map((node) => {
-        const isInterrupted = node.metadata?.status === "loading" || isInterruptedGenerationError(node.metadata?.errorDetails);
+        const hasInterruptedImages = node.metadata?.images?.some(
+            (image) => image.status === "loading" || isInterruptedGenerationError(image.errorDetails),
+        );
+        const hasInterruptedTexts = node.metadata?.texts?.some(
+            (text) => text.status === "loading" || isInterruptedGenerationError(text.errorDetails),
+        );
+        const isInterrupted = node.metadata?.status === "loading" || isInterruptedGenerationError(node.metadata?.errorDetails) || hasInterruptedImages || hasInterruptedTexts;
         if (isInterrupted) {
             return {
                 ...node,

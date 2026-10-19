@@ -440,6 +440,7 @@ export default {
             "upload": "上传资产",
             "appearance": "画布外观",
             "clear": "清空画布",
+            "retrySelectedInterrupted": "重试所选中断节点",
             "themeMode": "主题模式",
             "light": "浅色",
             "dark": "深色",
@@ -920,6 +921,12 @@ export default {
             "lowAngle": "仰视 {{angle}} 度",
             "angleLabel": "AI 多角度：{{horizontal}}，{{pitch}}，镜头距离 {{distance}}，{{lens}}镜头",
             "anglePrompt": "基于参考图重新生成同一主体的新视角，保持主体、颜色、材质和画面风格一致，不要只做透视变形。{{angle}}。"
+        },
+        "interruptedBanner": {
+            "title": "检测到 {{count}} 个生成任务因刷新中断",
+            "resumeAll": "一键恢复全部",
+            "ignore": "忽略",
+            "resuming": "正在恢复 {{count}} 个任务..."
         },
         "agentOps": {
             "add_node": "新增节点",
