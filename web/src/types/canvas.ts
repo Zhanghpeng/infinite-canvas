@@ -61,6 +61,34 @@ export type CanvasNodeText = {
     isTimeout?: boolean;
 };
 
+/** 长视频分段处理：本节点是源视频中某个时间区间的一段。 */
+export type CanvasVideoSegment = {
+    /** 源视频节点 id。 */
+    sourceNodeId: string;
+    /** 源视频总时长（毫秒），用于合成时校验与展示。 */
+    sourceDurationMs?: number;
+    /** 本段在源视频中的起止（毫秒，左闭右开）。 */
+    startMs: number;
+    endMs: number;
+    /** 拼接顺序，0 起。 */
+    index: number;
+    /** 本段首帧是否落在场景切点上；落在切点上时合成不做交叉淡化。 */
+    sceneStart?: boolean;
+    /** 段的生成方式：局部重绘 / 角色替换。 */
+    mode: "repaint" | "character-swap";
+    /** 生成本段时吃的首帧/尾帧约束（解释「为什么无缝」，也便于复现）。 */
+    anchor?: { firstFrameMs?: number; lastFrameMs?: number };
+};
+
+/** 长视频合成节点：按 partNodeIds 顺序拼接成完整成片。 */
+export type CanvasVideoComposite = {
+    partNodeIds: string[];
+    /** 段间交叉淡化时长（毫秒），0 表示硬切。 */
+    crossfadeMs: number;
+    /** 源视频节点，便于追溯。 */
+    sourceNodeId?: string;
+};
+
 export type CanvasNodeMetadata = {
     content?: string;
     composerContent?: string;
@@ -121,6 +149,10 @@ export type CanvasNodeMetadata = {
     collapsed?: boolean; // Group node: hide descendants (and their connections), render a compact title bar.
     locked?: boolean; // Group node: block drag/resize/delete/connect for the group and its descendants.
     interactive?: boolean; // Plugin node interaction/move state; see CanvasNodeDefinition.interactionToggle.
+    /** 视频节点：本节点是长视频里的一段（分段重绘 / 角色替换的产物）。 */
+    videoSegment?: CanvasVideoSegment;
+    /** 视频节点：由若干段按顺序拼成的成片。 */
+    videoComposite?: CanvasVideoComposite;
 };
 
 export type CanvasNodeData = {

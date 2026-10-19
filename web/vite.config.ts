@@ -64,4 +64,15 @@ export default defineConfig({
         __APP_VERSION__: JSON.stringify(localVersion),
         __APP_RELEASES__: JSON.stringify(parseChangelog(localChangelog)),
     },
+    build: {
+        rollupOptions: {
+            output: {
+                // mediabunny 只在打开视频时间轴时才用得上，单独成 chunk，
+                // 免得进画布页首包；它本身走动态 import，不会被预加载。
+                manualChunks(id: string) {
+                    if (id.includes("node_modules/mediabunny")) return "mediabunny";
+                },
+            },
+        },
+    },
 });
