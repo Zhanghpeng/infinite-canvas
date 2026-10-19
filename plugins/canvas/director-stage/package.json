@@ -1,0 +1,21 @@
+{
+    "name": "canvas-plugin-director-stage",
+    "version": "0.15.0",
+    "private": true,
+    "type": "module",
+    "description": "Infinite Canvas 3D 导演台插件：场景模板 + 素材库 + 摄影灯光 + 关键帧运镜 + 人物走位 → 参考图 / 首尾帧 / 多视图 / 运镜提示词 / 运镜视频",
+    "scripts": {
+        "build": "node build.mjs",
+        "dev": "node build.mjs --watch",
+        "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "@infinite-canvas/plugin-sdk": "file:../sdk",
+        "@types/react": "19.1.12",
+        "@types/three": "^0.180.0",
+        "esbuild": "^0.25.0",
+        "mp4-muxer": "^5.2.2",
+        "three": "^0.180.0",
+        "typescript": "^5"
+    }
+}
