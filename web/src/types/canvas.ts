@@ -1,3 +1,5 @@
+import type { BuiltinPromptSkillId } from "@/lib/canvas/prompt-skills";
+
 export type Position = {
     x: number;
     y: number;
@@ -105,6 +107,17 @@ export type CanvasNodeMetadata = {
     bytes?: number;
     durationMs?: number;
     groupId?: string;
+    /** 文本节点：最近一次用提示词助手改写时用的配置（后端/技能/模型等），便于重复与溯源。 */
+    promptAssistant?: {
+        backend: "comfyui" | "agent";
+        agentId?: string;
+        model?: string;
+        effort?: string;
+        // 与 lib/canvas/canvas-prompt-assistant 的 PromptAssistantSkillRef 同构（types 层不反向依赖 lib）。
+        skill?: { kind: "builtin"; id: BuiltinPromptSkillId } | { kind: "agent"; name: string; path: string };
+        instruction?: string;
+        optimizedAt?: string;
+    };
     collapsed?: boolean; // Group node: hide descendants (and their connections), render a compact title bar.
     locked?: boolean; // Group node: block drag/resize/delete/connect for the group and its descendants.
     interactive?: boolean; // Plugin node interaction/move state; see CanvasNodeDefinition.interactionToggle.

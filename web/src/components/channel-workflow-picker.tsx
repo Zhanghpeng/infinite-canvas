@@ -21,6 +21,8 @@ export type ChannelWorkflowPickerProps = {
     workflowId?: string;
     onChange: (channelId: string, workflowId: string, workflow?: ComfyWorkflowItem) => void;
     className?: string;
+    /** false 时只渲染工作流下拉（渠道交由外部下拉承载），解析与自动校准逻辑不变。 */
+    showChannel?: boolean;
 };
 
 export function ChannelWorkflowPicker({
@@ -30,6 +32,7 @@ export function ChannelWorkflowPicker({
     workflowId,
     onChange,
     className,
+    showChannel = true,
 }: ChannelWorkflowPickerProps) {
     const config = useEffectiveConfig();
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
@@ -164,22 +167,24 @@ export function ChannelWorkflowPicker({
             onPointerDown={(e) => e.stopPropagation()}
         >
             {/* 1. 渠道下拉 */}
-            <Select
-                size="small"
-                value={activeChannel?.id}
-                onChange={handleChannelChange}
-                className="w-[110px] shrink-0"
-                popupMatchSelectWidth={false}
-                options={channels.map((c) => ({
-                    value: c.id,
-                    label: (
-                        <span className="flex items-center gap-1 text-xs">
-                            <Server className="size-3 shrink-0 text-stone-400" />
-                            <span className="truncate">{c.name}</span>
-                        </span>
-                    ),
-                }))}
-            />
+            {showChannel ? (
+                <Select
+                    size="small"
+                    value={activeChannel?.id}
+                    onChange={handleChannelChange}
+                    className="w-[110px] shrink-0"
+                    popupMatchSelectWidth={false}
+                    options={channels.map((c) => ({
+                        value: c.id,
+                        label: (
+                            <span className="flex items-center gap-1 text-xs">
+                                <Server className="size-3 shrink-0 text-stone-400" />
+                                <span className="truncate">{c.name}</span>
+                            </span>
+                        ),
+                    }))}
+                />
+            ) : null}
 
             {/* 2. 工作流下拉 */}
             <Select
