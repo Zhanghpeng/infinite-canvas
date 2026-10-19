@@ -148,7 +148,7 @@ export type WebdavSyncConfig = {
     directory: string;
     lastSyncedAt: string;
 };
-export type ConfigTabKey = "channels" | "toolbar" | "preferences" | "prompt-sources" | "webdav" | "local-storage";
+export type ConfigTabKey = "channels" | "toolbar" | "preferences" | "prompt-sources" | "webdav" | "local-storage" | "storage";
 
 export const defaultToolbarConfig: ToolbarConfig = {
     ids: [

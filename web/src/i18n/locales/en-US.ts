@@ -3,6 +3,16 @@ export default {
         "title": "Infinite Canvas",
         "description": "An infinite canvas creation tool"
     },
+    "storageOnboarding": {
+        "title": "Choose where data is stored",
+        "description": "Infinite Canvas can save canvas projects and assets to a local directory on your computer, where other tools can read them directly and the whole directory can be moved.",
+        "localTitle": "Use a local directory (recommended)",
+        "localDescription": "Pick a directory as your workspace; projects and assets are stored there as plain files. Desktop Chrome / Edge only.",
+        "localAction": "Choose directory",
+        "browserTitle": "Use browser storage",
+        "browserDescription": "Data stays in the browser and is lost if you switch devices or clear browser data. You can switch anytime in settings.",
+        "browserAction": "Continue with browser"
+    },
     "theme": {
         "toggle": "Toggle theme"
     },
@@ -383,6 +393,14 @@ export default {
         "empty": "No video generated yet"
     },
     "canvas": {
+        "workspace": {
+            "current": "Workspace: {{name}}",
+            "none": "not selected",
+            "browser": "Using browser storage",
+            "switch": "Switch workspace",
+            "open": "Open local directory",
+            "openOther": "Open another directory…"
+        },
         "defaultTitle": "Infinite Canvas {{count}}",
         "library": "Canvas library",
         "title": "Infinite Canvas",
@@ -1026,7 +1044,45 @@ export default {
             "toolbar": "Toolbar",
             "preferences": "Preferences",
             "promptSources": "Prompt sources",
-            "localStorage": "Local storage"
+            "localStorage": "Local storage",
+            "storage": "Storage location"
+        },
+        "storage": {
+            "title": "Storage location",
+            "description": "Choose whether data lives in the browser or in a local workspace directory. In a local workspace, projects and assets are plain files that other tools can read, and the whole directory can be moved.",
+            "modeBrowser": "Browser (IndexedDB)",
+            "modeDirectory": "Local directory (recommended)",
+            "modeService": "Local service",
+            "directoryHint": "Pick a local directory below. Projects and assets are written there as plain files that other tools can read, and the whole directory can be moved. Only desktop Chromium browsers (Chrome / Edge) are supported.",
+            "openWorkspace": "Open local directory",
+            "recentWorkspaces": "Recent workspaces",
+            "workspaceOpened": "Workspace opened: {{name}}",
+            "workspaceMissing": "This workspace directory is no longer available. Please open it again.",
+            "directoryReady": "Directory authorized: {{name}}",
+            "directoryDenied": "Directory read/write permission was not granted.",
+            "directoryPickFailed": "Failed to choose a directory.",
+            "directoryUnsupported": "This browser does not support the local directory mode. Use desktop Chrome / Edge, or switch to \"Local service\".",
+            "directoryNeedsPermission": "Directory permission has expired. Click \"Change directory\" to re-authorize.",
+            "startHint": "Start the local-workspace service in a terminal first and keep it running, then fill in the address and token it prints.",
+            "serviceUrl": "Service address",
+            "serviceToken": "Connect token",
+            "test": "Test connection",
+            "initialize": "Initialize workspace",
+            "migrate": "Import existing data from browser",
+            "available": "Local service is reachable ({{path}})",
+            "unreachable": "Local service is unreachable. Make sure it is running and the address and token are correct.",
+            "initialized": "Workspace is ready ({{path}})",
+            "workspacePath": "Workspace directory: {{path}}",
+            "noBrowserData": "No browser data available to import.",
+            "migrated": "Imported {{projects}} canvas projects and {{blobs}} media files.",
+            "migrateFailed": "Import failed; the original data was left untouched.",
+            "selfCheck": "Read/write self-check",
+            "selfCheckOk": "Self-check passed: {{detail}}",
+            "selfCheckFailed": "Self-check failed: {{detail}}",
+            "reloadTitle": "Storage location changed",
+            "reloadContent": "Switching storage location takes effect after a page reload. Data in the previous storage is not deleted.",
+            "reloadNow": "Reload now",
+            "reloadLater": "Reload later"
         },
         "localStorage": {
             "title": "IndexedDB storage usage",

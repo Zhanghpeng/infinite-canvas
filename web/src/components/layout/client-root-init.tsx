@@ -4,19 +4,37 @@ import { App } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { createModelChannel, useConfigStore } from "@/stores/use-config-store";
+import { useStorageStore } from "@/stores/use-storage-store";
 import { usePromptSourceScheduler } from "@/hooks/use-prompt-source-scheduler";
 import { useComfyuiMixedContentListener } from "@/hooks/use-comfyui-mixed-content-listener";
+import { StorageOnboarding } from "@/components/layout/storage-onboarding";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
     const { t } = useTranslation();
     const handledConfigParams = useRef(false);
+    const handledStorageNotice = useRef(false);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const config = useConfigStore((state) => state.config);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
+    const storageStatus = useStorageStore((state) => state.status);
 
     usePromptSourceScheduler();
     useComfyuiMixedContentListener();
+
+    // 本地模式"没准备好"时，启动期只提示一次；此时已回退到浏览器存储，不会静默写坏数据。
+    useEffect(() => {
+        if (handledStorageNotice.current) return;
+        const noticeByStatus: Partial<Record<string, string>> = {
+            "service-unavailable": t("config.storage.unreachable"),
+            "directory-unsupported": t("config.storage.directoryUnsupported"),
+            "directory-needs-permission": t("config.storage.directoryNeedsPermission"),
+        };
+        const notice = noticeByStatus[storageStatus];
+        if (!notice) return;
+        handledStorageNotice.current = true;
+        message.warning(notice);
+    }, [storageStatus, message, t]);
 
     useEffect(() => {
         if (handledConfigParams.current) return;
@@ -51,5 +69,10 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         message.success(t("config.importedDirectConfig"));
     }, [config.channels, message, openConfigDialog, t, updateConfig]);
 
-    return <>{children}</>;
+    return (
+        <>
+            <StorageOnboarding />
+            {children}
+        </>
+    );
 }

@@ -3,6 +3,8 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
+import { getStorage } from "@/lib/storage";
+import { createLocalCanvasStorage } from "@/lib/storage/local-canvas-storage";
 import { localForageStorage } from "@/lib/localforage-storage";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
@@ -122,7 +124,9 @@ export const useCanvasStore = create<CanvasStore>()(
         }),
         {
             name: CANVAS_STORE_KEY,
-            storage: canvasStorage,
+            // 浏览器模式沿用原有整包持久化；本地模式走新增的「一项目一文件」分支。
+            // 后端在 main.tsx 启动阶段就已定型，故此处可同步判定。
+            storage: getStorage().kind === "local" ? createLocalCanvasStorage<CanvasStore>() : canvasStorage,
             partialize: (state) =>
                 ({
                     projects: state.projects,

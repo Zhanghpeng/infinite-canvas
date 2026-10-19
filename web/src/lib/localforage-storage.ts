@@ -1,6 +1,8 @@
 import localforage from "localforage";
 import type { StateStorage } from "zustand/middleware";
 
+import { getStorage } from "@/lib/storage";
+
 if (typeof localforage?.config === "function") {
     try {
         localforage.config({
@@ -12,7 +14,9 @@ if (typeof localforage?.config === "function") {
     }
 }
 
-export const localForageStorage: StateStorage = {
+// 读写统一交给当前存储后端（默认 IndexedDB，本地模式为文件系统）。
+// 后端不可用时回落到 localforage / localStorage，避免启动期报错。
+const fallback: StateStorage = {
     getItem: async (name) => {
         if (typeof window === "undefined") return null;
         try {
@@ -47,6 +51,30 @@ export const localForageStorage: StateStorage = {
             window.localStorage?.removeItem(name);
         } catch {
             window.localStorage?.removeItem(name);
+        }
+    },
+};
+
+export const localForageStorage: StateStorage = {
+    getItem: async (name) => {
+        try {
+            return (await getStorage().get<string>("app_state", name)) || null;
+        } catch {
+            return await fallback.getItem(name);
+        }
+    },
+    setItem: async (name, value) => {
+        try {
+            await getStorage().set("app_state", name, value);
+        } catch {
+            await fallback.setItem(name, value);
+        }
+    },
+    removeItem: async (name) => {
+        try {
+            await getStorage().remove("app_state", name);
+        } catch {
+            await fallback.removeItem(name);
         }
     },
 };
