@@ -9,12 +9,16 @@ import { getReact } from "./runtime";
 // Fragment 哨兵:渲染时才解析为宿主 React.Fragment,避免模块顶层触碰运行时。
 export const Fragment = Symbol.for("infinite-canvas.jsx.fragment") as unknown as React.ExoticComponent<{ children?: React.ReactNode }>;
 
-function createElement(type: unknown, props: Record<string, unknown> | null, key?: unknown): React.ReactElement {
+export function createElement(type: unknown, props: Record<string, unknown> | null, key?: unknown): React.ReactElement {
     const react = getReact();
     const resolvedType = type === Fragment ? react.Fragment : type;
     // automatic 运行时已把 children 放进 props;key 单独传入以避免展开 key 警告。
-    const config = key === undefined ? props : { ...(props ?? {}), key };
-    return react.createElement(resolvedType as never, config as never);
+    const { children, ...rest } = props ?? {};
+    const config = (key === undefined ? rest : { ...rest, key }) as never;
+    // Re-pass children as arguments: React dev only exempts static children from the
+    // "unique key" warning when they arrive as createElement args (not via props.children).
+    if (children === undefined) return react.createElement(resolvedType as never, config);
+    return react.createElement(resolvedType as never, config, ...(Array.isArray(children) ? children : [children]));
 }
 
 export function jsx(type: unknown, props: Record<string, unknown> | null, key?: unknown): React.ReactElement {
