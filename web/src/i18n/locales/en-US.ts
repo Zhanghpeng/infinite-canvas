@@ -621,6 +621,89 @@ export default {
             "unmute": "Unmute",
             "preview": "Preview"
         },
+        "videoTimeline": {
+            "title": "Video timeline",
+            "subtitle": "Segment repaint and character swap",
+            "segmentCount": "{{count}} segments",
+            "analyzing": "Analyzing footage… {{percent}}%",
+            "analyzeFailed": "Failed to analyze the footage",
+            "maxSeconds": "Max per segment",
+            "legend": {
+                "cut": "Scene cuts {{count}}",
+                "boundary": "Segment boundary",
+                "selection": "Repaint range"
+            },
+            "anchor": {
+                "title": "Seam anchors",
+                "first": "First",
+                "last": "Last",
+                "note": "Both ends are pinned to the original frame, only the middle is regenerated, so the seam lands on the same frame."
+            },
+            "mode": {
+                "repaint": "Local repaint",
+                "character": "Character swap",
+                "repaintHint": "Repaint only the selected range; the rest of the footage stays untouched. First and last frames are pinned to the original.",
+                "characterHint": "Split the whole video under the per-segment limit, swap the cast segment by segment, then stitch it back. Story and pacing follow the original."
+            },
+            "cast": {
+                "title": "Swap to these characters",
+                "selected": "{{count}} selected",
+                "empty": "No image nodes on the canvas yet. Drop a character reference image first.",
+                "hint": "When several characters share one segment they map in selection order, so pick them in order of appearance."
+            },
+            "segment": {
+                "title": "Segments",
+                "label": "Segment {{index}}"
+            },
+            "prompt": {
+                "label": "Instruction",
+                "repaint": "Defaults to: keep camera, motion and pacing, fix the flaws in this range",
+                "character": "Defaults to: replace the person with the reference character, keep motion, camera and pacing"
+            },
+            "crossfade": {
+                "label": "Seam blend frames",
+                "hint": "Blends a few frames across boundaries that are not scene cuts, absorbing tiny differences. 3 frames ≈ 0.1s; longer starts to look soft."
+            },
+            "audio": {
+                "keep": "Keep the original audio track"
+            },
+            "reason": {
+                "noRange": "Drag a range on the timeline first",
+                "noCast": "Pick at least one character reference"
+            },
+            "summary": "{{count}} segments, {{duration}} total",
+            "action": {
+                "cancel": "Cancel",
+                "generateSegments": "Generate {{count}} segments",
+                "generateRepaint": "Repaint {{count}} segments"
+            },
+            "toast": {
+                "segmentRunning": "Segment {{index}}/{{count}} rendering…",
+                "segmentDone": "Segment {{index}}/{{count}} done",
+                "segmentFailed": "Segment {{index}} failed: {{error}}",
+                "composing": "Stitching the final cut…",
+                "composed": "Final cut ready",
+                "composeFailed": "Stitch failed: {{error}}",
+                "cutFailed": "Failed to cut the video: {{error}}",
+                "noCodec": "This browser cannot encode video. Segments still render, but stitching is unavailable.",
+                "unsupported": "This browser lacks WebCodecs support, so cutting and stitching are unavailable.",
+                "noVideo": "This node has no video content yet",
+                "cancelled": "Segment rendering canceled"
+            },
+            "node": {
+                "segmentTitle": "{{title}} · segment {{index}}",
+                "segmentBadge": "Segment {{index}}",
+                "compositeTitle": "{{title}} · final cut",
+                "compositeParts": "{{count}} segments stitched"
+            },
+            "error": {
+                "loadFailed": "Can't read this video: unsupported container, or blocked by the browser",
+                "noVideoTrack": "This file has no video track",
+                "noDuration": "Can't read the duration; the file may be corrupted",
+                "unsupportedCodec": "This codec can't be decoded in this browser (needs H.264 / VP9 / AV1)",
+                "seekTimeout": "Seeking timed out; the file may be incomplete"
+            }
+        },
         "sidePanel": {
             "canvas": "Canvas",
             "assets": "Assets",
@@ -825,6 +908,7 @@ export default {
             "downloadVideo": "Download video",
             "viewVideo": "View video",
             "depthVideo": "Depth Video",
+            "videoTimeline": "Segment editor",
             "separateAudio": "Separate Audio",
             "downloadImage": "Download image",
             "editTextTitle": "Edit text",

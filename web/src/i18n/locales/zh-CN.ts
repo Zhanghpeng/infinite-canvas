@@ -621,6 +621,89 @@ export default {
             "unmute": "开启声音",
             "preview": "大屏预览"
         },
+        "videoTimeline": {
+            "title": "视频时间轴",
+            "subtitle": "分段重绘与角色替换",
+            "segmentCount": "{{count}} 段",
+            "analyzing": "正在分析画面… {{percent}}%",
+            "analyzeFailed": "画面分析失败",
+            "maxSeconds": "单段上限",
+            "legend": {
+                "cut": "场景切点 {{count}}",
+                "boundary": "段边界",
+                "selection": "重绘选区"
+            },
+            "anchor": {
+                "title": "接缝锚定帧",
+                "first": "首帧",
+                "last": "尾帧",
+                "note": "两端钉在原片上，中间交给模型重绘。接缝落在同一帧上，不会跳。"
+            },
+            "mode": {
+                "repaint": "局部重绘",
+                "character": "角色替换",
+                "repaintHint": "只重画选中的时间段，其余画面原样保留。首尾帧钉在原片上，所以前后接得上。",
+                "characterHint": "整片按单段上限切段，逐段替换角色再拼回成片；情节与节奏沿用原片。"
+            },
+            "cast": {
+                "title": "替换成这些角色",
+                "selected": "已选 {{count}} 个",
+                "empty": "画布上还没有图片节点。先放一张角色参考图进来，再回来选。",
+                "hint": "同一段里出现多个角色时按选择顺序对应，建议按出场顺序选。"
+            },
+            "segment": {
+                "title": "分段结果",
+                "label": "第 {{index}} 段"
+            },
+            "prompt": {
+                "label": "本次要求",
+                "repaint": "留空用默认：保持镜头、动作与节奏不变，修复这一段画面的瑕疵",
+                "character": "留空用默认：把画面中的人物替换成参考图中的角色，动作、镜头与节奏保持不变"
+            },
+            "crossfade": {
+                "label": "接缝淡化帧",
+                "hint": "非场景切点处把前后两段混合几帧，吃掉模型首尾的细微差异。3 帧约 0.1 秒，再长会看出来发糊。"
+            },
+            "audio": {
+                "keep": "沿用原片音轨"
+            },
+            "reason": {
+                "noRange": "先在时间轴上拖出要处理的区间",
+                "noCast": "至少选择一个角色参考图"
+            },
+            "summary": "{{count}} 段，共 {{duration}}",
+            "action": {
+                "cancel": "取消",
+                "generateSegments": "生成 {{count}} 个段",
+                "generateRepaint": "重绘 {{count}} 段"
+            },
+            "toast": {
+                "segmentRunning": "第 {{index}}/{{count}} 段生成中…",
+                "segmentDone": "第 {{index}}/{{count}} 段完成",
+                "segmentFailed": "第 {{index}} 段失败：{{error}}",
+                "composing": "正在拼接成片…",
+                "composed": "成片已生成",
+                "composeFailed": "拼接失败：{{error}}",
+                "cutFailed": "切分视频失败：{{error}}",
+                "noCodec": "当前浏览器无法编码视频，分段生成仍可用，但不能合成",
+                "unsupported": "当前浏览器不支持视频处理（需要 WebCodecs），无法切分与合成",
+                "noVideo": "这个节点还没有可用的视频内容",
+                "cancelled": "已取消分段生成"
+            },
+            "node": {
+                "segmentTitle": "{{title}} · 第 {{index}} 段",
+                "segmentBadge": "第 {{index}} 段",
+                "compositeTitle": "{{title}} · 成片",
+                "compositeParts": "{{count}} 段拼接"
+            },
+            "error": {
+                "loadFailed": "视频读不出来：可能是不支持的容器，或文件被浏览器拦截",
+                "noVideoTrack": "这个文件里没有视频轨道",
+                "noDuration": "读不到视频时长，文件可能已损坏",
+                "unsupportedCodec": "这个视频的编码当前浏览器解不了（需要 H.264 / VP9 / AV1）",
+                "seekTimeout": "定位画面超时，文件可能不完整"
+            }
+        },
         "sidePanel": {
             "canvas": "画布",
             "assets": "资产",
@@ -825,6 +908,7 @@ export default {
             "downloadVideo": "下载视频",
             "viewVideo": "查看视频",
             "depthVideo": "深度视频",
+            "videoTimeline": "分段处理",
             "separateAudio": "分离音频",
             "downloadImage": "下载图片",
             "editTextTitle": "编辑文本",
