@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronRight, Copy, Download, Group, Image as ImageIcon, Music2, Plus, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
+import { ChevronRight, Copy, Download, FileText, Group, Image as ImageIcon, Lock, Music2, Plus, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
@@ -9,7 +9,7 @@ import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
 import { useCollabStore } from "@/stores/use-collab-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
-import { CanvasNodeType, type CanvasNodeData, type CanvasNodeImage, type CanvasNodeText, type Position } from "@/types/canvas";
+import { CanvasNodeType, type CanvasGroupKind, type CanvasGroupSummary, type CanvasNodeData, type CanvasNodeImage, type CanvasNodeText, type Position } from "@/types/canvas";
 import type { CanvasNodeContext, CanvasPluginHost } from "@/types/canvas-plugin";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasVideoPlayer } from "./canvas-video-player";
@@ -18,6 +18,7 @@ import { localizeErrorDetails } from "@/lib/canvas/canvas-generation-helpers";
 
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 const selectionBlue = "#2f80ff";
+const GROUP_KIND_ICONS = { image: ImageIcon, video: Video, audio: Music2, text: FileText, other: Puzzle };
 
 type CanvasNodeProps = {
     data: CanvasNodeData;
@@ -36,6 +37,9 @@ type CanvasNodeProps = {
     renderPanel?: (node: CanvasNodeData) => ReactNode;
     renderNodeContent?: (node: CanvasNodeData) => ReactNode;
     groupChildCount?: number;
+    groupSummary?: CanvasGroupSummary;
+    isLocked?: boolean;
+    onToggleGroupCollapse?: (nodeId: string) => void;
     isGroupDropTarget?: boolean;
     batchExpanded?: boolean;
     onMouseDown: (event: React.MouseEvent, nodeId: string) => void;
@@ -87,6 +91,9 @@ type NodeContentRendererProps = {
     onViewBatchImage?: (imageId: string) => void;
     onViewMedia?: () => void;
     groupChildCount: number;
+    groupSummary?: CanvasGroupSummary;
+    isLocked?: boolean;
+    onToggleGroupCollapse?: (nodeId: string) => void;
 };
 
 export const CanvasNode = React.memo(function CanvasNode({
@@ -105,6 +112,9 @@ export const CanvasNode = React.memo(function CanvasNode({
     renderPanel,
     renderNodeContent,
     groupChildCount = 0,
+    groupSummary,
+    isLocked = false,
+    onToggleGroupCollapse,
     isGroupDropTarget = false,
     batchExpanded = false,
     onMouseDown,
@@ -155,6 +165,8 @@ export const CanvasNode = React.memo(function CanvasNode({
     const hasVideoContent = data.type === CanvasNodeType.Video && Boolean(data.metadata?.content);
     const hasAudioContent = data.type === CanvasNodeType.Audio && Boolean(data.metadata?.content);
     const isGroup = data.type === CanvasNodeType.Group;
+    // A collapsed group shrinks to a compact title card, so its resize handles would fight the layout.
+    const isCollapsedGroup = isGroup && Boolean(data.metadata?.collapsed);
     const batchCount = data.type === CanvasNodeType.Image ? data.metadata?.images?.length || 0 : data.type === CanvasNodeType.Text ? data.metadata?.texts?.length || 0 : 0;
     const isBatchRoot = batchCount > 1;
     // Nodes with the interaction/move toggle ignore content pointer events in move mode and allow interaction in interactive mode.
@@ -370,6 +382,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                             title={t("canvas.node.renameHint")}
                             onDoubleClick={(event) => {
                                 event.stopPropagation();
+                                if (isLocked) return;
                                 setIsEditingTitle(true);
                             }}
                         >
@@ -410,11 +423,17 @@ export const CanvasNode = React.memo(function CanvasNode({
                     }
                     if (data.type === CanvasNodeType.Group) {
                         event.stopPropagation();
+                        // 双击折叠的分组直接展开（和点击标题栏箭头一致），避免"看不见内容又选不中里面"的死角。
+                        if (isCollapsedGroup) {
+                            onToggleGroupCollapse?.(data.id);
+                            return;
+                        }
                         onSelectGroupChildren?.(data.id);
                         return;
                     }
                     if (data.type !== CanvasNodeType.Text) return;
                     event.stopPropagation();
+                    if (isLocked) return;
                     setIsEditingContent(true);
                 }}
             >
@@ -450,6 +469,9 @@ export const CanvasNode = React.memo(function CanvasNode({
                         onViewBatchImage={(imageId) => onViewImage?.(data, imageId)}
                         onViewMedia={() => onViewImage?.(data)}
                         groupChildCount={groupChildCount}
+                        groupSummary={groupSummary}
+                        isLocked={isLocked}
+                        onToggleGroupCollapse={onToggleGroupCollapse}
                     />
                 </div>
 
@@ -463,10 +485,10 @@ export const CanvasNode = React.memo(function CanvasNode({
                     </div>
                 ) : null}
 
-                {!referenceSelectionState && !isViewer ? <ResizeHandle corner="top-left" onMouseDown={handleResizeMouseDown} /> : null}
-                {!referenceSelectionState && !isViewer ? <ResizeHandle corner="top-right" onMouseDown={handleResizeMouseDown} /> : null}
-                {!referenceSelectionState && !isViewer ? <ResizeHandle corner="bottom-left" onMouseDown={handleResizeMouseDown} /> : null}
-                {!referenceSelectionState && !isViewer ? <ResizeHandle corner="bottom-right" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState && !isViewer && !isLocked && !isCollapsedGroup ? <ResizeHandle corner="top-left" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState && !isViewer && !isLocked && !isCollapsedGroup ? <ResizeHandle corner="top-right" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState && !isViewer && !isLocked && !isCollapsedGroup ? <ResizeHandle corner="bottom-left" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState && !isViewer && !isLocked && !isCollapsedGroup ? <ResizeHandle corner="bottom-right" onMouseDown={handleResizeMouseDown} /> : null}
             </div>
 
             {!referenceSelectionState && !isGroup && !isViewer ? <ConnectionHandleDot side="left" visible={hovered || isSelected || isConnecting} onMouseDown={(event) => onConnectStart(event, data.id, "target")} /> : null}
@@ -512,17 +534,76 @@ const nodeContentRenderers = {
     [CanvasNodeType.Group]: GroupNodeContent,
 } satisfies Record<CanvasNodeType, (props: NodeContentRendererProps) => ReactNode>;
 
-function GroupNodeContent({ node, theme, groupChildCount }: NodeContentRendererProps) {
+function GroupNodeContent({ node, theme, groupSummary, onToggleGroupCollapse }: NodeContentRendererProps) {
     const { t } = useTranslation();
+    const collapsed = Boolean(node.metadata?.collapsed);
+    const locked = Boolean(node.metadata?.locked);
+    const collapseLabel = collapsed ? t("canvas.node.expand") : t("canvas.node.collapse");
+    const kinds = groupSummary?.kinds;
+    const kindEntries = (["image", "video", "audio", "text"] as CanvasGroupKind[]).filter((kind) => (kinds?.[kind] || 0) > 0);
     return (
-        <div className="pointer-events-none flex h-full w-full p-3">
-            <div className="flex h-7 max-w-full items-center gap-2 px-1 text-xs font-medium" style={{ color: theme.node.text }}>
+        <div className={`pointer-events-none flex h-full w-full flex-col p-3 ${collapsed ? "gap-2" : "items-start"}`}>
+            <div className="flex w-full max-w-full items-center gap-2 text-[13px] font-medium" style={{ color: theme.node.text }}>
+                <button
+                    type="button"
+                    className="pointer-events-auto grid size-5 shrink-0 place-items-center rounded transition hover:bg-black/10 dark:hover:bg-white/10"
+                    aria-label={collapseLabel}
+                    title={collapseLabel}
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleGroupCollapse?.(node.id);
+                    }}
+                >
+                    <ChevronRight className={`size-3.5 shrink-0 transition-transform ${collapsed ? "" : "rotate-90"}`} style={{ color: theme.node.muted }} />
+                </button>
                 <Group className="size-3.5 shrink-0" style={{ color: theme.node.muted }} />
                 <span className="truncate">{node.title || t("canvas.node.group")}</span>
-                <span className="shrink-0 text-[11px] font-normal" style={{ color: theme.node.muted }}>
-                    {t("canvas.node.nodeCount", { count: groupChildCount })}
-                </span>
+                {locked ? <Lock className="size-3 shrink-0" style={{ color: theme.node.muted }} /> : null}
+                {collapsed ? null : (
+                    <>
+                        <span className="shrink-0 text-[11px] font-normal" style={{ color: theme.node.muted }}>
+                            {t("canvas.node.nodeCount", { count: groupSummary?.count || 0 })}
+                        </span>
+                        {groupSummary?.running ? <span className="shrink-0 text-[11px] font-normal" style={{ color: theme.node.activeStroke }}>{t("canvas.node.groupRunning", { count: groupSummary.running })}</span> : null}
+                        {groupSummary?.failed ? <span className="shrink-0 text-[11px] font-normal text-red-400">{t("canvas.node.groupFailed", { count: groupSummary.failed })}</span> : null}
+                    </>
+                )}
             </div>
+            {collapsed ? (
+                <>
+                    {/* 收起态把"里面有什么、还在不在跑"压成一行摘要 + 预览条，展开前也能判断要不要打开。 */}
+                    <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 text-xs font-normal" style={{ color: theme.node.muted }}>
+                        <span>{t("canvas.node.nodeCount", { count: groupSummary?.count || 0 })}</span>
+                        {kindEntries.map((kind) => {
+                            const KindIcon = GROUP_KIND_ICONS[kind];
+                            return (
+                                <span key={kind} className="flex shrink-0 items-center gap-1">
+                                    <KindIcon className="size-3.5" />
+                                    {kinds?.[kind]}
+                                </span>
+                            );
+                        })}
+                    </div>
+                    <div className="flex w-full items-center gap-1.5">
+                        {(groupSummary?.previews || []).map((preview) => {
+                            const PreviewIcon = GROUP_KIND_ICONS[preview.kind];
+                            return (
+                                <span key={preview.id} className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-lg border" style={{ borderColor: theme.node.stroke, background: theme.node.panel }}>
+                                    {preview.src ? <img src={preview.src} alt="" className="size-full object-cover" /> : <PreviewIcon className="size-4" style={{ color: theme.node.muted }} />}
+                                </span>
+                            );
+                        })}
+                    </div>
+                    {groupSummary?.running || groupSummary?.failed ? (
+                        <div className="flex w-full items-center gap-3 text-xs font-normal">
+                            {groupSummary.running ? <span style={{ color: theme.node.activeStroke }}>{t("canvas.node.groupRunning", { count: groupSummary.running })}</span> : null}
+                            {groupSummary.failed ? <span className="text-red-400">{t("canvas.node.groupFailed", { count: groupSummary.failed })}</span> : null}
+                        </div>
+                    ) : null}
+                </>
+            ) : null}
         </div>
     );
 }

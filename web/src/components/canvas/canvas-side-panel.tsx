@@ -198,6 +198,9 @@ function CanvasNodesTab({
         const query = keyword.trim().toLowerCase();
         return nodes.filter((node) => (typeFilter === "all" || node.type === typeFilter) && (!query || [node.title, node.metadata?.content, node.metadata?.prompt].filter(Boolean).join(" ").toLowerCase().includes(query)));
     }, [nodes, keyword, typeFilter]);
+    // 画布上折叠的分组，其子节点在列表里也一起收起，两边视图保持一致。
+    const canvasCollapsedGroups = useMemo(() => new Set(nodes.filter((node) => node.metadata?.collapsed).map((node) => node.id)), [nodes]);
+    const hiddenInList = useMemo(() => new Set([...collapsedGroups, ...canvasCollapsedGroups]), [collapsedGroups, canvasCollapsedGroups]);
     const treeRows = useMemo(() => {
         const filteredIds = new Set(filtered.map((node) => node.id));
         const groups = new Set(nodes.filter((node) => node.type === CanvasNodeType.Group).map((node) => node.id));
@@ -211,9 +214,9 @@ function CanvasNodesTab({
             if (node.type !== CanvasNodeType.Group) return filteredIds.has(node.id) ? [{ node, depth: 0, hasChildren: false }] : [];
             const groupChildren = children.get(node.id) || [];
             if (!filteredIds.has(node.id) && !groupChildren.length) return [];
-            return [{ node, depth: 0, hasChildren: groupChildren.length > 0 }, ...(collapsedGroups.has(node.id) ? [] : groupChildren.map((child) => ({ node: child, depth: 1, hasChildren: false })))];
+            return [{ node, depth: 0, hasChildren: groupChildren.length > 0 }, ...(hiddenInList.has(node.id) ? [] : groupChildren.map((child) => ({ node: child, depth: 1, hasChildren: false })))];
         });
-    }, [collapsedGroups, filtered, nodes]);
+    }, [hiddenInList, filtered, nodes]);
 
     const exitSelect = () => {
         setSelectMode(false);

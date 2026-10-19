@@ -55,6 +55,7 @@ import { CanvasCollabModal } from "@/components/canvas/canvas-collab-modal";
 import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { buildNodeMentionReferences, getGroupResourceNodes, isCanvasReferenceNode, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { collectCollapsedNodeIds, collectGroupDescendantIds, isNodeLocked } from "@/lib/canvas/canvas-group-collapse";
 import { exportCanvasProjects, safeFileName } from "@/lib/canvas/canvas-export";
 import { applyNodeConfigPatch, audioMetadata, buildAudioGenerationMetadata, buildImageGenerationMetadata, cloneNodeMetadata, createCanvasNode, imageMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
 import {
@@ -105,6 +106,8 @@ import {
     type CanvasAssistantSession,
     type CanvasConnection,
     type CanvasGenerationIntent,
+    type CanvasGroupKind,
+    type CanvasGroupSummary,
     type CanvasNodeData,
     type CanvasNodeImage,
     type CanvasNodeText,
@@ -156,6 +159,22 @@ const NODE_STATUS_IDLE = "idle" as const;
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
+const GROUP_KIND_ORDER: Record<CanvasGroupKind, number> = { image: 0, video: 1, audio: 2, text: 3, other: 4 };
+
+function groupMemberKind(node: CanvasNodeData): CanvasGroupKind {
+    if (node.type === CanvasNodeType.Image) return "image";
+    if (node.type === CanvasNodeType.Video) return "video";
+    if (node.type === CanvasNodeType.Audio) return "audio";
+    if (node.type === CanvasNodeType.Text) return "text";
+    return "other";
+}
+
+/** 只有图片有廉价稳定的缩略图来源，其余类型在分组摘要里用图标代替。 */
+function groupPreviewSource(node: CanvasNodeData) {
+    if (node.type !== CanvasNodeType.Image) return undefined;
+    return node.metadata?.images?.find((image) => image.id === node.metadata?.primaryImageId)?.content || node.metadata?.content;
+}
+
 export default function CanvasPage() {
     const [mounted, setMounted] = useState(false);
 
@@ -312,6 +331,9 @@ function InfiniteCanvasPage() {
     const selectionBoxRef = useRef(selectionBox);
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
+    // 交互回调（鼠标事件、拖拽）里不便依赖 state，用 ref 兜住折叠/锁定集合。
+    const collapsedNodeIdsRef = useRef<Set<string>>(new Set());
+    const lockedNodeIdsRef = useRef<Set<string>>(new Set());
 
     const activeRoomId = useCollabStore((state) => state.activeRoomId);
     const collabRole = useCollabStore((state) => state.role);
@@ -842,6 +864,23 @@ function InfiniteCanvasPage() {
         [screenToCanvas],
     );
 
+    // 折叠分组会把后代节点整棵藏起来；锁定则沿 groupId 向上传染。两者都在渲染与交互处统一走这两个集合。
+    const collapsedNodeIds = useMemo(() => collectCollapsedNodeIds(nodes), [nodes]);
+    // 折叠分组自己还留着标题栏，但它与外界之间的连线也要一起隐藏，否则会指向看不见的节点。
+    const collapsedEndpointIds = useMemo(() => {
+        const ids = new Set(collapsedNodeIds);
+        for (const node of nodes) {
+            if (node.metadata?.collapsed) ids.add(node.id);
+        }
+        return ids;
+    }, [collapsedNodeIds, nodes]);
+    const lockedNodeIds = useMemo(() => new Set(nodes.filter((node) => isNodeLocked(node, nodes)).map((node) => node.id)), [nodes]);
+
+    useEffect(() => {
+        collapsedNodeIdsRef.current = collapsedNodeIds;
+        lockedNodeIdsRef.current = lockedNodeIds;
+    }, [collapsedNodeIds, lockedNodeIds]);
+
     const visibleNodes = useMemo(() => {
         const padding = 280;
         const rect = containerRef.current?.getBoundingClientRect();
@@ -852,8 +891,8 @@ function InfiniteCanvasPage() {
         const viewRight = viewLeft + width / viewport.k + padding * 2;
         const viewBottom = viewTop + height / viewport.k + padding * 2;
 
-        return nodes.filter((node) => node.position.x + node.width > viewLeft && node.position.x < viewRight && node.position.y + node.height > viewTop && node.position.y < viewBottom);
-    }, [nodes, size.height, size.width, viewport.k, viewport.x, viewport.y]);
+        return nodes.filter((node) => !collapsedNodeIds.has(node.id) && node.position.x + node.width > viewLeft && node.position.x < viewRight && node.position.y + node.height > viewTop && node.position.y < viewBottom);
+    }, [collapsedNodeIds, nodes, size.height, size.width, viewport.k, viewport.x, viewport.y]);
 
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
     // The toolbar follows a single selected node selected by click, creation, marquee, or keyboard.
@@ -870,6 +909,32 @@ function InfiniteCanvasPage() {
     const previewContent = previewImageId ? previewNode?.metadata?.images?.find((image) => image.id === previewImageId)?.content : previewNode?.metadata?.content;
     const hasMultipleSelectedNodes = selectedNodeIds.size > 1;
     const activeNodeId = hasMultipleSelectedNodes ? null : hoveredNodeId || (selectedNodeIds.size === 1 ? Array.from(selectedNodeIds)[0] : null);
+    // 每个分组一份聚合摘要，直接画在分组节点上：折叠后不必展开也能知道里面有什么、还在不在跑。
+    const groupSummaryById = useMemo(() => {
+        const byId = new Map(nodes.map((node) => [node.id, node]));
+        const map = new Map<string, CanvasGroupSummary>();
+        nodes.forEach((node) => {
+            if (node.type !== CanvasNodeType.Group) return;
+            const kinds: CanvasGroupSummary["kinds"] = { image: 0, video: 0, audio: 0, text: 0, other: 0 };
+            const members: CanvasGroupSummary["previews"] = [];
+            let running = 0;
+            let failed = 0;
+            for (const id of collectGroupDescendantIds(node.id, nodes)) {
+                const member = byId.get(id);
+                if (!member) continue;
+                const kind = groupMemberKind(member);
+                kinds[kind] += 1;
+                if (member.metadata?.status === "loading") running += 1;
+                else if (member.metadata?.status === "error") failed += 1;
+                members.push({ id, kind, src: groupPreviewSource(member) });
+            }
+            if (!members.length) return;
+            // 图片排前面，这样只要组里有图，预览条就一定显示真图。
+            members.sort((a, b) => GROUP_KIND_ORDER[a.kind] - GROUP_KIND_ORDER[b.kind]);
+            map.set(node.id, { count: members.length, kinds, previews: members.slice(0, 4), running, failed });
+        });
+        return map;
+    }, [nodes]);
     const groupChildCountById = useMemo(() => {
         const map = new Map<string, number>();
         nodes.forEach((node) => {
@@ -1099,6 +1164,37 @@ function InfiniteCanvasPage() {
         [message, t],
     );
 
+    // 折叠/锁定都只是 metadata 开关，因此自动走历史栈、并随项目一起持久化。
+    const applyGroupCollapsed = useCallback((groupIds: string[], collapsed: boolean) => {
+        const ids = new Set(groupIds);
+        setNodes((prev) => prev.map((node) => (ids.has(node.id) && node.type === CanvasNodeType.Group ? { ...node, metadata: { ...node.metadata, collapsed } } : node)));
+        if (!collapsed) return;
+        // 折叠会把子树上所有节点藏起来，指向它们的选中/悬停/弹窗都要先放开，否则会留下操作不到的空引用。
+        const hidden = new Set<string>();
+        for (const groupId of groupIds) {
+            for (const id of collectGroupDescendantIds(groupId, nodesRef.current)) hidden.add(id);
+        }
+        setSelectedNodeIds((current) => {
+            const next = new Set([...current].filter((id) => !hidden.has(id)));
+            return next.size === current.size ? current : next;
+        });
+        setHoveredNodeId((current) => (current && hidden.has(current) ? null : current));
+        setToolbarNodeId((current) => (current && hidden.has(current) ? null : current));
+        setDialogNodeId((current) => (current && hidden.has(current) ? null : current));
+    }, []);
+
+    const toggleGroupCollapse = useCallback(
+        (groupId: string) => {
+            const group = nodesRef.current.find((node) => node.id === groupId);
+            applyGroupCollapsed([groupId], !group?.metadata?.collapsed);
+        },
+        [applyGroupCollapsed],
+    );
+
+    const toggleGroupLock = useCallback((groupId: string) => {
+        setNodes((prev) => prev.map((node) => (node.id === groupId && node.type === CanvasNodeType.Group ? { ...node, metadata: { ...node.metadata, locked: !node.metadata?.locked } } : node)));
+    }, []);
+
     const handleSelectGroupChildren = useCallback(
         (groupId: string) => {
             const childIds = nodesRef.current.filter((n) => n.metadata?.groupId === groupId).map((n) => n.id);
@@ -1116,7 +1212,10 @@ function InfiniteCanvasPage() {
         (ids: Set<string>) => {
             if (isViewerRef.current) return;
             if (!ids.size) return;
-            const allIds = new Set(ids);
+            // 锁定节点（自身锁定，或位于锁定分组内）不允许删除。
+            const protectedIds = new Set(nodesRef.current.filter((node) => isNodeLocked(node, nodesRef.current)).map((node) => node.id));
+            const allIds = new Set([...ids].filter((id) => !protectedIds.has(id)));
+            if (!allIds.size) return;
             setNodes((prev) => {
                 const next = prev.filter((node) => !allIds.has(node.id));
                 return next.map((node) => {
@@ -1625,6 +1724,12 @@ function InfiniteCanvasPage() {
                 });
             }
         });
+        // 锁定节点（自身锁定，或位于锁定分组内）不参与拖拽；全被锁时连拖拽会话都不开。
+        for (const id of [...dragIds]) {
+            const target = currentNodes.find((item) => item.id === id);
+            if (target && isNodeLocked(target, currentNodes)) dragIds.delete(id);
+        }
+        if (!dragIds.size) return;
         dragRef.current = {
             isDraggingNode: true,
             hasMoved: false,
@@ -1790,6 +1895,8 @@ function InfiniteCanvasPage() {
             const nextSelected = new Set<string>(currentSelection.additive ? currentSelection.initialSelectedNodeIds : []);
 
             nodesRef.current
+                // 折叠分组里看不见的节点、以及锁定节点都不参与框选：前者框不到，后者不该被批量操作带上。
+                .filter((node) => !collapsedNodeIdsRef.current.has(node.id) && !lockedNodeIdsRef.current.has(node.id))
                 .forEach((node) => {
                     const intersects = rectX < node.position.x + node.width && rectX + rectW > node.position.x && rectY < node.position.y + node.height && rectY + rectH > node.position.y;
 
@@ -1998,6 +2105,24 @@ function InfiniteCanvasPage() {
                 return;
             }
 
+            if (isModifierShortcut && !event.altKey && event.shiftKey && (key === "e" || key === "l")) {
+                const groups = nodesRef.current.filter((node) => node.type === CanvasNodeType.Group && selectedNodeIdsRef.current.has(node.id));
+                if (!groups.length) return;
+                event.preventDefault();
+                if (key === "e") {
+                    // 目标态取"多数"的反面：只要还有展开的，就全部折叠。
+                    applyGroupCollapsed(
+                        groups.map((group) => group.id),
+                        groups.some((group) => !group.metadata?.collapsed),
+                    );
+                } else {
+                    const locked = groups.some((group) => !group.metadata?.locked);
+                    const ids = new Set(groups.map((group) => group.id));
+                    setNodes((prev) => prev.map((node) => (ids.has(node.id) ? { ...node, metadata: { ...node.metadata, locked } } : node)));
+                }
+                return;
+            }
+
             if (isModifierShortcut && !event.altKey && key === "c") {
                 event.preventDefault();
                 copySelectedNodes();
@@ -2037,11 +2162,16 @@ function InfiniteCanvasPage() {
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [copySelectedNodes, deleteConnection, deleteNodes, pasteCopiedNodes, pasteSystemClipboard, redoCanvas, selectedConnectionId, setConnecting, undoCanvas]);
+    }, [applyGroupCollapsed, copySelectedNodes, deleteConnection, deleteNodes, pasteCopiedNodes, pasteSystemClipboard, redoCanvas, selectedConnectionId, setConnecting, undoCanvas]);
 
     const handleConnectStart = useCallback(
         (event: ReactMouseEvent | React.PointerEvent, nodeId: string, handleType: "source" | "target") => {
             event.stopPropagation();
+            // 锁定节点不接受新的连线，避免"锁住了还能被接走/接进来"。
+            if (lockedNodeIdsRef.current.has(nodeId)) {
+                message.warning(t("canvas.node.locked"));
+                return;
+            }
             setMouseWorld(screenToCanvas(event.clientX, event.clientY));
             setConnecting({ nodeId, handleType });
             connectionTargetNodeIdRef.current = null;
@@ -2084,7 +2214,8 @@ function InfiniteCanvasPage() {
         setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, width, height, position: position || node.position } : node)));
     }, []);
 
-    const handleNodeResizeStart = useCallback(() => {
+    const handleNodeResizeStart = useCallback((nodeId?: string) => {
+        if (nodeId && lockedNodeIdsRef.current.has(nodeId)) return;
         setIsNodeResizing(true);
     }, []);
     const handleNodeResizeEnd = useCallback(() => {
@@ -5016,6 +5147,7 @@ function InfiniteCanvasPage() {
                 >
                     <svg className="absolute left-0 top-0 h-[10000px] w-[10000px] overflow-visible" style={{ pointerEvents: "none", transform: "translateZ(0)", zIndex: 0 }}>
                         {connections
+                            .filter((connection) => !collapsedEndpointIds.has(connection.fromNodeId) && !collapsedEndpointIds.has(connection.toNodeId))
                             .map((connection) => {
                                 const from = nodeById.get(connection.fromNodeId);
                                 const to = nodeById.get(connection.toNodeId);
@@ -5071,6 +5203,9 @@ function InfiniteCanvasPage() {
                             referenceSelectionState={!referencePickerNodeId ? undefined : node.id === referencePickerNodeId ? "target" : referenceConnectedNodeIds.has(node.id) || !isCanvasReferenceNode(node, nodes) ? "disabled" : "available"}
                             showPanel={!isNodeResizing && dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel}
                             groupChildCount={groupChildCountById.get(node.id) || 0}
+                            groupSummary={groupSummaryById.get(node.id)}
+                            isLocked={lockedNodeIds.has(node.id)}
+                            onToggleGroupCollapse={toggleGroupCollapse}
                             isGroupDropTarget={dropTargetGroupId === node.id}
                             batchExpanded={expandedBatchNodeIds.has(node.id)}
                             showImageInfo={showImageInfo}
@@ -5177,6 +5312,8 @@ function InfiniteCanvasPage() {
                     onFitGroup={(node) => handleFitGroup(node.id)}
                     onUngroup={(node) => ungroupSelected(node.id)}
                     onSaveGroupAsset={(node) => void saveGroupAsset(node)}
+                    onToggleGroupCollapse={(node) => toggleGroupCollapse(node.id)}
+                    onToggleGroupLock={(node) => toggleGroupLock(node.id)}
                 />
 
                 {isViewer ? (
@@ -5226,7 +5363,7 @@ function InfiniteCanvasPage() {
                     />
                 )}
 
-                {isMiniMapOpen ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
+                {isMiniMapOpen ? <Minimap nodes={collapsedNodeIds.size ? nodes.filter((node) => !collapsedNodeIds.has(node.id)) : nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
 
                 <CanvasZoomControls scale={viewport.k} onScaleChange={setZoomScale} onReset={resetViewport} isMiniMapOpen={isMiniMapOpen} onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)} />
 
@@ -5272,6 +5409,16 @@ function InfiniteCanvasPage() {
                         }}
                         onSaveGroupAsset={() => {
                             if (contextMenuNode) void saveGroupAsset(contextMenuNode);
+                            setContextMenu(null);
+                        }}
+                        groupCollapsed={Boolean(contextMenuNode?.metadata?.collapsed)}
+                        groupLocked={Boolean(contextMenuNode?.metadata?.locked)}
+                        onToggleGroupCollapse={() => {
+                            if (contextMenuNode) toggleGroupCollapse(contextMenuNode.id);
+                            setContextMenu(null);
+                        }}
+                        onToggleGroupLock={() => {
+                            if (contextMenuNode) toggleGroupLock(contextMenuNode.id);
                             setContextMenu(null);
                         }}
                         onDelete={() => {

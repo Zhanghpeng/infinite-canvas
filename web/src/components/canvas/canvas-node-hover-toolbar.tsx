@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { App, Modal, Segmented, Tooltip } from "antd";
-import { CheckSquare, Download, Ellipsis, Eye, FolderPlus, Image as ImageIcon, Info, Layers, Maximize2, MessageSquare, Minus, Music, Music2, PackagePlus, Plus, RefreshCw, Settings2, SmilePlus, Trash2, Ungroup, Upload, Video } from "lucide-react";
+import { CheckSquare, ChevronsDownUp, ChevronsUpDown, Download, Ellipsis, Eye, FolderPlus, Image as ImageIcon, Info, Layers, Lock, LockOpen, Maximize2, MessageSquare, Minus, Music, Music2, PackagePlus, Plus, RefreshCw, Settings2, SmilePlus, Trash2, Ungroup, Upload, Video } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -48,6 +48,8 @@ type CanvasNodeHoverToolbarProps = {
     onFitGroup?: (node: CanvasNodeData) => void;
     onUngroup?: (node: CanvasNodeData) => void;
     onSaveGroupAsset?: (node: CanvasNodeData) => void;
+    onToggleGroupCollapse?: (node: CanvasNodeData) => void;
+    onToggleGroupLock?: (node: CanvasNodeData) => void;
     extraTools?: CanvasNodeToolbarItem[];
 };
 
@@ -93,6 +95,8 @@ export function CanvasNodeHoverToolbar({
     onFitGroup,
     onUngroup,
     onSaveGroupAsset,
+    onToggleGroupCollapse,
+    onToggleGroupLock,
     extraTools = [],
 }: CanvasNodeHoverToolbarProps) {
     const configToolbar = useConfigStore((state) => state.config.toolbar) || defaultToolbarConfig;
@@ -195,6 +199,22 @@ export function CanvasNodeHoverToolbar({
                       label: t("canvas.nodeToolbar.saveGroupAsset"),
                       icon: <PackagePlus className="size-4" />,
                       onClick: () => onSaveGroupAsset?.(node),
+                  },
+                  {
+                      id: "collapseGroup",
+                      title: `${node.metadata?.collapsed ? t("canvas.node.expand") : t("canvas.node.collapse")} (⌘⇧E)`,
+                      label: node.metadata?.collapsed ? t("canvas.node.expand") : t("canvas.node.collapse"),
+                      icon: node.metadata?.collapsed ? <ChevronsUpDown className="size-4" /> : <ChevronsDownUp className="size-4" />,
+                      active: Boolean(node.metadata?.collapsed),
+                      onClick: () => onToggleGroupCollapse?.(node),
+                  },
+                  {
+                      id: "lockGroup",
+                      title: `${node.metadata?.locked ? t("canvas.node.unlock") : t("canvas.node.lock")} (⌘⇧L)`,
+                      label: node.metadata?.locked ? t("canvas.node.unlock") : t("canvas.node.lock"),
+                      icon: node.metadata?.locked ? <LockOpen className="size-4" /> : <Lock className="size-4" />,
+                      active: Boolean(node.metadata?.locked),
+                      onClick: () => onToggleGroupLock?.(node),
                   },
                   {
                       id: "fitContent",
