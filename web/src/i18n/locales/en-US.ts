@@ -637,6 +637,8 @@ export default {
                 "title": "Seam anchors",
                 "first": "First",
                 "last": "Last",
+                "keep": "Original kept",
+                "none": "The whole clip is regenerated, nothing is kept",
                 "note": "Both ends are pinned to the original frame, only the middle is regenerated, so the seam lands on the same frame."
             },
             "mode": {
@@ -662,7 +664,7 @@ export default {
             },
             "crossfade": {
                 "label": "Seam blend frames",
-                "hint": "Blends a few frames across boundaries that are not scene cuts, absorbing tiny differences. 3 frames ≈ 0.1s; longer starts to look soft."
+                "hint": "Blends a few frames across boundaries that are not scene cuts, absorbing tiny differences. 3 frames ≈ 0.1s; longer starts to look soft. Blending loses no frames, so duration and audio stay aligned."
             },
             "audio": {
                 "keep": "Keep the original audio track"
@@ -671,7 +673,7 @@ export default {
                 "noRange": "Drag a range on the timeline first",
                 "noCast": "Pick at least one character reference"
             },
-            "summary": "{{count}} segments, {{duration}} total",
+            "summary": "{{count}} segments → {{duration}} output",
             "action": {
                 "cancel": "Cancel",
                 "generateSegments": "Generate {{count}} segments",

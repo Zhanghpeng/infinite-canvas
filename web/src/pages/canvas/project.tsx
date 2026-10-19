@@ -21,7 +21,7 @@ import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-i
 import { fitNodeSize, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
 import { captureVideoFrame, type VideoFramePosition } from "@/lib/canvas/canvas-video-frame";
 import { extractAudioFromVideo } from "@/lib/canvas/canvas-video-audio";
-import { concatVideoParts, cutVideoSegment, isMediaProcessingSupported } from "@/lib/canvas/video-clip";
+import { concatVideoParts, cutVideoSegment, isMediaProcessingSupported, type ConcatPart } from "@/lib/canvas/video-clip";
 import { captureFrameDataUrl } from "@/lib/canvas/video-scene-detect";
 import { formatDuration, type VideoRange } from "@/lib/canvas/video-timeline";
 import { App, Button, Modal } from "antd";
@@ -3456,17 +3456,29 @@ function InfiniteCanvasPage() {
 
                 if (produced.length === plan.ranges.length && produced.length > 0) {
                     message.loading({ content: t("canvas.videoTimeline.toast.composing"), key: composeKey, duration: 0 });
-                    const merged = await concatVideoParts(
-                        produced.map((part) => ({ blob: part.blob, sceneStart: part.range.sceneStart })),
-                        {
-                            crossfadeFrames: plan.crossfadeFrames,
-                            audio: plan.keepAudio ? sourceBlob : null,
-                            signal: controller.signal,
-                            onProgress: (ratio) => {
-                                message.loading({ content: `${t("canvas.videoTimeline.toast.composing")} ${Math.round(ratio * 100)}%`, key: composeKey, duration: 0 });
-                            },
+
+                    // 局部重绘的成片 = 保留的原画头 + 重绘段 + 保留的原画尾。
+                    // 只拼重绘段的话，用户拿到的是"10–15 秒那 5 秒"，不是他要的整条片子。
+                    const parts: ConcatPart[] = [];
+                    const rangeStart = plan.ranges[0].startMs;
+                    const rangeEnd = plan.ranges[plan.ranges.length - 1].endMs;
+                    if (plan.mode === "repaint" && rangeStart > 60) {
+                        parts.push({ blob: await cutVideoSegment(sourceBlob, 0, rangeStart), sceneStart: true });
+                    }
+                    produced.forEach((part) => parts.push({ blob: part.blob, sceneStart: part.range.sceneStart }));
+                    if (plan.mode === "repaint" && plan.durationMs - rangeEnd > 60) {
+                        // 尾段起点正好是原片的场景切点时不做淡化，那里本来就没有连续性。
+                        parts.push({ blob: await cutVideoSegment(sourceBlob, rangeEnd, plan.durationMs), sceneStart: plan.endAtCut });
+                    }
+
+                    const merged = await concatVideoParts(parts, {
+                        crossfadeFrames: plan.crossfadeFrames,
+                        audio: plan.keepAudio ? sourceBlob : null,
+                        signal: controller.signal,
+                        onProgress: (ratio) => {
+                            message.loading({ content: `${t("canvas.videoTimeline.toast.composing")} ${Math.round(ratio * 100)}%`, key: composeKey, duration: 0 });
                         },
-                    );
+                    });
                     const uploaded = await uploadMediaFile(merged, "video");
                     const compositeId = nanoid();
                     appendCanvasNodes(

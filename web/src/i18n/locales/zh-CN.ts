@@ -637,6 +637,8 @@ export default {
                 "title": "接缝锚定帧",
                 "first": "首帧",
                 "last": "尾帧",
+                "keep": "保留原画",
+                "none": "全片都重绘，没有要保留的原画",
                 "note": "两端钉在原片上，中间交给模型重绘。接缝落在同一帧上，不会跳。"
             },
             "mode": {
@@ -662,7 +664,7 @@ export default {
             },
             "crossfade": {
                 "label": "接缝淡化帧",
-                "hint": "非场景切点处把前后两段混合几帧，吃掉模型首尾的细微差异。3 帧约 0.1 秒，再长会看出来发糊。"
+                "hint": "非场景切点处把前后两段混几帧，吃掉模型首尾的细微差异。3 帧约 0.1 秒，再长会看出来发糊。淡化不丢帧，总时长与音轨严格对齐。"
             },
             "audio": {
                 "keep": "沿用原片音轨"
@@ -671,7 +673,7 @@ export default {
                 "noRange": "先在时间轴上拖出要处理的区间",
                 "noCast": "至少选择一个角色参考图"
             },
-            "summary": "{{count}} 段，共 {{duration}}",
+            "summary": "生成 {{count}} 段 · 成片 {{duration}}",
             "action": {
                 "cancel": "取消",
                 "generateSegments": "生成 {{count}} 个段",

@@ -29,6 +29,11 @@ export type VideoEditMode = "repaint" | "character";
 export type VideoEditPlan = {
     mode: "repaint" | "character-swap";
     ranges: VideoRange[];
+    /** 源片总时长。局部重绘要靠它把选区之外的画面原样补回来。 */
+    durationMs: number;
+    /** 选区起止是否正好落在场景切点上：是则补回来的保留段不参与淡化。 */
+    startAtCut: boolean;
+    endAtCut: boolean;
     /** 角色替换时参与生成的角色图片节点。 */
     castNodeIds: string[];
     prompt: string;
@@ -155,15 +160,20 @@ export function CanvasVideoTimelineModal({ open, node, imageNodes, submitting, o
 
     const handleSubmit = useCallback(() => {
         if (!ranges.length) return;
+        // 选区端点通常已经被时间轴吸到切点上，这里再判一次：落在切点上就说明边界本来就没有连续性。
+        const atCut = (timeMs: number) => cuts.some((cut) => Math.abs(cut.timeMs - timeMs) <= 80);
         onSubmit({
             mode: mode === "repaint" ? "repaint" : "character-swap",
             ranges,
+            durationMs,
+            startAtCut: atCut(ranges[0].startMs),
+            endAtCut: atCut(ranges[ranges.length - 1].endMs),
             castNodeIds,
             prompt: prompt.trim(),
-            crossfadeFrames: mode === "repaint" ? crossfadeFrames : crossfadeFrames,
+            crossfadeFrames,
             keepAudio,
         });
-    }, [castNodeIds, crossfadeFrames, keepAudio, mode, onSubmit, prompt, ranges]);
+    }, [castNodeIds, crossfadeFrames, cuts, durationMs, keepAudio, mode, onSubmit, prompt, ranges]);
 
     const disabledReason = useMemo(() => {
         if (phase !== "ready" || !ranges.length) return t("canvas.videoTimeline.reason.noRange");
@@ -171,7 +181,17 @@ export function CanvasVideoTimelineModal({ open, node, imageNodes, submitting, o
         return "";
     }, [castNodeIds.length, mode, phase, ranges.length, t]);
 
-    const totalSelectedMs = mode === "character" ? durationMs : selection ? selection.endMs - selection.startMs : 0;
+    // 局部重绘只重建选区，选区之外的画面原样补回去 —— 用户得看得见这部分真的没丢。
+    const keptRanges = useMemo(() => {
+        if (mode !== "repaint" || !selection || !durationMs) return [];
+        const result: Array<{ startMs: number; endMs: number }> = [];
+        if (selection.startMs > 60) result.push({ startMs: 0, endMs: selection.startMs });
+        if (durationMs - selection.endMs > 60) result.push({ startMs: selection.endMs, endMs: durationMs });
+        return result;
+    }, [durationMs, mode, selection]);
+
+    /** 成片时长：两种模式都以源片长度为基准，淡化和拼接都不改变总长。 */
+    const outputDurationMs = durationMs;
 
     return (
         <Modal
@@ -205,7 +225,7 @@ export function CanvasVideoTimelineModal({ open, node, imageNodes, submitting, o
                             <span>
                                 {t("canvas.videoTimeline.summary", {
                                     count: ranges.length,
-                                    duration: formatDuration(totalSelectedMs),
+                                    duration: formatDuration(outputDurationMs),
                                 })}
                             </span>
                         )}
@@ -302,6 +322,12 @@ export function CanvasVideoTimelineModal({ open, node, imageNodes, submitting, o
                                 <AnchorThumb label={t("canvas.videoTimeline.anchor.first")} src={anchorFrames.first} />
                                 <div className="flex-1 text-center text-[10px] leading-relaxed text-stone-400">{t("canvas.videoTimeline.anchor.note")}</div>
                                 <AnchorThumb label={t("canvas.videoTimeline.anchor.last")} src={anchorFrames.last} />
+                            </div>
+                            <div className="mt-1.5 border-t border-stone-200/70 pt-1.5 text-[10px] text-stone-400 dark:border-stone-700/60">
+                                <span className="text-emerald-600 dark:text-emerald-400">{t("canvas.videoTimeline.anchor.keep")}</span>
+                                <span className="ml-1 font-mono">
+                                    {keptRanges.length ? keptRanges.map((range) => `${formatTimecode(range.startMs)}–${formatTimecode(range.endMs)}`).join("  ·  ") : t("canvas.videoTimeline.anchor.none")}
+                                </span>
                             </div>
                         </div>
                     ) : null}
