@@ -1,0 +1,20 @@
+{
+    "name": "@infinite-canvas/local-workspace",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Local workspace file service for Infinite Canvas local storage mode.",
+    "main": "index.js",
+    "bin": {
+        "local-workspace": "index.js"
+    },
+    "scripts": {
+        "start": "node index.js"
+    },
+    "dependencies": {
+        "express": "^5.1.0"
+    },
+    "engines": {
+        "node": ">=18"
+    }
+}
