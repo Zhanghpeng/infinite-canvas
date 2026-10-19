@@ -128,16 +128,35 @@ export async function concatVideoParts(parts: ConcatPart[], options: ConcatOptio
     const context = canvas.getContext("2d") as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!context) throw new Error("NO_CANVAS_CONTEXT");
 
-    const totalMs = parts.reduce((sum, part) => sum + Math.max(0, (part.endMs ?? probe.durationMs) - (part.startMs ?? 0)), 0) || 1;
+    // 每段的实际区间先统一解析出来：进度百分比要用真实总时长，
+    // 而不能拿第一段去代表全部（各段时长并不相同）。
+    const partRanges: Array<{ startMs: number; endMs: number }> = [];
+    for (const part of parts) {
+        const endMs = part.endMs ?? (await probeVideo(part.blob)).durationMs;
+        partRanges.push({ startMs: part.startMs ?? 0, endMs });
+    }
+    const totalMs = partRanges.reduce((sum, range) => sum + Math.max(0, range.endMs - range.startMs), 0) || 1;
     const crossfadeFrames = Math.max(0, Math.min(12, Math.round(options.crossfadeFrames ?? 0)));
-
     await output.start();
     let completed = false;
     try {
         let outputTime = 0;
         let frameDuration = 1 / 30;
-        /** 延迟写出的队尾：留几帧给下一段做交叉淡化。 */
-        const pending: Array<{ sample: MediaVideoSample; duration: number }> = [];
+        /**
+         * 最近发出的若干帧，留给下一段开头做淡化源。
+         *
+         * 这里刻意不用「重叠消耗」式淡化（把前段尾巴和后段开头合成一组帧）：
+         * 那样每道接缝都会少掉 fade 帧，长片累积下来画面比音轨短，
+         * 而音轨是整轨取自原片的，最终表现为越到后面口型越对不上。
+         * 改成「后段开头与前段尾帧混合」：帧数一帧不丢，时长与音轨严格对齐。
+         */
+        const trail: Array<{ sample: MediaVideoSample; duration: number }> = [];
+        const trimTrail = () => {
+            while (trail.length > crossfadeFrames) {
+                const stale = trail.shift()!;
+                stale.sample.close();
+            }
+        };
 
         const emit = async (sample: MediaVideoSample, duration: number, blend?: { other: MediaVideoSample; alpha: number }) => {
             context.clearRect(0, 0, width, height);
@@ -161,40 +180,35 @@ export async function concatVideoParts(parts: ConcatPart[], options: ConcatOptio
 
         for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
             const part = parts[partIndex];
-            const fade = crossfadeFrames > 0 && partIndex > 0 && part.sceneStart !== true ? crossfadeFrames : 0;
-            // 最后一段不留队尾：没有下一段要跟它做淡化。
-            const keep = partIndex === parts.length - 1 ? 0 : crossfadeFrames;
+            const fade = crossfadeFrames > 0 && partIndex > 0 && part.sceneStart !== true ? Math.min(crossfadeFrames, trail.length) : 0;
+            // 淡化源在段开头一次性定格：淡入过程中 trail 会滚动，逐帧取会被自己覆盖。
+            const ghost = fade > 0 ? trail.slice(trail.length - fade) : [];
+            let fadeActive = fade > 0;
+            let indexInPart = 0;
             // 必须显式给区间：无损切出来的文件带着 edit list，头部会残留上一个关键帧到切点之间的数据，
             // 直接按整段解码会把这部分也算进输出，段越长误差越大。
-            const partStartMs = part.startMs ?? 0;
-            const partEndMs = part.endMs ?? (await probeVideo(part.blob)).durationMs;
-            let indexInPart = 0;
+            const { startMs: partStartMs, endMs: partEndMs } = partRanges[partIndex];
             await forEachSample(part.blob, partStartMs, partEndMs, options.signal, async (sample) => {
                 const duration = sample.duration > 0 ? sample.duration : frameDuration;
                 frameDuration = duration;
-                if (fade > 0 && indexInPart < fade && pending.length > 0) {
-                    const head = pending.shift()!;
+                if (fadeActive && indexInPart < fade) {
                     const alpha = Math.min(1, (indexInPart + 1) / fade);
-                    await emit(sample, duration, { other: head.sample, alpha });
-                    head.sample.close();
-                    sample.close();
-                    indexInPart += 1;
-                    return;
+                    await emit(sample, duration, { other: ghost[indexInPart].sample, alpha });
+                } else {
+                    if (fadeActive) {
+                        // 淡入结束，淡化源在这一段里已经用不上，回收。
+                        fadeActive = false;
+                        trimTrail();
+                    }
+                    await emit(sample, duration);
                 }
-                pending.push({ sample, duration });
+                trail.push({ sample, duration });
+                if (!fadeActive) trimTrail();
                 indexInPart += 1;
-                while (pending.length > keep) {
-                    const next = pending.shift()!;
-                    await emit(next.sample, next.duration);
-                    next.sample.close();
-                }
             });
         }
-        while (pending.length) {
-            const next = pending.shift()!;
-            await emit(next.sample, next.duration);
-            next.sample.close();
-        }
+        // 收尾：把 trail 里还留着的样本关掉，避免 VideoFrame 泄漏。
+        while (trail.length) trail.shift()!.sample.close();
 
         if (audioSource && options.audio) {
             for await (const wrapped of readAudioBuffers(options.audio, options.signal)) {
