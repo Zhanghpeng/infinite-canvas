@@ -105,6 +105,8 @@ export type CanvasNodeMetadata = {
     bytes?: number;
     durationMs?: number;
     groupId?: string;
+    collapsed?: boolean; // Group node: hide descendants (and their connections), render a compact title bar.
+    locked?: boolean; // Group node: block drag/resize/delete/connect for the group and its descendants.
     interactive?: boolean; // Plugin node interaction/move state; see CanvasNodeDefinition.interactionToggle.
 };
 
@@ -118,13 +120,29 @@ export type CanvasNodeData = {
     metadata?: CanvasNodeMetadata;
 };
 
+export type CanvasGroupKind = "image" | "video" | "audio" | "text" | "other";
+
+/** Aggregated view of a group's subtree, rendered on the group node so a collapsed group still tells you what is inside. */
+export type CanvasGroupSummary = {
+    count: number;
+    kinds: Record<CanvasGroupKind, number>;
+    /** Up to 4 members with a preview source, images first. */
+    previews: { id: string; kind: CanvasGroupKind; src?: string }[];
+    running: number;
+    failed: number;
+};
+
 export type CanvasConnectionKind = "input" | "lineage";
+
+/** 首尾帧视频节点的显式槽位；不依赖连线先后顺序。 */
+export type CanvasFrameSlot = "first_frame" | "last_frame";
 
 export type CanvasConnection = {
     id: string;
     fromNodeId: string;
     toNodeId: string;
     kind: CanvasConnectionKind;
+    slot?: CanvasFrameSlot;
 };
 
 export type CanvasAssistantReference = {

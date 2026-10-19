@@ -270,8 +270,35 @@ export default {
         "kinds": {
             "text": "文本",
             "image": "图片",
-            "video": "视频"
+            "video": "视频",
+            "audio": "音频",
+            "bundle": "组合"
         },
+        "slots": {
+            "primary": "人物主图",
+            "outfit": "服饰",
+            "accessory": "配件道具",
+            "voice": "音色音频",
+            "reference": "其它参考"
+        },
+        "bundleItems": "组合内容",
+        "bundleItemCount": "{{count}} 项",
+        "bundleEmpty": "还没有条目：先在上面勾选资产，再点「加入当前组合」。",
+        "bundleDefaultTitle": "新组合",
+        "packSelected": "打包为组合资产（{{count}}）",
+        "addSelectedToBundle": "加入当前组合（{{count}}）",
+        "selectedCount": "已选 {{count}}",
+        "clearSelection": "清空选择",
+        "removeItem": "移除",
+        "setAsCover": "设为封面",
+        "itemMissing": "条目已失效",
+        "moveUp": "上移",
+        "moveDown": "下移",
+        "expand": "展开",
+        "collapse": "收起",
+        "deleteSelected": "删除所选（{{count}}）",
+        "deleteSelectedTitle": "批量删除资产",
+        "deleteSelectedConfirm": "确定删除所选的 {{count}} 个资产吗？删除后会从我的资产中移除。",
         "fields": {
             "title": "标题",
             "titleRequired": "请输入标题",
@@ -290,7 +317,11 @@ export default {
             "imageContent": "图片内容"
         },
         "selectImageFile": "选择图片文件",
+        "selectAudioFile": "选择音频文件",
+        "selectVideoFile": "选择视频文件",
         "noImageSelected": "未选择图片",
+        "noAudioSelected": "未选择音频",
+        "noVideoSelected": "未选择视频",
         "preview": "预览",
         "noCover": "暂无封面",
         "untitled": "未命名资产",
@@ -302,7 +333,8 @@ export default {
         "deleteConfirm": "确定删除「{{name}}」吗？删除后会从我的资产中移除。",
         "copyText": "复制文本",
         "downloadImage": "下载图片",
-        "downloadVideo": "下载视频"
+        "downloadVideo": "下载视频",
+        "downloadAudio": "下载音频"
     },
     "notFound": {
         "title": "页面不存在",

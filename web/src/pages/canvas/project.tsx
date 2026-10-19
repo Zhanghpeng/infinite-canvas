@@ -15,7 +15,7 @@ import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
-import { useAssetStore } from "@/stores/use-asset-store";
+import { useAssetStore, type BundleConnection, type BundleSlot } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
@@ -43,7 +43,7 @@ import { CanvasMultiSelectionOverlay } from "@/components/canvas/canvas-multi-se
 import { calculateAlignmentSnap, type AlignmentGuideLine } from "@/lib/canvas/canvas-alignment-snapping";
 import { CanvasNodePromptPanel, type CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
 import { CanvasToolbar } from "@/components/canvas/canvas-toolbar";
-import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
+import { AssetPickerModal, type BundleEntryPayload, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { CanvasSidePanel } from "@/components/canvas/canvas-side-panel";
 import { CanvasZoomControls } from "@/components/canvas/canvas-zoom-controls";
 import { useAgentStore } from "@/stores/use-agent-store";
@@ -3257,8 +3257,159 @@ function InfiniteCanvasPage() {
         [screenToCanvas, size.height, size.width],
     );
 
+    // 把组合资产插入画布：按条目里记录的原节点尺寸与组内偏移 1:1 还原布局，
+    // 并按组合内保存的连线关系（assetId 之间）还原画布连线。
+    const insertAssetBundle = useCallback(
+        async (title: string, entries: BundleEntryPayload[], connections?: BundleConnection[], targetPosition?: Position) => {
+            const slotOrder: Record<BundleSlot, number> = { primary: 0, outfit: 1, accessory: 2, voice: 3, reference: 4 };
+            const ordered = [...entries].sort((a, b) => slotOrder[a.slot] - slotOrder[b.slot]);
+            const center = targetPosition ?? screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
+
+            const created: { node: CanvasNodeData; slot: BundleSlot; position?: { x: number; y: number } }[] = [];
+            // 记录"原子资产 id → 新画布节点 id"，用于把组合里保存的组内连线还原成画布连线。
+            const assetIdToNewNodeId = new Map<string, string>();
+            for (const entry of ordered) {
+                const payload = entry.payload;
+                const nodeTitle = payload.title.slice(0, 32) || title;
+                let node: CanvasNodeData;
+                if (payload.kind === "text") {
+                    const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Text];
+                    node = { id: nanoid(), type: CanvasNodeType.Text, title: nodeTitle, position: { x: 0, y: 0 }, width: spec.width, height: spec.height, metadata: { content: payload.content, status: NODE_STATUS_SUCCESS } };
+                } else if (payload.kind === "image") {
+                    const resolvedUrl = payload.storageKey ? await resolveImageUrl(payload.storageKey, payload.dataUrl) : payload.dataUrl;
+                    const meta = await readImageMeta(resolvedUrl);
+                    const config = fitNodeSize(meta.width, meta.height);
+                    node = {
+                        id: nanoid(),
+                        type: CanvasNodeType.Image,
+                        title: nodeTitle,
+                        position: { x: 0, y: 0 },
+                        width: config.width,
+                        height: config.height,
+                        metadata: { content: resolvedUrl, ...(payload.storageKey ? { storageKey: payload.storageKey } : {}), status: NODE_STATUS_SUCCESS, naturalWidth: meta.width, naturalHeight: meta.height, bytes: 0, mimeType: "image/png" },
+                    };
+                } else if (payload.kind === "video") {
+                    const resolvedUrl = payload.storageKey ? await resolveMediaUrl(payload.storageKey, payload.url) : payload.url;
+                    const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Video];
+                    const config = fitNodeSize(payload.width || spec.width, payload.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                    node = {
+                        id: nanoid(),
+                        type: CanvasNodeType.Video,
+                        title: nodeTitle,
+                        position: { x: 0, y: 0 },
+                        width: config.width,
+                        height: config.height,
+                        metadata: { content: resolvedUrl, storageKey: payload.storageKey, status: NODE_STATUS_SUCCESS, naturalWidth: payload.width, naturalHeight: payload.height },
+                    };
+                } else {
+                    const resolvedUrl = payload.storageKey ? await resolveMediaUrl(payload.storageKey, payload.url) : payload.url;
+                    const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
+                    node = {
+                        id: nanoid(),
+                        type: CanvasNodeType.Audio,
+                        title: nodeTitle,
+                        position: { x: 0, y: 0 },
+                        width: spec.width,
+                        height: spec.height,
+                        metadata: audioMetadata({ url: resolvedUrl, storageKey: payload.storageKey || "", bytes: 0, mimeType: "audio/mpeg", durationMs: payload.durationMs }),
+                    };
+                }
+                // 存组合时记录过原节点尺寸就原样还原：相对布局是按原尺寸算的，重算会把紧凑排布撑成堆叠。
+                if (entry.size?.width && entry.size?.height) {
+                    node = { ...node, width: entry.size.width, height: entry.size.height };
+                }
+                created.push({ node, slot: entry.slot, position: entry.position });
+                assetIdToNewNodeId.set(entry.assetId, node.id);
+            }
+            if (!created.length) return;
+
+            const hasLayout = created.some((item) => item.position);
+            let placed: CanvasNodeData[];
+            if (hasLayout) {
+                // 按组合内记录的偏移还原相对布局，并整体居中到放置点。
+                // 包围盒只用"记录了坐标"的条目算（旧数据条目没有 position，参与计算会把锚点撑歪）；
+                // 没坐标的条目在还原出的布局下方另起一行横排，不挤进布局里。
+                let minX = Infinity;
+                let minY = Infinity;
+                let maxX = -Infinity;
+                let maxY = -Infinity;
+                created.forEach((item, index) => {
+                    const offset = item.position;
+                    if (!offset) return;
+                    minX = Math.min(minX, offset.x);
+                    minY = Math.min(minY, offset.y);
+                    maxX = Math.max(maxX, offset.x + created[index].node.width);
+                    maxY = Math.max(maxY, offset.y + created[index].node.height);
+                });
+                const boundingWidth = Math.max(maxX - minX, 1);
+                const boundingHeight = Math.max(maxY - minY, 1);
+                const anchorX = center.x - boundingWidth / 2;
+                const anchorY = center.y - boundingHeight / 2;
+                const looseGap = 32;
+                const looseNodes = created.filter((item) => !item.position);
+                const looseTotalWidth = looseNodes.reduce((sum, item) => sum + item.node.width, 0) + looseGap * Math.max(0, looseNodes.length - 1);
+                let looseCursor = anchorX + boundingWidth / 2 - looseTotalWidth / 2;
+                const looseRowY = anchorY + boundingHeight + looseGap;
+                placed = created.map((item) => {
+                    const offset = item.position;
+                    if (!offset) {
+                        const looseNode = { ...item.node, position: { x: looseCursor, y: looseRowY } };
+                        looseCursor += item.node.width + looseGap;
+                        return looseNode;
+                    }
+                    return { ...item.node, position: { x: anchorX + (offset.x - minX), y: anchorY + (offset.y - minY) } };
+                });
+            } else {
+                const gap = 32;
+                const totalWidth = created.reduce((sum, item) => sum + item.node.width, 0) + gap * (created.length - 1);
+                let cursor = center.x - totalWidth / 2;
+                placed = created.map((item) => {
+                    const positioned = { ...item.node, position: { x: cursor, y: center.y - item.node.height / 2 } };
+                    cursor += item.node.width + gap;
+                    return positioned;
+                });
+            }
+
+            // 优先还原组合里保存的组内连线（assetId 之间），让新画布 1:1 复刻原布局的接法；
+            // 老组合没有 connections 数据时，退回"主图作枢纽、其余汇入"的兼容逻辑。
+            let nextConnections: CanvasConnection[];
+            if (connections && connections.length) {
+                nextConnections = connections
+                    .map((conn) => {
+                        const fromNodeId = assetIdToNewNodeId.get(conn.fromAssetId);
+                        const toNodeId = assetIdToNewNodeId.get(conn.toAssetId);
+                        if (!fromNodeId || !toNodeId) return undefined;
+                        const restored: CanvasConnection = { id: nanoid(), fromNodeId, toNodeId, kind: conn.kind };
+                        if (conn.slot) restored.slot = conn.slot;
+                        return restored;
+                    })
+                    .filter((conn): conn is CanvasConnection => Boolean(conn));
+            } else {
+                const hub = placed[created.findIndex((item) => item.slot === "primary")] ?? placed[0];
+                const videoNode = placed.find((node) => node.type === CanvasNodeType.Video);
+                nextConnections = placed
+                    .filter((node) => node.id !== hub.id)
+                    .map((node) => {
+                        const target = node.type === CanvasNodeType.Audio && videoNode ? videoNode : hub;
+                        return { id: nanoid(), fromNodeId: node.id, toNodeId: target.id, kind: "input" as const };
+                    });
+            }
+
+            setNodes((prev) => [...prev, ...placed]);
+            if (nextConnections.length) setConnections((prev) => [...prev, ...nextConnections]);
+            setSelectedNodeIds(new Set(placed.map((node) => node.id)));
+            setSelectedConnectionId(null);
+        },
+        [screenToCanvas, size.height, size.width],
+    );
+
     const handleAssetInsert = useCallback(
         async (payload: InsertAssetPayload, targetPosition?: Position) => {
+            if (payload.kind === "bundle") {
+                await insertAssetBundle(payload.title, payload.entries, payload.connections, targetPosition);
+                setAssetPickerOpen(false);
+                return;
+            }
             if (payload.kind === "text") {
                 insertAssistantText(payload.content, payload.title, targetPosition);
             } else if (payload.kind === "video") {
@@ -3313,7 +3464,7 @@ function InfiniteCanvasPage() {
             }
             setAssetPickerOpen(false);
         },
-        [insertAssistantImage, insertAssistantText, screenToCanvas, size.height, size.width],
+        [insertAssetBundle, insertAssistantImage, insertAssistantText, screenToCanvas, size.height, size.width],
     );
 
     const handleDrop = useCallback(
