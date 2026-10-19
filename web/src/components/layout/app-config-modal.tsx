@@ -9,6 +9,7 @@ import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { ComfyuiWorkflowEditor } from "@/components/layout/comfyui-workflow-editor";
 import { ConfigPromptSources } from "@/components/layout/config-prompt-sources";
 import { ConfigLocalStorage } from "@/components/layout/config-local-storage";
+import { ConfigStorage } from "@/components/layout/config-storage";
 import { ConfigToolbar } from "@/components/layout/config-toolbar";
 import type { AppLocale } from "@/i18n";
 import { exportAppConfig, importAppConfig } from "@/services/config-file";
@@ -553,6 +554,11 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                         key: "local-storage",
                         label: t("config.tabs.localStorage"),
                         children: <ConfigLocalStorage active={activeTab === "local-storage"} />,
+                    },
+                    {
+                        key: "storage",
+                        label: t("config.tabs.storage"),
+                        children: <ConfigStorage />,
                     },
                 ]}
             />

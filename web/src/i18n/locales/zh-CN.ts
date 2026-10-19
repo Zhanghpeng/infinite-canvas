@@ -3,6 +3,16 @@ export default {
         "title": "ComfyUI 无限画布",
         "description": "一个无限画布创作工具"
     },
+    "storageOnboarding": {
+        "title": "选择数据保存位置",
+        "description": "Infinite Canvas 可以把画布项目与素材保存到你电脑上的本地目录，文件可被文件管理器与其它工具直接读写，也能整体迁移。",
+        "localTitle": "使用本地目录（推荐）",
+        "localDescription": "点选一个目录作为工作区，项目与素材以普通文件保存在其中。仅桌面 Chrome / Edge 支持。",
+        "localAction": "选择目录",
+        "browserTitle": "使用浏览器存储",
+        "browserDescription": "数据保存在浏览器中，换设备或清理浏览器数据会丢失。之后可随时在设置里切换。",
+        "browserAction": "继续使用浏览器"
+    },
     "theme": {
         "toggle": "切换主题"
     },
@@ -383,6 +393,15 @@ export default {
         "empty": "还没有生成视频"
     },
     "canvas": {
+        "workspace": {
+            "current": "工作区：{{name}}",
+            "none": "未选择",
+            "browser": "当前使用浏览器存储",
+            "service": "本地服务工作区：{{path}}",
+            "switch": "切换工作区",
+            "open": "打开本地目录",
+            "openOther": "打开其他目录…"
+        },
         "defaultTitle": "无限画布 {{count}}",
         "library": "画布库",
         "title": "无限画布",
@@ -1026,7 +1045,45 @@ export default {
             "toolbar": "工具栏",
             "preferences": "偏好设置",
             "promptSources": "提示词来源",
-            "localStorage": "本地存储"
+            "localStorage": "本地存储",
+            "storage": "存储位置"
+        },
+        "storage": {
+            "title": "存储位置",
+            "description": "选择数据保存在浏览器，还是保存在本地工作区目录。本地目录下项目与素材以普通文件存在，可被文件管理器与其它工具读写，并可整体迁移。",
+            "modeBrowser": "浏览器（IndexedDB）",
+            "modeDirectory": "本地目录（推荐）",
+            "modeService": "本地服务",
+            "directoryHint": "点下方按钮选择本地目录。项目与素材会以普通文件写入该目录，可被文件管理器与其它工具读写，并可整体迁移。仅桌面 Chrome / Edge 等 Chromium 浏览器支持。",
+            "openWorkspace": "打开本地目录",
+            "recentWorkspaces": "最近工作区",
+            "workspaceOpened": "已打开工作区：{{name}}",
+            "workspaceMissing": "该工作区的目录已不可用，请重新打开。",
+            "directoryReady": "已授权目录：{{name}}",
+            "directoryDenied": "未获得目录读写权限，已取消。",
+            "directoryPickFailed": "选择目录失败。",
+            "directoryUnsupported": "当前浏览器不支持本地目录模式，请使用桌面 Chrome / Edge，或改用「本地服务」。",
+            "directoryNeedsPermission": "目录权限已失效，请重新点「更换目录」授权。",
+            "startHint": "先在终端启动本地服务 local-workspace 并保持运行，然后填入它打印的地址与 token。",
+            "serviceUrl": "服务地址",
+            "serviceToken": "连接 token",
+            "test": "测试连接",
+            "initialize": "初始化工作区",
+            "migrate": "从浏览器导入现有数据",
+            "available": "本地服务连接正常（{{path}}）",
+            "unreachable": "无法连接本地服务，请确认服务已启动且地址与 token 正确。",
+            "initialized": "工作区已就绪（{{path}}）",
+            "workspacePath": "工作区目录：{{path}}",
+            "noBrowserData": "浏览器中没有可导入的数据。",
+            "migrated": "已导入 {{projects}} 个画布项目、{{blobs}} 个媒体文件。",
+            "migrateFailed": "导入失败，未修改原始数据。",
+            "selfCheck": "读写自检",
+            "selfCheckOk": "读写自检通过：{{detail}}",
+            "selfCheckFailed": "读写自检失败：{{detail}}",
+            "reloadTitle": "存储位置已切换",
+            "reloadContent": "切换存储位置需要刷新页面后生效；原存储中的数据不会被删除。",
+            "reloadNow": "立即刷新",
+            "reloadLater": "稍后手动刷新"
         },
         "localStorage": {
             "title": "IndexedDB 存储使用情况",

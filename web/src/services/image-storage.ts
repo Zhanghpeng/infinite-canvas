@@ -1,8 +1,7 @@
-import localforage from "localforage";
-
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { readImageMeta } from "@/lib/image-utils";
+import { getStorage } from "@/lib/storage";
 
 export type UploadedImage = {
     url: string;
@@ -13,15 +12,16 @@ export type UploadedImage = {
     mimeType: string;
 };
 
-const store = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
-const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
-const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
+const IMAGE_SCOPE = "image_files" as const;
+const IMAGE_LOG_SCOPE = "image_logs" as const;
+const VIDEO_LOG_SCOPE = "video_logs" as const;
 const objectUrls = new Map<string, string>();
 
-export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
+/** projectId 传入时，素材会落在该项目目录下（projects/<id>/assets/images/…）；不传则落工作区全局。 */
+export async function uploadImage(input: string | Blob, projectId?: string): Promise<UploadedImage> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
-    const storageKey = `image:${nanoid()}`;
-    await store.setItem(storageKey, blob);
+    const storageKey = projectId ? `image:${projectId}:${nanoid()}` : `image:${nanoid()}`;
+    await getStorage().setBlob(IMAGE_SCOPE, storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     const meta = await readImageMeta(url);
@@ -32,7 +32,7 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
-    const blob = await store.getItem<Blob>(storageKey);
+    const blob = await getStorage().getBlob(IMAGE_SCOPE, storageKey);
     if (!blob) return fallback;
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
@@ -40,11 +40,11 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
 }
 
 export async function getImageBlob(storageKey: string) {
-    return store.getItem<Blob>(storageKey);
+    return getStorage().getBlob(IMAGE_SCOPE, storageKey);
 }
 
 export async function setImageBlob(storageKey: string, blob: Blob) {
-    await store.setItem(storageKey, blob);
+    await getStorage().setBlob(IMAGE_SCOPE, storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
@@ -64,7 +64,7 @@ export async function deleteStoredImages(keys: Iterable<string>) {
             const url = objectUrls.get(key);
             if (url) URL.revokeObjectURL(url);
             objectUrls.delete(key);
-            await store.removeItem(key);
+            await getStorage().remove(IMAGE_SCOPE, key);
         }),
     );
 }
@@ -72,17 +72,14 @@ export async function deleteStoredImages(keys: Iterable<string>) {
 export async function cleanupUnusedImages(usedData: unknown) {
     const usedKeys = collectImageStorageKeys(usedData);
     await Promise.all([
-        imageLogStore.iterate((value) => {
-            collectImageStorageKeys(value, usedKeys);
-        }),
-        videoLogStore.iterate((value) => {
-            collectImageStorageKeys(value, usedKeys);
-        }),
+        getStorage()
+            .entries<unknown>(IMAGE_LOG_SCOPE)
+            .then((items) => items.forEach((entry) => collectImageStorageKeys(entry.value, usedKeys))),
+        getStorage()
+            .entries<unknown>(VIDEO_LOG_SCOPE)
+            .then((items) => items.forEach((entry) => collectImageStorageKeys(entry.value, usedKeys))),
     ]);
-    const unused: string[] = [];
-    await store.iterate((_value, key) => {
-        if (!usedKeys.has(key)) unused.push(key);
-    });
+    const unused = (await getStorage().keys(IMAGE_SCOPE)).filter((key) => !usedKeys.has(key));
     await deleteStoredImages(unused);
 }
 
