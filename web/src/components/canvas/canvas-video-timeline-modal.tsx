@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { CanvasVideoTimeline, type TimelineSelection } from "./canvas-video-timeline";
 import { buildFilmstrip, captureFrameDataUrl, detectVideoScenes } from "@/lib/canvas/video-scene-detect";
-import { DEFAULT_MAX_SEGMENT_MS, formatDuration, formatTimecode, planSegments, planSelectionRanges, type SceneCut, type VideoRange } from "@/lib/canvas/video-timeline";
+import { DEFAULT_MAX_SEGMENT_MS, formatDuration, formatTimecode, planSegments, planSelectionRanges, type SceneCut, type SegmentPlan, type VideoRange } from "@/lib/canvas/video-timeline";
 import type { CanvasNodeData } from "@/types/canvas";
 import i18n from "@/i18n";
 
@@ -18,6 +18,7 @@ function describeMediaError(error: unknown): string {
         VIDEO_NO_DURATION: "canvas.videoTimeline.error.noDuration",
         VIDEO_SEEK_TIMEOUT: "canvas.videoTimeline.error.seekTimeout",
         VIDEO_SEEK_FAILED: "canvas.videoTimeline.error.seekTimeout",
+        VIDEO_LOAD_TIMEOUT: "canvas.videoTimeline.error.loadFailed",
         EMPTY_RANGE: "canvas.videoTimeline.reason.noRange",
     };
     const key = map[code];
@@ -28,7 +29,8 @@ export type VideoEditMode = "repaint" | "character";
 
 export type VideoEditPlan = {
     mode: "repaint" | "character-swap";
-    ranges: VideoRange[];
+    /** 分段计划：每段可覆盖全局角色集合。 */
+    ranges: SegmentPlan[];
     /** 源片总时长。局部重绘要靠它把选区之外的画面原样补回来。 */
     durationMs: number;
     /** 选区起止是否正好落在场景切点上：是则补回来的保留段不参与淡化。 */
@@ -73,6 +75,8 @@ export function CanvasVideoTimelineModal({ open, node, imageNodes, submitting, o
     const [castNodeIds, setCastNodeIds] = useState<string[]>([]);
     const [crossfadeFrames, setCrossfadeFrames] = useState(3);
     const [keepAudio, setKeepAudio] = useState(true);
+    /** 段级角色覆盖：key 是段在 ranges 里的下标。 */
+    const [segmentCasts, setSegmentCasts] = useState<Record<number, string[]>>({});
     const [anchorFrames, setAnchorFrames] = useState<{ first?: string; last?: string }>({});
 
     const src = node?.metadata?.content || "";
@@ -144,13 +148,44 @@ export function CanvasVideoTimelineModal({ open, node, imageNodes, submitting, o
         };
     }, [open, selection, src]);
 
-    const ranges = useMemo(() => {
+    const ranges = useMemo<SegmentPlan[]>(() => {
         if (!durationMs) return [];
         const maxMs = Math.max(1000, maxSeconds * 1000);
-        if (mode === "character") return planSegments(durationMs, cuts, { maxMs });
-        if (!selection) return [];
-        return planSelectionRanges(selection.startMs, selection.endMs, cuts, { maxMs });
-    }, [cuts, durationMs, maxSeconds, mode, selection]);
+        const base: VideoRange[] =
+            mode === "character" ? planSegments(durationMs, cuts, { maxMs }) : selection ? planSelectionRanges(selection.startMs, selection.endMs, cuts, { maxMs }) : [];
+        // 段级角色覆盖：切点只按画面变化算，算不出"这段里有几个人"。
+        // 不覆盖的段跟随全局角色，避免每段都要重选一遍。
+        return base.map((range, index) => (segmentCasts[index] ? { ...range, castNodeIds: segmentCasts[index] } : range));
+    }, [cuts, durationMs, maxSeconds, mode, selection, segmentCasts]);
+
+    /** 段起始处最接近的抽帧，用来让人一眼看出这段里有几个人。 */
+    const segmentThumb = useCallback(
+        (timeMs: number) => {
+            if (!frames.length) return undefined;
+            return frames.reduce((best, frame) => (Math.abs(frame.timeMs - timeMs) < Math.abs(best.timeMs - timeMs) ? frame : best), frames[0]).dataUrl;
+        },
+        [frames],
+    );
+
+    /** 这一段当前生效的角色：有覆盖就用覆盖，否则跟随全局。 */
+    const effectiveCastIds = useCallback(
+        (index: number) => segmentCasts[index] ?? castNodeIds,
+        [castNodeIds, segmentCasts],
+    );
+
+    const toggleSegmentCast = useCallback(
+        (index: number, castId: string) => {
+            setSegmentCasts((previous) => {
+                const current = previous[index] ?? castNodeIds;
+                const next = current.includes(castId) ? current.filter((id) => id !== castId) : [...current, castId];
+                const updated = { ...previous, [index]: next };
+                // 选回跟全局一样就等于没覆盖，删掉覆盖让 UI 回到"跟随全局"的显示。
+                if (next.length === castNodeIds.length && next.every((id) => castNodeIds.includes(id))) delete updated[index];
+                return updated;
+            });
+        },
+        [castNodeIds],
+    );
 
     const seek = useCallback((timeMs: number) => {
         const video = videoRef.current;
@@ -382,25 +417,55 @@ export function CanvasVideoTimelineModal({ open, node, imageNodes, submitting, o
                         </div>
                     ) : (
                         <div className="space-y-1">
-                            <div className="text-[11px] font-medium text-stone-600 dark:text-stone-300">{t("canvas.videoTimeline.segment.title")}</div>
-                            <div className="max-h-[132px] space-y-1 overflow-y-auto pr-0.5">
+                            <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-medium text-stone-600 dark:text-stone-300">{t("canvas.videoTimeline.segment.title")}</span>
+                                <span className="text-[10px] text-stone-400">{t("canvas.videoTimeline.segment.castHint")}</span>
+                            </div>
+                            <div className="max-h-[240px] space-y-1.5 overflow-y-auto pr-0.5">
                                 {ranges.length ? (
-                                    ranges.map((range, index) => (
-                                        <button
-                                            key={`${range.startMs}-${range.endMs}`}
-                                            type="button"
-                                            onClick={() => seek(range.startMs)}
-                                            className="flex w-full items-center justify-between rounded-md bg-stone-100 px-2 py-1 text-[11px] text-stone-600 transition hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700"
-                                        >
-                                            <span className="flex items-center gap-1.5">
-                                                <Scissors className="size-3 text-stone-400" />
-                                                {t("canvas.videoTimeline.segment.label", { index: index + 1 })}
-                                            </span>
-                                            <span className="font-mono text-[10px] text-stone-400">
-                                                {formatTimecode(range.startMs)} · {((range.endMs - range.startMs) / 1000).toFixed(1)}s
-                                            </span>
-                                        </button>
-                                    ))
+                                    ranges.map((range, index) => {
+                                        const activeIds = effectiveCastIds(index);
+                                        const overridden = Boolean(segmentCasts[index]);
+                                        return (
+                                            <div key={`${range.startMs}-${range.endMs}`} className="rounded-md bg-stone-100 p-1.5 dark:bg-stone-800">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => seek(range.startMs)}
+                                                    className="flex w-full items-center gap-2 text-left"
+                                                >
+                                                    <SegmentThumb src={segmentThumb(range.startMs)} />
+                                                    <span className="flex flex-1 flex-col">
+                                                        <span className="flex items-center gap-1.5 text-[11px] text-stone-600 dark:text-stone-300">
+                                                            <Scissors className="size-3 text-stone-400" />
+                                                            {t("canvas.videoTimeline.segment.label", { index: index + 1 })}
+                                                            {overridden ? <span className="rounded bg-amber-200/70 px-1 text-[9px] text-amber-800 dark:bg-amber-500/25 dark:text-amber-300">{t("canvas.videoTimeline.segment.overridden")}</span> : null}
+                                                        </span>
+                                                        <span className="font-mono text-[10px] text-stone-400">
+                                                            {formatTimecode(range.startMs)} · {((range.endMs - range.startMs) / 1000).toFixed(1)}s
+                                                        </span>
+                                                    </span>
+                                                </button>
+                                                {/* 切点只按画面变化算，算不出这段里有几个人。逐个勾，模型才不会被
+                                                            塞进画面里并不存在的人。 */}
+                                                <div className="mt-1.5 flex flex-wrap gap-1">
+                                                    {imageNodes.map((cast) => {
+                                                        const active = activeIds.includes(cast.id);
+                                                        return (
+                                                            <button
+                                                                key={cast.id}
+                                                                type="button"
+                                                                title={cast.title}
+                                                                onClick={() => toggleSegmentCast(index, cast.id)}
+                                                                className={`size-6 overflow-hidden rounded-full border-2 transition ${active ? "border-emerald-500 opacity-100" : "border-transparent opacity-40 hover:opacity-70"}`}
+                                                            >
+                                                                {cast.metadata?.content ? <img src={cast.metadata.content} alt={cast.title} className="size-full object-cover" /> : <span className="block size-full bg-stone-300 dark:bg-stone-600" />}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        );
+                                    })
                                 ) : (
                                     <div className="py-2 text-center text-[11px] text-stone-400">{t("canvas.videoTimeline.reason.noRange")}</div>
                                 )}
@@ -455,6 +520,15 @@ function AnchorThumb({ label, src }: { label: string; src?: string }) {
                 {src ? <img src={src} alt={label} className="size-full object-cover" /> : null}
             </div>
             <div className="mt-0.5 text-center text-[9px] text-stone-400">{label}</div>
+        </div>
+    );
+}
+
+/** 段列表里的小缩略图：段起点的抽帧，用来判断这段里有几个人。 */
+function SegmentThumb({ src }: { src?: string }) {
+    return (
+        <div className="aspect-video w-[56px] shrink-0 overflow-hidden rounded bg-stone-200 dark:bg-stone-700">
+            {src ? <img src={src} alt="" className="size-full object-cover" /> : null}
         </div>
     );
 }

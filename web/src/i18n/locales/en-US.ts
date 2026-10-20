@@ -662,7 +662,9 @@ export default {
             },
             "segment": {
                 "title": "Segments",
-                "label": "Segment {{index}}"
+                "label": "Segment {{index}}",
+                "castHint": "Pick cast per segment",
+                "overridden": "Custom"
             },
             "prompt": {
                 "label": "Instruction",
@@ -688,6 +690,7 @@ export default {
             },
             "toast": {
                 "segmentRunning": "Segment {{index}}/{{count}} rendering…",
+                "alreadyRunning": "This video is already rendering segments — wait for the current run to finish",
                 "segmentEta": "{{elapsed}} elapsed · {{remain}} left",
                 "segmentDone": "Segment {{index}}/{{count}} done",
                 "segmentFailed": "Segment {{index}} failed: {{error}}",

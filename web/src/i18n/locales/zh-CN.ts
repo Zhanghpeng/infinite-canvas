@@ -662,7 +662,9 @@ export default {
             },
             "segment": {
                 "title": "分段结果",
-                "label": "第 {{index}} 段"
+                "label": "第 {{index}} 段",
+                "castHint": "逐段勾选参与的角色",
+                "overridden": "已自定义"
             },
             "prompt": {
                 "label": "本次要求",
@@ -688,6 +690,7 @@ export default {
             },
             "toast": {
                 "segmentRunning": "第 {{index}}/{{count}} 段生成中…",
+                "alreadyRunning": "这条视频正在分段生成中，等当前任务跑完再开新的",
                 "segmentEta": "已用 {{elapsed}} · 预计还需 {{remain}}",
                 "segmentDone": "第 {{index}}/{{count}} 段完成",
                 "segmentFailed": "第 {{index}} 段失败：{{error}}",
