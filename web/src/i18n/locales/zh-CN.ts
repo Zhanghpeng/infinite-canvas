@@ -688,10 +688,13 @@ export default {
             },
             "toast": {
                 "segmentRunning": "第 {{index}}/{{count}} 段生成中…",
+                "segmentEta": "已用 {{elapsed}} · 预计还需 {{remain}}",
                 "segmentDone": "第 {{index}}/{{count}} 段完成",
                 "segmentFailed": "第 {{index}} 段失败：{{error}}",
+                "stoppedAfterFailure": "已停止：{{done}}/{{count}} 段成功，未生成成片。成功的段留在画布上，可单独重试",
                 "composing": "正在拼接成片…",
                 "composed": "成片已生成",
+                "durationMismatch": "成片 {{actual}}，原片 {{expected}}，时长对不上，请检查分段",
                 "composeFailed": "拼接失败：{{error}}",
                 "cutFailed": "切分视频失败：{{error}}",
                 "noCodec": "当前浏览器无法编码视频，分段生成仍可用，但不能合成",

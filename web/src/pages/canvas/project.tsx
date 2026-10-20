@@ -21,7 +21,7 @@ import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-i
 import { fitNodeSize, nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
 import { captureVideoFrame, type VideoFramePosition } from "@/lib/canvas/canvas-video-frame";
 import { extractAudioFromVideo } from "@/lib/canvas/canvas-video-audio";
-import { concatVideoParts, cutVideoSegment, isMediaProcessingSupported, type ConcatPart } from "@/lib/canvas/video-clip";
+import { concatVideoParts, cutVideoSegment, isMediaProcessingSupported, probeVideo, type ConcatPart } from "@/lib/canvas/video-clip";
 import { captureFrameDataUrl } from "@/lib/canvas/video-scene-detect";
 import { formatDuration, type VideoRange } from "@/lib/canvas/video-timeline";
 import { App, Button, Modal } from "antd";
@@ -3456,11 +3456,29 @@ function InfiniteCanvasPage() {
                     workflowId: source.metadata.workflowId || effectiveConfig.workflowId,
                 };
                 const segmentColumnX = source.position.x + source.width + 96;
+                // 逐段串行生成，长片要跑十几分钟。没有进度估算用户只能干等，
+                // 只能来问"跑完了吗"，所以从第二段起就给出已用时与预计剩余。
+                const startedAt = Date.now();
+                const segmentCosts: number[] = [];
 
                 for (let index = 0; index < plan.ranges.length; index += 1) {
                     if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
                     const range = plan.ranges[index];
-                    message.loading({ content: t("canvas.videoTimeline.toast.segmentRunning", { index: index + 1, count: plan.ranges.length }), key: toastKey, duration: 0 });
+                    const segmentStartedAt = Date.now();
+                    if (index > 0 && segmentCosts.length) {
+                        const average = segmentCosts.reduce((sum, cost) => sum + cost, 0) / segmentCosts.length;
+                        const estimate = t("canvas.videoTimeline.toast.segmentEta", {
+                            elapsed: formatDuration(Date.now() - startedAt),
+                            remain: formatDuration(Math.round(average * (plan.ranges.length - index))),
+                        });
+                        message.loading({
+                            content: `${t("canvas.videoTimeline.toast.segmentRunning", { index: index + 1, count: plan.ranges.length })} · ${estimate}`,
+                            key: toastKey,
+                            duration: 0,
+                        });
+                    } else {
+                        message.loading({ content: t("canvas.videoTimeline.toast.segmentRunning", { index: index + 1, count: plan.ranges.length }), key: toastKey, duration: 0 });
+                    }
 
                     const segmentId = nanoid();
                     appendCanvasNodes(
@@ -3510,8 +3528,9 @@ function InfiniteCanvasPage() {
                             dataUrl: castNode.metadata?.content || "",
                             url: castNode.metadata?.content || "",
                         }));
-                        const headFrame = await captureFrameDataUrl(sourceUrl, range.startMs, { width: 960 });
-                        const tailFrame = await captureFrameDataUrl(sourceUrl, Math.max(range.startMs, range.endMs - 34), { width: 960 });
+                        // 传 signal：不传的话点取消后抽帧还在跑，且元数据加载没有超时兜底。
+                        const headFrame = await captureFrameDataUrl(sourceUrl, range.startMs, { width: 960, signal: controller.signal });
+                        const tailFrame = await captureFrameDataUrl(sourceUrl, Math.max(range.startMs, range.endMs - 34), { width: 960, signal: controller.signal });
                         referenceImages.push(
                             { id: `head-${segmentId}`, name: "segment_start.jpg", type: "image/jpeg", dataUrl: headFrame, url: headFrame },
                             { id: `tail-${segmentId}`, name: "segment_end.jpg", type: "image/jpeg", dataUrl: tailFrame, url: tailFrame },
@@ -3531,6 +3550,7 @@ function InfiniteCanvasPage() {
                         const storedBlob = video.storageKey ? await getMediaBlob(video.storageKey) : null;
                         const videoBlob = storedBlob ?? (await (await fetch(video.url)).blob());
                         produced.push({ nodeId: segmentId, blob: videoBlob, range });
+                        segmentCosts.push(Date.now() - segmentStartedAt);
 
                         const videoSize = fitNodeSize(video.width || source.width, video.height || source.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                         const currentNode = nodesRef.current.find((item) => item.id === segmentId);
@@ -3548,6 +3568,13 @@ function InfiniteCanvasPage() {
                         patchCanvasNode(segmentId, { metadata: { ...currentNode?.metadata, status: NODE_STATUS_ERROR, errorDetails } });
                         message.error({ content: t("canvas.videoTimeline.toast.segmentFailed", { index: index + 1, error: errorDetails }), key: toastKey });
                         // 一段失败就停：继续只会产出一堆接不上的碎片。
+                        // 但必须说清楚"到哪为止、成片有没有"，否则用户只看到一条红色报错，
+                        // 不知道那些已经出画面的段还算不算数。
+                        message.warning({
+                            content: t("canvas.videoTimeline.toast.stoppedAfterFailure", { done: produced.length, count: plan.ranges.length }),
+                            key: composeKey,
+                            duration: 8,
+                        });
                         break;
                     }
                 }
@@ -3578,6 +3605,20 @@ function InfiniteCanvasPage() {
                         },
                     });
                     const uploaded = await uploadMediaFile(merged, "video");
+                    // 成片时长对不上原片，说明保留段或拼接算错了。静默产出一个短片
+                    // 比直接报错更糟 —— 用户会拿去用，等导出时才发现少了几秒。
+                    const mergedDurationMs = await probeVideo(merged)
+                        .then((probe) => probe.durationMs)
+                        .catch(() => null);
+                    if (mergedDurationMs && plan.durationMs > 0 && Math.abs(mergedDurationMs - plan.durationMs) > 500) {
+                        message.warning({
+                            content: t("canvas.videoTimeline.toast.durationMismatch", {
+                                expected: formatDuration(plan.durationMs),
+                                actual: formatDuration(mergedDurationMs),
+                            }),
+                            duration: 8,
+                        });
+                    }
                     const compositeId = nanoid();
                     appendCanvasNodes(
                         [

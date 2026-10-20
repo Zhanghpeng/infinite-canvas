@@ -688,10 +688,13 @@ export default {
             },
             "toast": {
                 "segmentRunning": "Segment {{index}}/{{count}} rendering…",
+                "segmentEta": "{{elapsed}} elapsed · {{remain}} left",
                 "segmentDone": "Segment {{index}}/{{count}} done",
                 "segmentFailed": "Segment {{index}} failed: {{error}}",
+                "stoppedAfterFailure": "Stopped: {{done}}/{{count}} segments done, no final cut. Successful segments stay on the canvas for retry",
                 "composing": "Stitching the final cut…",
                 "composed": "Final cut ready",
+                "durationMismatch": "Final cut is {{actual}} but the source is {{expected}} — check the segments",
                 "composeFailed": "Stitch failed: {{error}}",
                 "cutFailed": "Failed to cut the video: {{error}}",
                 "noCodec": "This browser cannot encode video. Segments still render, but stitching is unavailable.",

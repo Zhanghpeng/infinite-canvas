@@ -160,20 +160,29 @@ function seekTo(video: HTMLVideoElement, seconds: number): Promise<void> {
 
 function waitFor(video: HTMLVideoElement, eventName: "loadedmetadata" | "loadeddata") {
     return new Promise<void>((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
         const done = () => {
             cleanup();
             resolve();
         };
-        const failed = () => {
+        const onError = () => {
             cleanup();
             reject(new Error("VIDEO_LOAD_FAILED"));
         };
-        const cleanup = () => {
-            video.removeEventListener(eventName, done);
-            video.removeEventListener("error", failed);
+        const onTimeout = () => {
+            cleanup();
+            reject(new Error("VIDEO_LOAD_TIMEOUT"));
         };
+        const cleanup = () => {
+            if (timer !== undefined) clearTimeout(timer);
+            video.removeEventListener(eventName, done);
+            video.removeEventListener("error", onError);
+        };
+        // 只认 error 事件不够：远端卡住时既不 resolve 也不 reject，
+        // 整个分段链路会永久挂在这一段上，连"第几段失败"都报不出来。
+        timer = setTimeout(onTimeout, 15000);
         video.addEventListener(eventName, done, { once: true });
-        video.addEventListener("error", failed, { once: true });
+        video.addEventListener("error", onError, { once: true });
     });
 }
 
