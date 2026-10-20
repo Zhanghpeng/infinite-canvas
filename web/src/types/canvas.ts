@@ -76,6 +76,8 @@ export type CanvasVideoSegment = {
     sceneStart?: boolean;
     /** 段的生成方式：局部重绘 / 角色替换。 */
     mode: "repaint" | "character-swap";
+    /** 本段实际参与生成的角色参考图节点 id。单段重试时按同一套参考重来，角色才跟同批其他段一致。 */
+    castNodeIds?: string[];
     /** 生成本段时吃的首帧/尾帧约束（解释「为什么无缝」，也便于复现）。 */
     anchor?: { firstFrameMs?: number; lastFrameMs?: number };
 };

@@ -27,6 +27,17 @@ export type VideoRange = {
     sceneStart: boolean;
 };
 
+/**
+ * 计划中的一段，允许覆盖全局角色集合。
+ *
+ * 切点只按画面变化算，算不出"这一段里有几个人"。一段对话戏可能只有一个角色，
+ * 另一个侧拍镜头有三个人 —— 全都喂同一套角色参考，模型会往画面里塞不存在的人。
+ */
+export type SegmentPlan = VideoRange & {
+    /** 本段参与生成的角色参考图节点 id；为空表示跟随全局角色。 */
+    castNodeIds?: string[];
+};
+
 export type SegmentPlanOptions = {
     /** 单段上限。主流视频模型给不了长片，默认 6 秒。 */
     maxMs?: number;
