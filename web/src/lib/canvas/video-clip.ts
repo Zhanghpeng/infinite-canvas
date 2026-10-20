@@ -80,6 +80,14 @@ export type ConcatPart = {
     endMs?: number;
     /** 该段起点是否落在场景切点上；是则不参与交叉淡化（硬切处淡化反而会拖影）。 */
     sceneStart?: boolean;
+    /**
+     * 这一段的目标时长（毫秒）。
+     *
+     * 生成结果的时长由模型决定，跟原片段往往对不齐（请求 4 秒可能给 3.8 或 4.3）。
+     * 按它归一化：多了截断、少了冻结尾帧补足。不归一化的话，成片总时长会偏离原片，
+     * 而音轨是整轨取自原片的 —— 音画漂移，越到后面口型越对不上。
+     */
+    targetDurationMs?: number;
 };
 
 export type ConcatOptions = {
@@ -127,6 +135,10 @@ export async function concatVideoParts(parts: ConcatPart[], options: ConcatOptio
     const canvas = createCanvas(width, height);
     const context = canvas.getContext("2d") as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!context) throw new Error("NO_CANVAS_CONTEXT");
+    // 冻结画布：段时长不足时拷下最后一帧，补足时反复吐它。
+    // 少几帧靠静止补，比让整条成片的时长偏离原片（音轨是整轨取自原片的）要好。
+    const frozenCanvas = createCanvas(width, height);
+    const frozenContext = frozenCanvas.getContext("2d") as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
 
     // 每段的实际区间先统一解析出来：进度百分比要用真实总时长，
     // 而不能拿第一段去代表全部（各段时长并不相同）。
@@ -185,12 +197,24 @@ export async function concatVideoParts(parts: ConcatPart[], options: ConcatOptio
             const ghost = fade > 0 ? trail.slice(trail.length - fade) : [];
             let fadeActive = fade > 0;
             let indexInPart = 0;
+            // 目标帧数要等本段第一帧才知道帧时长，先留空。
+            let targetFrames: number | undefined;
+            const needFreeze = Boolean(frozenContext) && part.targetDurationMs !== undefined && part.targetDurationMs > 0;
             // 必须显式给区间：无损切出来的文件带着 edit list，头部会残留上一个关键帧到切点之间的数据，
             // 直接按整段解码会把这部分也算进输出，段越长误差越大。
             const { startMs: partStartMs, endMs: partEndMs } = partRanges[partIndex];
             await forEachSample(part.blob, partStartMs, partEndMs, options.signal, async (sample) => {
                 const duration = sample.duration > 0 ? sample.duration : frameDuration;
                 frameDuration = duration;
+                if (needFreeze && targetFrames === undefined) {
+                    targetFrames = Math.max(1, Math.round(part.targetDurationMs! / 1000 / duration));
+                }
+                // 模型多给了帧：到此为止。丢弃的帧不能进 trail ——
+                // trail 是给下一段做淡化源的，拿丢弃帧去混会污染接缝。
+                if (targetFrames !== undefined && indexInPart >= targetFrames) {
+                    sample.close();
+                    return;
+                }
                 if (fadeActive && indexInPart < fade) {
                     const alpha = Math.min(1, (indexInPart + 1) / fade);
                     await emit(sample, duration, { other: ghost[indexInPart].sample, alpha });
@@ -205,7 +229,17 @@ export async function concatVideoParts(parts: ConcatPart[], options: ConcatOptio
                 trail.push({ sample, duration });
                 if (!fadeActive) trimTrail();
                 indexInPart += 1;
+                if (needFreeze) frozenContext!.drawImage(canvas, 0, 0);
             });
+            // 模型少给了帧：冻结尾帧补足到目标时长，节奏与原片严格对齐。
+            while (needFreeze && targetFrames !== undefined && indexInPart < targetFrames) {
+                const frame = new VideoSample(frozenCanvas, { timestamp: outputTime, duration: frameDuration });
+                outputTime += frameDuration;
+                await videoSource.add(frame);
+                frame.close();
+                indexInPart += 1;
+                options.onProgress?.(Math.min(1, (outputTime * 1000) / totalMs));
+            }
         }
         // 收尾：把 trail 里还留着的样本关掉，避免 VideoFrame 泄漏。
         while (trail.length) trail.shift()!.sample.close();
