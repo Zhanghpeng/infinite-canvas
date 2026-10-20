@@ -464,6 +464,7 @@ export default {
         "miniMapOpen": "Open minimap",
         "miniMapClose": "Close minimap",
         "resetView": "Reset view",
+        "fitView": "Fit all content",
         "zoom": "Zoom canvas",
         "agentConnected": "WorkBuddy connected",
         "agentConnecting": "WorkBuddy {{activity}}",
@@ -624,6 +625,12 @@ export default {
         "videoTimeline": {
             "title": "Video timeline",
             "subtitle": "Segment repaint and character swap",
+            "channel": {
+                "title": "This workflow cannot run segment editing",
+                "body": "Both repaint and character swap send the original clip in as a reference video, which only the omni-reference workflow accepts. The current selection is a first/last-frame workflow and will reject the request. Switch the video mode to omni reference first, then reopen the timeline.",
+                "proceed": "Open anyway",
+                "cancel": "Switch first"
+            },
             "segmentCount": "{{count}} segments",
             "analyzing": "Analyzing footage… {{percent}}%",
             "analyzeFailed": "Failed to analyze the footage",
@@ -1209,12 +1216,27 @@ export default {
             "selectAll": "Select all nodes",
             "copyPaste": "Copy/paste nodes or paste clipboard text/images",
             "copyPasteNodes": "Copy/paste nodes",
+            "undoRedo": "Undo / redo",
+            "fitAll": "Fit all content",
+            "fitSelection": "Fit selection",
             "delete": "Delete selection",
             "escape": "Clear selection and close overlays",
             "dropMedia": "Drop images/videos/audio",
             "upload": "Upload to canvas",
             "drag": "Drag",
             "click": "Click"
+        },
+        "layout": {
+            "alignLeft": "Align left",
+            "alignCenterX": "Align horizontal centers",
+            "alignRight": "Align right",
+            "alignTop": "Align top",
+            "alignCenterY": "Align vertical centers",
+            "alignBottom": "Align bottom",
+            "distributeX": "Distribute horizontally",
+            "distributeY": "Distribute vertically",
+            "needThree": "Select at least 3 nodes to distribute",
+            "emptyCanvas": "The canvas is empty"
         },
         "faceRefine": {
             "title": "Face Refine",

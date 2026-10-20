@@ -464,6 +464,7 @@ export default {
         "miniMapOpen": "打开小地图",
         "miniMapClose": "关闭小地图",
         "resetView": "重置视图",
+        "fitView": "适配全部内容",
         "zoom": "放大/缩小画布",
         "agentConnected": "WorkBuddy 已连接",
         "agentConnecting": "WorkBuddy {{activity}}",
@@ -624,6 +625,12 @@ export default {
         "videoTimeline": {
             "title": "视频时间轴",
             "subtitle": "分段重绘与角色替换",
+            "channel": {
+                "title": "当前视频工作流跑不了分段编辑",
+                "body": "分段重绘和角色替换都要把原片片段作为参考视频送进模型，只有「全能参考（omni）」工作流接受参考视频；当前选中的是首尾帧工作流，提交后会被拒绝。建议先去节点配置里把视频模式切到全能参考，再回来打开时间轴。",
+                "proceed": "仍然打开",
+                "cancel": "先去切换"
+            },
             "segmentCount": "{{count}} 段",
             "analyzing": "正在分析画面… {{percent}}%",
             "analyzeFailed": "画面分析失败",
@@ -1209,12 +1216,27 @@ export default {
             "selectAll": "全选节点",
             "copyPaste": "复制 / 粘贴节点，或粘贴剪切板文本/图片",
             "copyPasteNodes": "复制 / 粘贴节点",
+            "undoRedo": "撤销 / 重做",
+            "fitAll": "适配全部内容",
+            "fitSelection": "适配选中内容",
             "delete": "删除选中",
             "escape": "取消选择并关闭浮层",
             "dropMedia": "拖入图片/视频/音频",
             "upload": "上传到画布",
             "drag": "拖动",
             "click": "点击"
+        },
+        "layout": {
+            "alignLeft": "左对齐",
+            "alignCenterX": "水平居中对齐",
+            "alignRight": "右对齐",
+            "alignTop": "顶对齐",
+            "alignCenterY": "垂直居中对齐",
+            "alignBottom": "底对齐",
+            "distributeX": "水平等间距分布",
+            "distributeY": "垂直等间距分布",
+            "needThree": "选中 3 个以上节点才能分布",
+            "emptyCanvas": "画布上还没有内容"
         },
         "faceRefine": {
             "title": "人脸修复",

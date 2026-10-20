@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Compass, Focus, HelpCircle } from "lucide-react";
+import { Compass, Focus, HelpCircle, Maximize } from "lucide-react";
 import { useState } from "react";
 import { Button, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
@@ -11,11 +11,12 @@ type CanvasZoomControlsProps = {
     scale: number;
     onScaleChange: (scale: number) => void;
     onReset: () => void;
+    onFit: () => void;
     isMiniMapOpen: boolean;
     onToggleMiniMap: () => void;
 };
 
-export function CanvasZoomControls({ scale, onScaleChange, onReset, isMiniMapOpen, onToggleMiniMap }: CanvasZoomControlsProps) {
+export function CanvasZoomControls({ scale, onScaleChange, onReset, onFit, isMiniMapOpen, onToggleMiniMap }: CanvasZoomControlsProps) {
     const [shortcutsOpen, setShortcutsOpen] = useState(false);
     const { t } = useTranslation();
     const colorTheme = useThemeStore((state) => state.theme);
@@ -35,6 +36,9 @@ export function CanvasZoomControls({ scale, onScaleChange, onReset, isMiniMapOpe
                         onClick={onToggleMiniMap}
                         aria-label={isMiniMapOpen ? t("canvas.miniMapClose") : t("canvas.miniMapOpen")}
                     />
+                </Tooltip>
+                <Tooltip title={t("canvas.fitView")}>
+                    <Button type="text" className="!h-8 !w-8 !min-w-8 !p-0" style={{ color: theme.toolbar.item }} icon={<Maximize className="size-4" />} onClick={onFit} aria-label={t("canvas.fitView")} />
                 </Tooltip>
                 <Tooltip title={t("canvas.resetView")}>
                     <Button type="text" className="!h-8 !w-8 !min-w-8 !p-0" style={{ color: theme.toolbar.item }} icon={<Focus className="size-4" />} onClick={onReset} aria-label={t("canvas.resetView")} />
@@ -66,6 +70,9 @@ export function CanvasZoomControls({ scale, onScaleChange, onReset, isMiniMapOpe
                     <Shortcut label={t("canvas.shortcut.drag")} value={t("canvas.shortcut.boxSelect")} />
                     <Shortcut label={`Shift / Cmd + ${t("canvas.shortcut.click")}`} value={t("canvas.shortcut.addSelection")} />
                     <Shortcut label="Ctrl / Cmd + C / V" value={t("canvas.shortcut.copyPasteNodes")} />
+                    <Shortcut label="Ctrl / Cmd + Z / Shift + Z" value={t("canvas.shortcut.undoRedo")} />
+                    <Shortcut label="Shift + 1" value={t("canvas.shortcut.fitAll")} />
+                    <Shortcut label="Shift + 2" value={t("canvas.shortcut.fitSelection")} />
                     <Shortcut label="Delete / Backspace" value={t("canvas.shortcut.delete")} />
                 </div>
             </Modal>

@@ -50,6 +50,8 @@ import { CanvasToolbar } from "@/components/canvas/canvas-toolbar";
 import { AssetPickerModal, type BundleEntryPayload, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { CanvasSidePanel } from "@/components/canvas/canvas-side-panel";
 import { CanvasZoomControls } from "@/components/canvas/canvas-zoom-controls";
+import { CanvasSelectionToolbar } from "@/components/canvas/canvas-selection-toolbar";
+import { alignSelectedNodes, boundsOfNodes, distributeSelectedNodes, type NodeAlignMode, type NodeDistributeMode } from "@/lib/canvas/canvas-layout-actions";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useCanvasStore, type CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useCollabStore } from "@/stores/use-collab-store";
@@ -1563,6 +1565,23 @@ function InfiniteCanvasPage() {
         setContextMenu(null);
     }, [size.height, size.width]);
 
+    /** 视图过渡：所有"跳转视角"的动作都走这里，手感一致（450ms、easeOutCubic）。 */
+    const animateToViewport = useCallback((target: ViewportTransform) => {
+        if (focusAnimRef.current) cancelAnimationFrame(focusAnimRef.current);
+        const start = { ...viewportRef.current };
+        const duration = 450;
+        const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+        let startTime: number | null = null;
+        const step = (now: number) => {
+            if (startTime === null) startTime = now;
+            const progress = Math.min((now - startTime) / duration, 1);
+            const t = easeOutCubic(progress);
+            setViewport({ x: start.x + (target.x - start.x) * t, y: start.y + (target.y - start.y) * t, k: start.k + (target.k - start.k) * t });
+            focusAnimRef.current = progress < 1 ? requestAnimationFrame(step) : null;
+        };
+        focusAnimRef.current = requestAnimationFrame(step);
+    }, []);
+
     const focusNode = useCallback(
         (nodeId: string) => {
             const node = nodesRef.current.find((item) => item.id === nodeId);
@@ -1574,23 +1593,79 @@ function InfiniteCanvasPage() {
             setSelectedNodeIds(new Set([nodeId]));
             setSelectedConnectionId(null);
             setContextMenu(null);
-
-            if (focusAnimRef.current) cancelAnimationFrame(focusAnimRef.current);
-            const start = { ...viewportRef.current };
-            const duration = 450;
-            const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
-            let startTime: number | null = null;
-            const step = (now: number) => {
-                if (startTime === null) startTime = now;
-                const progress = Math.min((now - startTime) / duration, 1);
-                const t = easeOutCubic(progress);
-                setViewport({ x: start.x + (target.x - start.x) * t, y: start.y + (target.y - start.y) * t, k: start.k + (target.k - start.k) * t });
-                focusAnimRef.current = progress < 1 ? requestAnimationFrame(step) : null;
-            };
-            focusAnimRef.current = requestAnimationFrame(step);
+            animateToViewport(target);
         },
-        [size.height, size.width],
+        [animateToViewport, size.height, size.width],
     );
+
+    /**
+     * 适配视图：把所有内容（或只把选中的内容）缩放到刚好铺满可视区。
+     *
+     * 长片项目里节点一多，靠滚轮找东西非常低效 —— 这是一个专业画布的基本盘。
+     * 会跳过折叠分组里的成员：它们不显示，算进包围盒只会白白留一圈空白。
+     */
+    const fitView = useCallback(
+        (onlySelection: boolean) => {
+            const selectedIds = selectedNodeIdsRef.current;
+            const pool = nodesRef.current.filter((node) => !collapsedNodeIdsRef.current.has(node.id) && (!onlySelection || selectedIds.has(node.id)));
+            const bounds = boundsOfNodes(pool);
+            if (!bounds) {
+                message.info(t("canvas.layout.emptyCanvas"));
+                return;
+            }
+            const padding = 72;
+            const contentWidth = Math.max(1, bounds.right - bounds.left);
+            const contentHeight = Math.max(1, bounds.bottom - bounds.top);
+            const k = Math.min(Math.max(Math.min((size.width - padding * 2) / contentWidth, (size.height - padding * 2) / contentHeight), 0.05), 1.2);
+            const centerX = (bounds.left + bounds.right) / 2;
+            const centerY = (bounds.top + bounds.bottom) / 2;
+            animateToViewport({ x: size.width / 2 - centerX * k, y: size.height / 2 - centerY * k, k });
+        },
+        [animateToViewport, message, size.height, size.width, t],
+    );
+
+    /** 批量排版后同步分组关系：组框动了，成员归属要跟着重新判定，与拖拽组框的行为一致。 */
+    const applyNodeLayout = useCallback(
+        (next: CanvasNodeData[] | null) => {
+            if (!next) return;
+            const selectedIds = selectedNodeIdsRef.current;
+            let resolved = next;
+            for (const node of next) {
+                if (selectedIds.has(node.id) && node.type === CanvasNodeType.Group) {
+                    resolved = syncGroupMembershipAfterTransform(node.id, resolved);
+                }
+            }
+            setNodes(resolved);
+        },
+        [setNodes],
+    );
+
+    const handleAlignNodes = useCallback(
+        (mode: NodeAlignMode) => {
+            applyNodeLayout(alignSelectedNodes(nodesRef.current, selectedNodeIdsRef.current, mode, { lockedIds: lockedNodeIdsRef.current }));
+        },
+        [applyNodeLayout],
+    );
+
+    const handleDistributeNodes = useCallback(
+        (mode: NodeDistributeMode) => {
+            applyNodeLayout(distributeSelectedNodes(nodesRef.current, selectedNodeIdsRef.current, mode, { lockedIds: lockedNodeIdsRef.current }));
+        },
+        [applyNodeLayout],
+    );
+
+    /** 排版工具条挂在选集正上方；贴到顶边放不下时翻到选集下方，永远在视野里。 */
+    const selectionToolbar = useMemo(() => {
+        if (selectedNodeIds.size < 2) return null;
+        const selected = nodes.filter((node) => selectedNodeIds.has(node.id) && !collapsedNodeIds.has(node.id));
+        const bounds = boundsOfNodes(selected);
+        if (!bounds || selected.length < 2) return null;
+        const left = Math.min(Math.max(((bounds.left + bounds.right) / 2) * viewport.k + viewport.x, 132), Math.max(132, size.width - 132));
+        const above = bounds.top * viewport.k + viewport.y - 12;
+        const placement: "above" | "below" = above > 64 ? "above" : "below";
+        return { left, top: placement === "above" ? above : bounds.bottom * viewport.k + viewport.y + 12, placement, count: selected.length };
+    }, [collapsedNodeIds, nodes, selectedNodeIds, size.width, viewport]);
+
 
     useEffect(() => () => void (focusAnimRef.current && cancelAnimationFrame(focusAnimRef.current)), []);
 
@@ -2097,6 +2172,13 @@ function InfiniteCanvasPage() {
             const key = event.key.toLowerCase();
             const isModifierShortcut = event.metaKey || event.ctrlKey;
 
+            // Shift+1 适配全部、Shift+2 适配选中：用 code 判定，避免 Shift 把 1 变成 "!" 的键盘布局差异。
+            if (!isModifierShortcut && !event.altKey && event.shiftKey && (event.code === "Digit1" || event.code === "Digit2")) {
+                event.preventDefault();
+                fitView(event.code === "Digit2");
+                return;
+            }
+
             if (isModifierShortcut && key === "c" && window.getSelection()?.toString()) return;
 
             if (isModifierShortcut && !event.altKey && key === "z") {
@@ -2188,7 +2270,7 @@ function InfiniteCanvasPage() {
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [applyGroupCollapsed, copySelectedNodes, deleteConnection, deleteNodes, pasteCopiedNodes, pasteSystemClipboard, redoCanvas, selectedConnectionId, setConnecting, undoCanvas]);
+    }, [applyGroupCollapsed, copySelectedNodes, deleteConnection, deleteNodes, fitView, pasteCopiedNodes, pasteSystemClipboard, redoCanvas, selectedConnectionId, setConnecting, undoCanvas]);
 
     const handleConnectStart = useCallback(
         (event: ReactMouseEvent | React.PointerEvent, nodeId: string, handleType: "source" | "target") => {
@@ -3304,9 +3386,25 @@ function InfiniteCanvasPage() {
                 message.warning(t("canvas.videoTimeline.toast.unsupported"));
                 return;
             }
+            // 分段链路要把原片片段当参考视频送进去，只有 omni 工作流吃这个槽位；首尾帧工作流会直接拒绝。
+            // 与其让用户等一轮生成再看到失败，不如在入口处就讲清楚。
+            const workflow = findWorkflow(effectiveConfig, effectiveConfig.channelId, effectiveConfig.workflowId);
+            const modelName = (effectiveConfig.videoModel || effectiveConfig.model || "").toLowerCase();
+            const frameOnlyWorkflow = workflow?.category === "frameVideo" || modelName.includes("frame") || modelName.includes("首尾帧");
+            if (frameOnlyWorkflow) {
+                Modal.confirm({
+                    title: t("canvas.videoTimeline.channel.title"),
+                    content: t("canvas.videoTimeline.channel.body"),
+                    okText: t("canvas.videoTimeline.channel.proceed"),
+                    cancelText: t("canvas.videoTimeline.channel.cancel"),
+                    centered: true,
+                    onOk: () => setVideoTimelineNode(node),
+                });
+                return;
+            }
             setVideoTimelineNode(node);
         },
-        [message, t],
+        [effectiveConfig, message, t],
     );
 
     /** 就地更新节点，同时同步 ref，避免长流程里读到旧快照。 */
@@ -5954,7 +6052,25 @@ function InfiniteCanvasPage() {
 
                 {isMiniMapOpen ? <Minimap nodes={collapsedNodeIds.size ? nodes.filter((node) => !collapsedNodeIds.has(node.id)) : nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
 
-                <CanvasZoomControls scale={viewport.k} onScaleChange={setZoomScale} onReset={resetViewport} isMiniMapOpen={isMiniMapOpen} onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)} />
+                <CanvasZoomControls
+                    scale={viewport.k}
+                    onScaleChange={setZoomScale}
+                    onReset={resetViewport}
+                    onFit={() => fitView(false)}
+                    isMiniMapOpen={isMiniMapOpen}
+                    onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)}
+                />
+
+                {selectionToolbar ? (
+                    <CanvasSelectionToolbar
+                        left={selectionToolbar.left}
+                        top={selectionToolbar.top}
+                        placement={selectionToolbar.placement}
+                        count={selectionToolbar.count}
+                        onAlign={handleAlignNodes}
+                        onDistribute={handleDistributeNodes}
+                    />
+                ) : null}
 
                 {contextMenu ? (
                     <CanvasNodeContextMenu
