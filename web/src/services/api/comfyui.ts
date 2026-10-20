@@ -2365,6 +2365,12 @@ export interface ComfyuiVideoRequest {
     videoMode?: "omni" | "frame";
     channelId?: string;
     workflowId?: string;
+    /**
+     * 本次生成的秒数，优先于 config.videoSeconds。
+     * 分段重绘 / 角色替换按段时长传：各段 2–6 秒不等，
+     * 只认全局固定值会让每段都生成出同一个时长，拼回去节奏全错。
+     */
+    seconds?: number;
     seed?: number;
     signal?: AbortSignal;
     jobId?: string;
@@ -2496,7 +2502,8 @@ export async function submitComfyuiVideoJob(req: ComfyuiVideoRequest): Promise<{
     const sizeMatch = (req.config.size || "").match(/^(\d+)x(\d+)$/);
     const width = sizeMatch ? Number(sizeMatch[1]) : 544;
     const height = sizeMatch ? Number(sizeMatch[2]) : 960;
-    const duration = req.config.videoSeconds ? Number(req.config.videoSeconds) : 5;
+    // 请求级秒数优先：分段任务按段时长传，避免 4 秒的段生成出 5 秒画面
+    const duration = req.seconds !== undefined ? Math.max(1, Math.round(req.seconds)) : req.config.videoSeconds ? Number(req.config.videoSeconds) : 5;
 
     const seed = req.seed !== undefined ? req.seed : generateRandomSeed() % 1_000_000_000;
     const boundWorkflow = applyVideoBindings(videoWorkflow.json, {

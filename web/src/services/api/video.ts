@@ -23,6 +23,14 @@ export type VideoRequestOptions = {
     videoMode?: "omni" | "frame";
     channelId?: string;
     workflowId?: string;
+    /**
+     * 本次生成的秒数，缺省走全局 videoSeconds。
+     *
+     * 分段重绘 / 角色替换必须按段传：各段时长不等（2–6 秒），
+     * 而模型只认一个固定秒数。不传就等于让 4 秒的段生成出 5 秒的画面，
+     * 拼回去节奏对不上、音轨也会漂。
+     */
+    seconds?: number;
     seed?: number;
     jobId?: string;
     onProgress?: (status: string, detail?: { jobId?: string }) => void;
@@ -61,6 +69,7 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
         videoMode: options?.videoMode || (config.videoMode === "frame" ? "frame" : "omni"),
         channelId: options?.channelId || config.channelId,
         workflowId: options?.workflowId || config.workflowId,
+        seconds: options?.seconds,
         seed: options?.seed,
         signal: options?.signal,
         jobId: options?.jobId,
@@ -80,6 +89,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
         referenceAudios: options?.referenceAudios,
         channelId: options?.channelId || config.channelId,
         workflowId: options?.workflowId || config.workflowId,
+        seconds: options?.seconds,
         seed: options?.seed,
         signal: options?.signal,
     });
@@ -110,7 +120,8 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
             prompt,
             images: refs,
             params: {
-                seconds: normalizeVideoSeconds(config.videoSeconds),
+                // 分段场景按段时长传，缺省才回落全局配置
+                seconds: normalizeVideoSeconds(String(options?.seconds ?? config.videoSeconds)),
                 size: normalizeVideoSize(config.size),
                 resolution: normalizeVideoResolution(config.vquality),
                 ratio: config.size,
@@ -153,7 +164,7 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     const body = new FormData();
     body.append("model", modelOptionName(model));
     body.append("prompt", prompt);
-    body.append("seconds", normalizeVideoSeconds(config.videoSeconds));
+    body.append("seconds", String(normalizeVideoSeconds(String(options?.seconds ?? config.videoSeconds))));
     if (normalizeVideoSize(config.size)) body.append("size", normalizeVideoSize(config.size)!);
     body.append("resolution_name", normalizeVideoResolution(config.vquality));
     body.append("preset", "normal");
