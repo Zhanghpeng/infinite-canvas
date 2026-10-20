@@ -697,6 +697,7 @@ export default {
                 "stoppedAfterFailure": "已停止：{{done}}/{{count}} 段成功，未生成成片。成功的段留在画布上，可单独重试",
                 "composing": "正在拼接成片…",
                 "composed": "成片已生成",
+                "durationDrift": "第 {{index}} 段生成了 {{actual}}s，原片段是 {{expected}}s。已按原片归一化（少了会冻结尾帧），若内容明显不完整建议重做这一段",
                 "durationMismatch": "成片 {{actual}}，原片 {{expected}}，时长对不上，请检查分段",
                 "composeFailed": "拼接失败：{{error}}",
                 "cutFailed": "切分视频失败：{{error}}",
@@ -709,7 +710,10 @@ export default {
                 "segmentTitle": "{{title}} · 第 {{index}} 段",
                 "segmentBadge": "第 {{index}} 段",
                 "compositeTitle": "{{title}} · 成片",
-                "compositeParts": "{{count}} 段拼接"
+                "compositeParts": "{{count}} 段拼接",
+                "clipTitle": "{{title}} · 参考片段 {{index}}",
+                "clipBadge": "参考片段",
+                "durationDrift": "时长差 {{seconds}}s · 已按原片归一"
             },
             "error": {
                 "loadFailed": "视频读不出来：可能是不支持的容器，或文件被浏览器拦截",

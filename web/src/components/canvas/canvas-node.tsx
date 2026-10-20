@@ -835,22 +835,31 @@ function VideoNodeContent({ node, theme, onViewMedia }: NodeContentRendererProps
     // 段与成片都要能一眼认出来：画布上并排躺着十几个视频节点时，靠标题区分太慢。
     const segment = node.metadata.videoSegment;
     const composite = node.metadata.videoComposite;
+    const referenceClip = node.metadata.referenceClip;
     const badge = segment
         ? `${t("canvas.videoTimeline.node.segmentBadge", { index: segment.index + 1 })} · ${formatTimecode(segment.startMs)}–${formatTimecode(segment.endMs)}`
         : composite
           ? t("canvas.videoTimeline.node.compositeParts", { count: composite.partNodeIds.length })
-          : "";
+          : referenceClip
+            ? `${t("canvas.videoTimeline.node.clipBadge")} · ${formatTimecode(referenceClip.startMs)}–${formatTimecode(referenceClip.endMs)}`
+            : "";
     return (
         <div className="relative h-full w-full">
             <CanvasVideoPlayer nodeId={node.id} src={node.metadata.content} onPreview={onViewMedia} />
             {badge ? (
                 <span
                     className={`pointer-events-none absolute left-2 top-2 z-20 flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium text-white shadow backdrop-blur ${
-                        composite ? "bg-emerald-600/80" : "bg-indigo-600/80"
+                        composite ? "bg-emerald-600/80" : referenceClip ? "bg-stone-600/80" : "bg-indigo-600/80"
                     }`}
                 >
                     {composite ? <Layers className="size-2.5" /> : null}
                     {badge}
+                </span>
+            ) : null}
+            {/* 时长偏差提示：合成时已按目标归一化，节奏不会错，但差得多说明内容没生成完整。 */}
+            {segment?.durationDriftMs ? (
+                <span className="pointer-events-none absolute bottom-2 left-2 z-20 rounded-full bg-amber-600/85 px-2 py-0.5 text-[10px] font-medium text-white shadow backdrop-blur">
+                    {t("canvas.videoTimeline.node.durationDrift", { seconds: (segment.durationDriftMs / 1000).toFixed(1) })}
                 </span>
             ) : null}
         </div>

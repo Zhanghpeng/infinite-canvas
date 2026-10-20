@@ -80,6 +80,28 @@ export type CanvasVideoSegment = {
     castNodeIds?: string[];
     /** 生成本段时吃的首帧/尾帧约束（解释「为什么无缝」，也便于复现）。 */
     anchor?: { firstFrameMs?: number; lastFrameMs?: number };
+    /**
+     * 生成结果与原片段的目标时长之差（毫秒）。超过 500ms 才记录。
+     *
+     * 合成时会按目标时长归一化（多了截断、少了冻结尾帧），节奏不会错，
+     * 但差得多说明这段内容没生成完整 —— 记下来让用户能看见、决定是否重做。
+     */
+    durationDriftMs?: number;
+};
+
+/**
+ * 切出来送给模型的参考片段。
+ *
+ * 落成画布节点是为了让人能检查：模型到底吃了什么、这段里有几个人、
+ * 时长多少。切点只按画面变化算，算不出"这段里有几个人"，
+ * 逐段勾角色之前总得先看看这段的内容。
+ */
+export type CanvasVideoReferenceClip = {
+    /** 源视频节点 id。 */
+    sourceNodeId: string;
+    /** 本段在源视频中的起止（毫秒，左闭右开）。 */
+    startMs: number;
+    endMs: number;
 };
 
 /** 长视频合成节点：按 partNodeIds 顺序拼接成完整成片。 */
@@ -155,6 +177,8 @@ export type CanvasNodeMetadata = {
     videoSegment?: CanvasVideoSegment;
     /** 视频节点：由若干段按顺序拼成的成片。 */
     videoComposite?: CanvasVideoComposite;
+    /** 视频节点：从源片切出来、作为生成输入的参考片段（非结果，供人工检查）。 */
+    referenceClip?: CanvasVideoReferenceClip;
 };
 
 export type CanvasNodeData = {

@@ -697,6 +697,7 @@ export default {
                 "stoppedAfterFailure": "Stopped: {{done}}/{{count}} segments done, no final cut. Successful segments stay on the canvas for retry",
                 "composing": "Stitching the final cut…",
                 "composed": "Final cut ready",
+                "durationDrift": "Segment {{index}} came out {{actual}}s vs {{expected}}s in the source. Normalized to the source (short segments get a frozen tail) — redo this segment if the content looks incomplete",
                 "durationMismatch": "Final cut is {{actual}} but the source is {{expected}} — check the segments",
                 "composeFailed": "Stitch failed: {{error}}",
                 "cutFailed": "Failed to cut the video: {{error}}",
@@ -709,7 +710,10 @@ export default {
                 "segmentTitle": "{{title}} · segment {{index}}",
                 "segmentBadge": "Segment {{index}}",
                 "compositeTitle": "{{title}} · final cut",
-                "compositeParts": "{{count}} segments stitched"
+                "compositeParts": "{{count}} segments stitched",
+                "clipTitle": "{{title}} · reference clip {{index}}",
+                "clipBadge": "Reference clip",
+                "durationDrift": "Off by {{seconds}}s · normalized to source"
             },
             "error": {
                 "loadFailed": "Can't read this video: unsupported container, or blocked by the browser",

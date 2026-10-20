@@ -3448,14 +3448,58 @@ function InfiniteCanvasPage() {
             segmentId: string;
             /** 参考视频文件名，重试时保持与首次一致，便于对照。 */
             segmentLabel: string;
+            /** 段序号（从 0 开始），用于标题与提示里的"第 N 段"。 */
+            segmentIndex: number;
+            /**
+             * 参考片段的落点。给了就把切出来的这一段落到画布上：模型到底吃了什么、
+             * 这段里有几个人、时长多少，用户点开就能检查，不用等生成完再从结果反推。
+             * 重试时不传 —— 首次批量已经落过，用户删掉是他自己的选择。
+             */
+            clipSpot?: { x: number; y: number; width: number; height: number };
             signal?: AbortSignal;
         }): Promise<Blob> => {
-            const { source, sourceBlob, range, castIds, promptText, config, segmentId, segmentLabel, signal } = params;
+            const { source, sourceBlob, range, castIds, promptText, config, segmentId, segmentLabel, segmentIndex, clipSpot, signal } = params;
             const sourceUrl = source.metadata?.content || "";
 
             // 1. 切出这一段：模型吃不了长片，也吃不了整片
             const segmentBlob = await cutVideoSegment(sourceBlob, range.startMs, range.endMs);
+
+            // 1.1 参考片段先落画布再上传：上传要几秒，落个 loading 占位让用户先看见"这一段在这"
+            let clipNodeId: string | undefined;
+            if (clipSpot) {
+                clipNodeId = nanoid();
+                // 不连线：参考片段是中间产物，source→片段→生成段 三条线会把画布织成网。
+                // 徽章与标题已经说清来源，真要追溯可以看元数据里的 sourceNodeId。
+                appendCanvasNodes(
+                    [
+                        {
+                            id: clipNodeId,
+                            type: CanvasNodeType.Video,
+                            title: t("canvas.videoTimeline.node.clipTitle", { index: segmentIndex + 1 }),
+                            position: { x: clipSpot.x, y: clipSpot.y },
+                            width: clipSpot.width,
+                            height: clipSpot.height,
+                            metadata: {
+                                status: NODE_STATUS_LOADING,
+                                generationMode: "video",
+                                referenceClip: {
+                                    sourceNodeId: source.id,
+                                    startMs: range.startMs,
+                                    endMs: range.endMs,
+                                },
+                            },
+                        },
+                    ],
+                    [],
+                );
+            }
             const segmentUpload = await uploadMediaFile(segmentBlob, "video");
+            if (clipNodeId) {
+                const clip = nodesRef.current.find((item) => item.id === clipNodeId);
+                patchCanvasNode(clipNodeId, {
+                    metadata: { ...clip?.metadata, status: NODE_STATUS_SUCCESS, content: segmentUpload.url, storageKey: segmentUpload.storageKey, bytes: segmentUpload.bytes, mimeType: segmentUpload.mimeType, durationMs: segmentUpload.durationMs },
+                });
+            }
 
             // 2. 参考图：角色在前（模型对靠前的参考更敏感），首尾帧在后钉住接缝
             const castImages = castIds.map((id) => nodesRef.current.find((item) => item.id === id)).filter((item): item is CanvasNodeData => Boolean(item?.metadata?.content));
@@ -3466,6 +3510,7 @@ function InfiniteCanvasPage() {
                 dataUrl: castNode.metadata?.content || "",
                 url: castNode.metadata?.content || "",
             }));
+            // 传 signal：不传的话点取消后抽帧还在跑，且元数据加载没有超时兜底。
             const headFrame = await captureFrameDataUrl(sourceUrl, range.startMs, { width: 960, signal });
             const tailFrame = await captureFrameDataUrl(sourceUrl, Math.max(range.startMs, range.endMs - 34), { width: 960, signal });
             referenceImages.push(
@@ -3473,10 +3518,14 @@ function InfiniteCanvasPage() {
                 { id: `tail-${segmentId}`, name: "segment_end.jpg", type: "image/jpeg", dataUrl: tailFrame, url: tailFrame },
             );
 
-            // 3. 生成：参考视频给内容与节奏，首尾帧给接缝，角色图给外观
+            // 3. 生成：参考视频给内容与节奏，首尾帧给接缝，角色图给外观。
+            //    秒数按本段时长传 —— 各段 2–6 秒不等，只认全局固定值的话，
+            //    4 秒的段会生成出 5 秒画面，拼回去节奏全错、音轨也漂。
+            const targetMs = Math.max(1, range.endMs - range.startMs);
             const result = await requestVideoGeneration(config, promptText, referenceImages, {
                 signal,
                 videoMode: "omni",
+                seconds: Math.max(1, Math.round(targetMs / 1000)),
                 referenceVideos: [{ id: segmentId, name: `${segmentLabel}.mp4`, type: "video/mp4", url: segmentUpload.url, storageKey: segmentUpload.storageKey, durationMs: segmentUpload.durationMs }],
                 seed: generateRandomSeed(),
                 onProgress: (status, detail) => {
@@ -3487,17 +3536,44 @@ function InfiniteCanvasPage() {
             const storedBlob = video.storageKey ? await getMediaBlob(video.storageKey) : null;
             const videoBlob = storedBlob ?? (await (await fetch(video.url)).blob());
 
+            // 3.1 时长校验：模型给的时长跟目标差太多就明说。
+            //     合成侧会按目标归一化（多了截、少了冻结尾帧），节奏不会错，
+            //     但差得多说明这段内容没生成完整，用户有权利知道。
+            let driftMs = 0;
+            try {
+                const actualMs = (await probeVideo(videoBlob)).durationMs;
+                driftMs = Math.abs(actualMs - targetMs);
+                if (driftMs > 500) {
+                    message.warning({ content: t("canvas.videoTimeline.toast.durationDrift", { index: segmentIndex + 1, expected: (targetMs / 1000).toFixed(1), actual: (actualMs / 1000).toFixed(1) }), duration: 6 });
+                }
+            } catch {
+                // 探测失败不影响主链路，合成时还会再解析一次
+            }
+
             const videoSize = fitNodeSize(video.width || source.width, video.height || source.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
             const currentNode = nodesRef.current.find((item) => item.id === segmentId);
             const sizePatch: Partial<CanvasNodeData> = { width: videoSize.width, height: videoSize.height };
             if (currentNode) sizePatch.position = { x: currentNode.position.x + currentNode.width / 2 - videoSize.width / 2, y: currentNode.position.y };
+            // 时长偏差记进 videoSegment：合成时按目标归一化，节奏不会错，
+            // 但差得多说明这段内容没生成完整，用户有权利看见再决定要不要重做。
+            const segmentMeta = currentNode?.metadata?.videoSegment;
             patchCanvasNode(segmentId, {
                 ...sizePatch,
-                metadata: { ...currentNode?.metadata, ...videoMetadata(video), status: NODE_STATUS_SUCCESS, prompt: promptText, effectivePrompt: promptText, errorDetails: undefined, jobId: undefined, isTimeout: undefined },
+                metadata: {
+                    ...currentNode?.metadata,
+                    ...videoMetadata(video),
+                    status: NODE_STATUS_SUCCESS,
+                    prompt: promptText,
+                    effectivePrompt: promptText,
+                    errorDetails: undefined,
+                    jobId: undefined,
+                    isTimeout: undefined,
+                    ...(segmentMeta && driftMs > 500 ? { videoSegment: { ...segmentMeta, durationDriftMs: Math.round(driftMs) } } : {}),
+                },
             });
             return videoBlob;
         },
-        [patchCanvasNode],
+        [appendCanvasNodes, message, patchCanvasNode, t],
     );
 
     /**
@@ -3528,6 +3604,7 @@ function InfiniteCanvasPage() {
                     config,
                     segmentId: node.id,
                     segmentLabel: `segment_${segment.index + 1}`,
+                    segmentIndex: segment.index,
                 });
                 message.success({ content: t("canvas.videoTimeline.toast.segmentDone", { index: segment.index + 1, count: segment.index + 1 }), duration: 2 });
             } catch (error) {
@@ -3579,7 +3656,13 @@ function InfiniteCanvasPage() {
                     channelId: source.metadata.channelId || effectiveConfig.channelId,
                     workflowId: source.metadata.workflowId || effectiveConfig.workflowId,
                 };
-                const segmentColumnX = source.position.x + source.width + 96;
+                // 两列布局：参考片段（模型输入）紧贴源片，生成段（模型输出）再往右。
+                // 数据流方向就是阅读方向：源片 → 参考段 → 生成段 → 成片。
+                // 参考片段刻意小一号：它是中间产物，不该跟结果抢注意力。
+                const clipWidth = Math.max(160, Math.min(source.width, 360));
+                const clipHeight = Math.round((clipWidth * source.height) / Math.max(1, source.width));
+                const clipColumnX = source.position.x + source.width + 96;
+                const segmentColumnX = clipColumnX + clipWidth + 96;
                 // 逐段串行生成，长片要跑十几分钟。没有进度估算用户只能干等，
                 // 只能来问"跑完了吗"，所以从第二段起就给出已用时与预计剩余。
                 const startedAt = Date.now();
@@ -3659,6 +3742,9 @@ function InfiniteCanvasPage() {
                             config,
                             segmentId,
                             segmentLabel: `segment_${index + 1}`,
+                            segmentIndex: index,
+                            // 参考片段落在本行左侧，与段节点垂直居中对齐
+                            clipSpot: { x: clipColumnX, y: source.position.y + index * (source.height + 32) + Math.round((source.height - clipHeight) / 2), width: clipWidth, height: clipHeight },
                             signal: controller.signal,
                         });
                         produced.push({ nodeId: segmentId, blob: segmentBlob, range });
@@ -3691,12 +3777,16 @@ function InfiniteCanvasPage() {
                     const rangeStart = plan.ranges[0].startMs;
                     const rangeEnd = plan.ranges[plan.ranges.length - 1].endMs;
                     if (plan.mode === "repaint" && rangeStart > 60) {
-                        parts.push({ blob: await cutVideoSegment(sourceBlob, 0, rangeStart), sceneStart: true });
+                        // 保留段是原样搬运，时长天然精确，仍显式给目标时长保持口径一致。
+                        parts.push({ blob: await cutVideoSegment(sourceBlob, 0, rangeStart), sceneStart: true, targetDurationMs: rangeStart });
                     }
-                    produced.forEach((part) => parts.push({ blob: part.blob, sceneStart: part.range.sceneStart }));
+                    // 生成段的时长由模型决定，按原片段落的目标时长归一化：
+                    // 请求 4 秒可能给 3.8 或 4.3，不归一化的话成片总时长会偏离原片，
+                    // 而音轨是整轨取自原片的 —— 音画漂移，越到后面口型越对不上。
+                    produced.forEach((part) => parts.push({ blob: part.blob, sceneStart: part.range.sceneStart, targetDurationMs: part.range.endMs - part.range.startMs }));
                     if (plan.mode === "repaint" && plan.durationMs - rangeEnd > 60) {
                         // 尾段起点正好是原片的场景切点时不做淡化，那里本来就没有连续性。
-                        parts.push({ blob: await cutVideoSegment(sourceBlob, rangeEnd, plan.durationMs), sceneStart: plan.endAtCut });
+                        parts.push({ blob: await cutVideoSegment(sourceBlob, rangeEnd, plan.durationMs), sceneStart: plan.endAtCut, targetDurationMs: plan.durationMs - rangeEnd });
                     }
 
                     const merged = await concatVideoParts(parts, {
