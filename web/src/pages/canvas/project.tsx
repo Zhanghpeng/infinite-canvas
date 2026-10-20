@@ -332,6 +332,8 @@ function InfiniteCanvasPage() {
     const [depthVideoNode, setDepthVideoNode] = useState<CanvasNodeData | null>(null);
     const [videoTimelineNode, setVideoTimelineNode] = useState<CanvasNodeData | null>(null);
     const [videoTimelineSubmitting, setVideoTimelineSubmitting] = useState(false);
+    /** 正在跑分段任务的源片节点 id：提交即关弹窗，靠它防止同一个源片被重复提交。 */
+    const runningVideoEditsRef = useRef<Set<string>>(new Set());
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
     const [previewImageId, setPreviewImageId] = useState<string | null>(null);
     const [titleEditing, setTitleEditing] = useState(false);
@@ -3430,6 +3432,117 @@ function InfiniteCanvasPage() {
      * - 局部重绘：参考视频 = 原片该段；参考图 = 该段首帧 + 尾帧（钉住接缝）
      * - 角色替换：参考视频 = 原片该段；参考图 = 角色图 + 该段首尾帧
      */
+    /**
+     * 跑一段：切段 → 上传 → 抽首尾帧 → 生成 → 回填节点。
+     * 成功返回成片 blob（供合成），失败把节点标红后抛出，由调用方决定提示与是否继续。
+     * 批量任务与单段重试共用这一条链路 —— 分开写两份，重试就会悄悄丢掉角色图或首尾帧。
+     */
+    const runVideoSegment = useCallback(
+        async (params: {
+            source: CanvasNodeData;
+            sourceBlob: Blob;
+            range: VideoRange;
+            castIds: string[];
+            promptText: string;
+            config: AiConfig;
+            segmentId: string;
+            /** 参考视频文件名，重试时保持与首次一致，便于对照。 */
+            segmentLabel: string;
+            signal?: AbortSignal;
+        }): Promise<Blob> => {
+            const { source, sourceBlob, range, castIds, promptText, config, segmentId, segmentLabel, signal } = params;
+            const sourceUrl = source.metadata?.content || "";
+
+            // 1. 切出这一段：模型吃不了长片，也吃不了整片
+            const segmentBlob = await cutVideoSegment(sourceBlob, range.startMs, range.endMs);
+            const segmentUpload = await uploadMediaFile(segmentBlob, "video");
+
+            // 2. 参考图：角色在前（模型对靠前的参考更敏感），首尾帧在后钉住接缝
+            const castImages = castIds.map((id) => nodesRef.current.find((item) => item.id === id)).filter((item): item is CanvasNodeData => Boolean(item?.metadata?.content));
+            const referenceImages: ReferenceImage[] = castImages.map((castNode) => ({
+                id: castNode.id,
+                name: `${castNode.title || "cast"}.png`,
+                type: "image/png",
+                dataUrl: castNode.metadata?.content || "",
+                url: castNode.metadata?.content || "",
+            }));
+            const headFrame = await captureFrameDataUrl(sourceUrl, range.startMs, { width: 960, signal });
+            const tailFrame = await captureFrameDataUrl(sourceUrl, Math.max(range.startMs, range.endMs - 34), { width: 960, signal });
+            referenceImages.push(
+                { id: `head-${segmentId}`, name: "segment_start.jpg", type: "image/jpeg", dataUrl: headFrame, url: headFrame },
+                { id: `tail-${segmentId}`, name: "segment_end.jpg", type: "image/jpeg", dataUrl: tailFrame, url: tailFrame },
+            );
+
+            // 3. 生成：参考视频给内容与节奏，首尾帧给接缝，角色图给外观
+            const result = await requestVideoGeneration(config, promptText, referenceImages, {
+                signal,
+                videoMode: "omni",
+                referenceVideos: [{ id: segmentId, name: `${segmentLabel}.mp4`, type: "video/mp4", url: segmentUpload.url, storageKey: segmentUpload.storageKey, durationMs: segmentUpload.durationMs }],
+                seed: generateRandomSeed(),
+                onProgress: (status, detail) => {
+                    if (status === "submitted" && detail?.jobId) patchCanvasNode(segmentId, { metadata: { ...nodesRef.current.find((item) => item.id === segmentId)?.metadata, jobId: detail.jobId } });
+                },
+            });
+            const video = await storeGeneratedVideo(result);
+            const storedBlob = video.storageKey ? await getMediaBlob(video.storageKey) : null;
+            const videoBlob = storedBlob ?? (await (await fetch(video.url)).blob());
+
+            const videoSize = fitNodeSize(video.width || source.width, video.height || source.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+            const currentNode = nodesRef.current.find((item) => item.id === segmentId);
+            const sizePatch: Partial<CanvasNodeData> = { width: videoSize.width, height: videoSize.height };
+            if (currentNode) sizePatch.position = { x: currentNode.position.x + currentNode.width / 2 - videoSize.width / 2, y: currentNode.position.y };
+            patchCanvasNode(segmentId, {
+                ...sizePatch,
+                metadata: { ...currentNode?.metadata, ...videoMetadata(video), status: NODE_STATUS_SUCCESS, prompt: promptText, effectivePrompt: promptText, errorDetails: undefined, jobId: undefined, isTimeout: undefined },
+            });
+            return videoBlob;
+        },
+        [patchCanvasNode],
+    );
+
+    /**
+     * 单独重试某一个段。走 runVideoSegment，按该段 metadata 里记下的角色集合与
+     * 首尾帧锚点重来 —— 通用重试会丢掉这些只在运行时构造的参考，
+     * 出来的角色跟同批其他段对不上。
+     */
+    const handleRetryVideoSegment = useCallback(
+        async (node: CanvasNodeData) => {
+            const segment = node.metadata?.videoSegment;
+            const source = nodesRef.current.find((item) => item.id === segment?.sourceNodeId);
+            if (!segment || !source?.metadata?.content) return;
+            patchCanvasNode(node.id, { metadata: { ...node.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined, jobId: undefined, isTimeout: undefined } });
+            try {
+                const sourceBlob = await loadNodeVideoBlob(source);
+                const config: AiConfig = {
+                    ...effectiveConfig,
+                    videoMode: "omni",
+                    channelId: node.metadata?.channelId || source.metadata?.channelId || effectiveConfig.channelId,
+                    workflowId: node.metadata?.workflowId || source.metadata?.workflowId || effectiveConfig.workflowId,
+                };
+                await runVideoSegment({
+                    source,
+                    sourceBlob,
+                    range: { startMs: segment.startMs, endMs: segment.endMs, sceneStart: segment.sceneStart ?? false },
+                    castIds: segment.castNodeIds ?? [],
+                    promptText: node.metadata?.prompt || node.metadata?.effectivePrompt || "",
+                    config,
+                    segmentId: node.id,
+                    segmentLabel: `segment_${segment.index + 1}`,
+                });
+                message.success({ content: t("canvas.videoTimeline.toast.segmentDone", { index: segment.index + 1, count: segment.index + 1 }), duration: 2 });
+            } catch (error) {
+                if (isGenerationCanceled(error)) {
+                    patchCanvasNode(node.id, { metadata: { ...nodesRef.current.find((item) => item.id === node.id)?.metadata, status: NODE_STATUS_ERROR, errorDetails: t("canvas.videoTimeline.toast.cancelled") } });
+                    return;
+                }
+                const errorDetails = error instanceof Error ? error.message : String(error);
+                patchCanvasNode(node.id, { metadata: { ...nodesRef.current.find((item) => item.id === node.id)?.metadata, status: NODE_STATUS_ERROR, errorDetails } });
+                message.error({ content: t("canvas.videoTimeline.toast.segmentFailed", { index: segment.index + 1, error: errorDetails }) });
+            }
+        },
+        [effectiveConfig, isGenerationCanceled, message, patchCanvasNode, runVideoSegment, t],
+    );
+
     const handleVideoEditSubmit = useCallback(
         async (plan: VideoEditPlan) => {
             const source = videoTimelineNode;
@@ -3440,14 +3553,25 @@ function InfiniteCanvasPage() {
             const composeKey = `video-compose-${source.id}`;
             const controller = new AbortController();
 
-            setVideoTimelineSubmitting(true);
+            // 同一个源片同时只跑一个任务：弹窗关掉后用户可能再点一次，那时
+            // 前一次任务的段节点还没跑完，两批段会互相穿插、成片也对不上。
+            if (runningVideoEditsRef.current.has(source.id)) {
+                message.warning({ content: t("canvas.videoTimeline.toast.alreadyRunning"), key: toastKey, duration: 4 });
+                return;
+            }
+            runningVideoEditsRef.current.add(source.id);
+
+            // 提交即放手：弹窗立刻关掉，任务在后台逐段跑。
+            // 串行 await 并不阻塞 UI 线程，真正挡住用户的一直是这个模态弹窗——
+            // 他要的是"先去干别的，回来看到段节点一个个出画面"。
+            // 进度改由画布上的段节点承载（loading → 成功/失败），toast 只做旁证。
+            setVideoTimelineSubmitting(false);
+            setVideoTimelineNode(null);
+
             const produced: { nodeId: string; blob: Blob; range: VideoRange }[] = [];
 
             try {
                 const sourceBlob = await loadNodeVideoBlob(source);
-                const castImages = plan.castNodeIds
-                    .map((id) => nodesRef.current.find((item) => item.id === id))
-                    .filter((item): item is CanvasNodeData => Boolean(item?.metadata?.content));
                 const promptText = plan.prompt || (plan.mode === "repaint" ? t("canvas.videoTimeline.prompt.repaint") : t("canvas.videoTimeline.prompt.character"));
                 const config: AiConfig = {
                     ...effectiveConfig,
@@ -3464,6 +3588,12 @@ function InfiniteCanvasPage() {
                 for (let index = 0; index < plan.ranges.length; index += 1) {
                     if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
                     const range = plan.ranges[index];
+                    // 段级角色覆盖：这一段勾了谁就只喂谁。全都喂同一个模型，
+                    // 它会把画面里并不存在的人也一起"换"出来。
+                    const castIds = range.castNodeIds?.length ? range.castNodeIds : plan.castNodeIds;
+                    const castImages = castIds
+                        .map((id) => nodesRef.current.find((item) => item.id === id))
+                        .filter((item): item is CanvasNodeData => Boolean(item?.metadata?.content));
                     const segmentStartedAt = Date.now();
                     if (index > 0 && segmentCosts.length) {
                         const average = segmentCosts.reduce((sum, cost) => sum + cost, 0) / segmentCosts.length;
@@ -3499,16 +3629,19 @@ function InfiniteCanvasPage() {
                                     channelId: config.channelId,
                                     workflowId: config.workflowId,
                                     seconds: ((range.endMs - range.startMs) / 1000).toFixed(1),
-                                    videoSegment: {
-                                        sourceNodeId: source.id,
-                                        sourceDurationMs: source.metadata.durationMs || undefined,
-                                        startMs: range.startMs,
-                                        endMs: range.endMs,
-                                        index,
-                                        sceneStart: range.sceneStart,
-                                        mode: plan.mode,
-                                        anchor: { firstFrameMs: range.startMs, lastFrameMs: range.endMs },
-                                    },
+                            videoSegment: {
+                                sourceNodeId: source.id,
+                                sourceDurationMs: source.metadata.durationMs || undefined,
+                                startMs: range.startMs,
+                                endMs: range.endMs,
+                                index,
+                                sceneStart: range.sceneStart,
+                                mode: plan.mode,
+                                // 记下这一段实际用了哪些角色：单段重试时要按同一套参考重来，
+                                // 否则重试出来的角色跟同批其他段对不上。
+                                castNodeIds: castIds,
+                                anchor: { firstFrameMs: range.startMs, lastFrameMs: range.endMs },
+                            },
                                 },
                             },
                         ],
@@ -3516,50 +3649,20 @@ function InfiniteCanvasPage() {
                     );
 
                     try {
-                        // 1. 切出这一段：模型吃不了长片，也吃不了整片
-                        const segmentBlob = await cutVideoSegment(sourceBlob, range.startMs, range.endMs);
-                        const segmentUpload = await uploadMediaFile(segmentBlob, "video");
-
-                        // 2. 参考图：角色在前（模型对靠前的参考更敏感），首尾帧在后钉住接缝
-                        const referenceImages: ReferenceImage[] = castImages.map((castNode) => ({
-                            id: castNode.id,
-                            name: `${castNode.title || "cast"}.png`,
-                            type: "image/png",
-                            dataUrl: castNode.metadata?.content || "",
-                            url: castNode.metadata?.content || "",
-                        }));
-                        // 传 signal：不传的话点取消后抽帧还在跑，且元数据加载没有超时兜底。
-                        const headFrame = await captureFrameDataUrl(sourceUrl, range.startMs, { width: 960, signal: controller.signal });
-                        const tailFrame = await captureFrameDataUrl(sourceUrl, Math.max(range.startMs, range.endMs - 34), { width: 960, signal: controller.signal });
-                        referenceImages.push(
-                            { id: `head-${segmentId}`, name: "segment_start.jpg", type: "image/jpeg", dataUrl: headFrame, url: headFrame },
-                            { id: `tail-${segmentId}`, name: "segment_end.jpg", type: "image/jpeg", dataUrl: tailFrame, url: tailFrame },
-                        );
-
-                        // 3. 生成：参考视频给内容与节奏，首尾帧给接缝，角色图给外观
-                        const result = await requestVideoGeneration(config, promptText, referenceImages, {
+                        // 批量与单段重试共用同一条链路：切段、上传、抽首尾帧、生成、回填。
+                        const segmentBlob = await runVideoSegment({
+                            source,
+                            sourceBlob,
+                            range,
+                            castIds,
+                            promptText,
+                            config,
+                            segmentId,
+                            segmentLabel: `segment_${index + 1}`,
                             signal: controller.signal,
-                            videoMode: "omni",
-                            referenceVideos: [{ id: segmentId, name: `segment_${index + 1}.mp4`, type: "video/mp4", url: segmentUpload.url, storageKey: segmentUpload.storageKey, durationMs: segmentUpload.durationMs }],
-                            seed: generateRandomSeed(),
-                            onProgress: (status, detail) => {
-                                if (status === "submitted" && detail?.jobId) patchCanvasNode(segmentId, { metadata: { ...nodesRef.current.find((item) => item.id === segmentId)?.metadata, jobId: detail.jobId } });
-                            },
                         });
-                        const video = await storeGeneratedVideo(result);
-                        const storedBlob = video.storageKey ? await getMediaBlob(video.storageKey) : null;
-                        const videoBlob = storedBlob ?? (await (await fetch(video.url)).blob());
-                        produced.push({ nodeId: segmentId, blob: videoBlob, range });
+                        produced.push({ nodeId: segmentId, blob: segmentBlob, range });
                         segmentCosts.push(Date.now() - segmentStartedAt);
-
-                        const videoSize = fitNodeSize(video.width || source.width, video.height || source.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
-                        const currentNode = nodesRef.current.find((item) => item.id === segmentId);
-                        const sizePatch: Partial<CanvasNodeData> = { width: videoSize.width, height: videoSize.height };
-                        if (currentNode) sizePatch.position = { x: currentNode.position.x + currentNode.width / 2 - videoSize.width / 2, y: currentNode.position.y };
-                        patchCanvasNode(segmentId, {
-                            ...sizePatch,
-                            metadata: { ...currentNode?.metadata, ...videoMetadata(video), status: NODE_STATUS_SUCCESS, prompt: promptText, effectivePrompt: promptText, errorDetails: undefined, jobId: undefined, isTimeout: undefined },
-                        });
                         message.loading({ content: t("canvas.videoTimeline.toast.segmentDone", { index: index + 1, count: plan.ranges.length }), key: toastKey, duration: 1.2 });
                     } catch (error) {
                         if (isGenerationCanceled(error)) throw error;
@@ -3655,6 +3758,7 @@ function InfiniteCanvasPage() {
                 }
             } finally {
                 setVideoTimelineSubmitting(false);
+                runningVideoEditsRef.current.delete(source.id);
             }
         },
         [appendCanvasNodes, effectiveConfig, isGenerationCanceled, message, patchCanvasNode, t, videoTimelineNode],
@@ -5680,10 +5784,16 @@ function InfiniteCanvasPage() {
     }, []);
     const handleNodeRetry = useCallback(
         (node: CanvasNodeData) => {
+            // 段节点的参考（角色图 + 首尾帧）是运行时构造的，通用重发会丢掉它们，
+            // 出来的角色跟同批其他段对不上。走分段专用链路重来。
+            if (node.metadata?.videoSegment) {
+                void handleRetryVideoSegment(node);
+                return;
+            }
             const intent = Boolean(node.metadata?.jobId) ? "resume" : "retry";
             void handleRetryNode(node, undefined, intent);
         },
-        [handleRetryNode],
+        [handleRetryNode, handleRetryVideoSegment],
     );
 
     const interruptedNodes = useMemo(() => nodes.filter(hasInterruptedGeneration), [nodes]);
