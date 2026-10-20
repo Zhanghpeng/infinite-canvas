@@ -1226,6 +1226,12 @@ export default {
             "drag": "拖动",
             "click": "点击"
         },
+        "emptyState": {
+            "title": "把素材拖进来，或者让 AI 起手",
+            "body": "图片、视频、音频都能直接拖到画布上；选中节点后可以接下游、局部重绘或做角色替换。",
+            "upload": "上传素材",
+            "agent": "让 AI 起手"
+        },
         "layout": {
             "alignLeft": "左对齐",
             "alignCenterX": "水平居中对齐",

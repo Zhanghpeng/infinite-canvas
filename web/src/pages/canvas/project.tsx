@@ -6072,6 +6072,26 @@ function InfiniteCanvasPage() {
                     />
                 ) : null}
 
+                {projectLoaded && nodes.length === 0 ? (
+                    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-8">
+                        <div
+                            className="pointer-events-auto w-full max-w-md rounded-2xl border border-dashed px-8 py-7 text-center shadow-sm backdrop-blur"
+                            style={{ borderColor: theme.node.stroke, background: theme.toolbar.panel, color: theme.node.text }}
+                        >
+                            <div className="text-base font-medium">{t("canvas.emptyState.title")}</div>
+                            <p className="mt-2 text-sm leading-relaxed" style={{ color: theme.node.muted }}>
+                                {t("canvas.emptyState.body")}
+                            </p>
+                            <div className="mt-4 flex items-center justify-center gap-2">
+                                <Button onClick={() => handleUploadRequest()}>{t("canvas.emptyState.upload")}</Button>
+                                <Button type="primary" onClick={() => openAgentPanel()}>
+                                    {t("canvas.emptyState.agent")}
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
+
                 {contextMenu ? (
                     <CanvasNodeContextMenu
                         menu={contextMenu}

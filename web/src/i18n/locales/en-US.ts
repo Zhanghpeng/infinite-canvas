@@ -1226,6 +1226,12 @@ export default {
             "drag": "Drag",
             "click": "Click"
         },
+        "emptyState": {
+            "title": "Drop your media in, or let the AI start",
+            "body": "Images, videos and audio can be dragged straight onto the canvas. Select a node to chain a downstream step, repaint a segment, or swap characters.",
+            "upload": "Upload media",
+            "agent": "Start with AI"
+        },
         "layout": {
             "alignLeft": "Align left",
             "alignCenterX": "Align horizontal centers",
