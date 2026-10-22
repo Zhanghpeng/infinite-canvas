@@ -63,6 +63,9 @@ export async function restoreGenerationContext(metadata: CanvasNodeMetadata): Pr
         referenceImages,
         referenceVideos,
         referenceAudios,
+        // 音轨通道本来就不进 generationReferences（它是成片对白，不参与生成），
+        // 所以重放一份历史记录时自然也没有轨可还原。
+        audioTracks: [],
         textCount: metadata.generationReferences.filter((reference) => reference.kind === "text").length,
         imageCount: referenceImages.length,
         videoCount: referenceVideos.length,

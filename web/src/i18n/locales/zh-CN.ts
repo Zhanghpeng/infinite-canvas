@@ -1269,7 +1269,11 @@ export default {
             "selecting": "正在添加参考",
             "choose": "选择",
             "selectingHint": "从画布选择参考 · ESC 返回输入框",
-            "locateOrDrag": "点击定位节点，按住拖拽重排"
+            "locateOrDrag": "点击定位节点，按住拖拽重排",
+            "audioReference": "参考",
+            "audioTrack": "音轨",
+            "audioReferenceHint": "生成期音频参考：占 3 条音频配额，会写进提示词的 <Audio N>",
+            "audioTrackHint": "成片对白轨：不占音频配额、不进工作流，导出后在剪辑里合"
         },
         "composer": {
             "title": "组装提示词",

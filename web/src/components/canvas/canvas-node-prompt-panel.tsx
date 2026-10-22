@@ -18,6 +18,7 @@ import { CanvasTextSettingsPopover } from "./canvas-text-settings-popover";
 import { CanvasPromptExecutorPicker, CanvasPromptSkillPicker } from "./canvas-prompt-skill-picker";
 import { resolveSkillProduces, type PromptAssistantConfig } from "@/lib/canvas/canvas-prompt-assistant";
 import { voiceAssetUrl, voiceAudioUrl, type CanvasVoice } from "@/lib/canvas/voice-library";
+import { setAudioEdgeMode, type CanvasAudioEdgeMode } from "@/lib/canvas/canvas-audio-channels";
 import { uploadMediaFile } from "@/services/file-storage";
 import { CanvasNodeType, type CanvasGenerationIntent, type CanvasGenerationMode, type CanvasNodeData, type CanvasNodeMetadata } from "@/types/canvas";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
@@ -119,6 +120,18 @@ export function CanvasNodePromptPanel({
 
     const hasVoice = Boolean(node.metadata?.voiceSource || node.metadata?.voiceId);
 
+    /**
+     * 切换某条音频入边的用途。
+     *
+     * 写回时会把"与默认推断一致"的条目删掉，所以上游以后从音乐改成配音，
+     * 这条入边会跟着变回音轨，而不是被一条看不见的旧覆盖压住。
+     */
+    const handleAudioEdgeModeChange = (sourceNodeId: string, edgeMode: CanvasAudioEdgeMode) => {
+        const source = nodes.find((item) => item.id === sourceNodeId);
+        if (!source) return;
+        onConfigChange(node.id, { audioEdgeModes: setAudioEdgeMode(node.metadata?.audioEdgeModes, source, edgeMode) });
+    };
+
     const patchMetadata = (patch: Partial<CanvasNodeMetadata>) => onConfigChange(node.id, patch);
 
     /** 选中音色卡：音色、模式、强度、参考音频一次性落到节点上。 */
@@ -213,6 +226,7 @@ export function CanvasNodePromptPanel({
                     onStartSelection={onStartReferenceSelection}
                     onReorder={onReorderReferences}
                     onLocateNode={onLocateNode}
+                    onAudioEdgeModeChange={handleAudioEdgeModeChange}
                 />
             )}
             <CanvasPromptChipInput
@@ -503,6 +517,10 @@ export function CanvasNodePromptPanel({
                             onStartReferenceSelection?.(nodeId);
                         }}
                         onReorder={onReorderReferences}
+                        onAudioEdgeModeChange={(sourceNodeId, edgeMode) => {
+                            closeExpandedEditor();
+                            handleAudioEdgeModeChange(sourceNodeId, edgeMode);
+                        }}
                         onLocateNode={(targetId) => {
                             closeExpandedEditor();
                             onLocateNode?.(targetId);

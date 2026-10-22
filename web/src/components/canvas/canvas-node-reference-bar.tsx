@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { getGroupResourceNodes } from "@/lib/canvas/canvas-resource-references";
+import { resolveAudioEdgeMode, supportsAudioEdgeModes, toggleAudioEdgeMode, type CanvasAudioEdgeMode } from "@/lib/canvas/canvas-audio-channels";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 
@@ -14,6 +15,8 @@ export type CanvasReferenceItemData = {
     sourceNodeId: string;
     badge: string;
     kind: string;
+    /** 音频入边的用途；非视频节点上的音频、以及非音频项都是 undefined。 */
+    audioEdgeMode?: CanvasAudioEdgeMode;
 };
 
 export function CanvasNodeReferenceBar({
@@ -24,6 +27,7 @@ export function CanvasNodeReferenceBar({
     onStartSelection,
     onReorder,
     onLocateNode,
+    onAudioEdgeModeChange,
 }: {
     nodeId: string;
     nodes: CanvasNodeData[];
@@ -32,6 +36,8 @@ export function CanvasNodeReferenceBar({
     onStartSelection?: (nodeId: string) => void;
     onReorder?: (toNodeId: string, orderedSourceNodeIds: string[]) => void;
     onLocateNode?: (nodeId: string) => void;
+    /** 视频节点上把某条音频入边在"参考 / 音轨"之间切换。 */
+    onAudioEdgeModeChange?: (sourceNodeId: string, mode: CanvasAudioEdgeMode) => void;
 }) {
     const { t } = useTranslation();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -41,6 +47,8 @@ export function CanvasNodeReferenceBar({
 
     const [dragIndex, setDragIndex] = useState<number | null>(null);
     const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
+
+    const targetNode = useMemo(() => nodes.find((node) => node.id === nodeId), [nodeId, nodes]);
 
     const items = useMemo<CanvasReferenceItemData[]>(() => {
         const counts: Record<string, number> = { image: 0, video: 0, audio: 0, text: 0 };
@@ -75,9 +83,10 @@ export function CanvasNodeReferenceBar({
                         : kind === "text"
                           ? `文本${count + 1}`
                           : `${count + 1}`;
-            return { node, sourceNodeId, badge, kind };
+            const audioEdgeMode = kind === "audio" && supportsAudioEdgeModes(targetNode) ? resolveAudioEdgeMode(targetNode?.metadata?.audioEdgeModes, node) : undefined;
+            return { node, sourceNodeId, badge, kind, audioEdgeMode };
         });
-    }, [connectedNodes, nodes]);
+    }, [connectedNodes, nodes, targetNode]);
 
     const commitReorder = (fromIndex: number, toIndex: number) => {
         if (
@@ -199,6 +208,11 @@ export function CanvasNodeReferenceBar({
                                 isAnyDragging={dragIndex !== null}
                                 onRemove={() => onDisconnect?.(item.sourceNodeId, nodeId)}
                                 onLocate={() => onLocateNode?.(item.node.id)}
+                                onToggleAudioMode={
+                                    item.audioEdgeMode && onAudioEdgeModeChange
+                                        ? () => onAudioEdgeModeChange(item.sourceNodeId, toggleAudioEdgeMode(item.audioEdgeMode as CanvasAudioEdgeMode))
+                                        : undefined
+                                }
                                 onDragStart={(e) => handleDragStart(e, index)}
                                 onDragOver={(e) => handleDragOver(e, index)}
                                 onDrop={(e) => handleDrop(e, index)}
@@ -229,6 +243,7 @@ function ReferenceItem({
     isAnyDragging,
     onRemove,
     onLocate,
+    onToggleAudioMode,
     onDragStart,
     onDragOver,
     onDrop,
@@ -241,6 +256,7 @@ function ReferenceItem({
     isAnyDragging: boolean;
     onRemove: () => void;
     onLocate?: () => void;
+    onToggleAudioMode?: () => void;
     onDragStart: (e: DragEvent) => void;
     onDragOver: (e: DragEvent) => void;
     onDrop: (e: DragEvent) => void;
@@ -312,6 +328,30 @@ function ReferenceItem({
                 <span className="pointer-events-none absolute left-0.5 top-0.5 z-10 rounded px-1 py-0.5 text-[9px] font-semibold leading-none text-white bg-black/65 backdrop-blur-xs select-none shadow-xs">
                     {item.badge}
                 </span>
+
+                {/* 音频入边用途角标：点一下在「参考 / 音轨」之间切换 */}
+                {item.audioEdgeMode && (
+                    <button
+                        type="button"
+                        draggable={false}
+                        className="absolute inset-x-0 bottom-0 z-20 truncate rounded-b-[inherit] px-1 py-0.5 text-[9px] font-medium leading-none text-white transition hover:opacity-90"
+                        style={{ background: item.audioEdgeMode === "track" ? "rgba(16,185,129,0.92)" : "rgba(0,0,0,0.55)" }}
+                        title={
+                            item.audioEdgeMode === "track"
+                                ? t("canvas.references.audioTrackHint")
+                                : t("canvas.references.audioReferenceHint")
+                        }
+                        aria-label={item.audioEdgeMode === "track" ? t("canvas.references.audioTrack") : t("canvas.references.audioReference")}
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onToggleAudioMode?.();
+                        }}
+                        onDragStart={(event) => event.preventDefault()}
+                    >
+                        {item.audioEdgeMode === "track" ? t("canvas.references.audioTrack") : t("canvas.references.audioReference")}
+                    </button>
+                )}
 
                 <span className="grid size-full place-items-center overflow-hidden rounded-[inherit] pointer-events-none">
                     {(resource?.kind === "image" || node.type === CanvasNodeType.Image) && content ? (

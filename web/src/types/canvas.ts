@@ -225,6 +225,15 @@ export type CanvasNodeMetadata = {
     emotionText?: string;
     /** 情绪强度，跟着音色卡走，可微调。 */
     emotionStrength?: number;
+    /**
+     * 视频节点上每条音频入边的用途，键是上游音频节点 id。
+     *
+     * 只有用户手动切过的才记在这里，没记的按上游的 `audioKind` 推断（配音=音轨，
+     * 音乐=参考）。之所以不给每条连线都写一份：连线本身没有持久化的自定义字段，
+     * 而"默认值随上游变"比"连上那一刻的快照"更符合直觉——上游从音乐改成配音，
+     * 下游用途应该跟着变。
+     */
+    audioEdgeModes?: Record<string, "reference" | "track">;
     references?: string[];
     naturalWidth?: number;
     naturalHeight?: number;

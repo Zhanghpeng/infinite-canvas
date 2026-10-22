@@ -1269,7 +1269,11 @@ export default {
             "selecting": "Adding references",
             "choose": "Select",
             "selectingHint": "Select references from canvas · ESC to return",
-            "locateOrDrag": "Click to locate node, drag to reorder"
+            "locateOrDrag": "Click to locate node, drag to reorder",
+            "audioReference": "Ref",
+            "audioTrack": "Track",
+            "audioReferenceHint": "Audio reference for generation: uses one of the 3 audio slots and becomes <Audio N> in the prompt",
+            "audioTrackHint": "Dialogue track for the final cut: no audio slot, not sent to the workflow, mixed in your editor"
         },
         "composer": {
             "title": "Compose prompt",

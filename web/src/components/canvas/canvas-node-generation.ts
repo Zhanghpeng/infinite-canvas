@@ -4,7 +4,17 @@ import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import { CanvasNodeType, type CanvasConnection, type CanvasGenerationReferenceSnapshot, type CanvasNodeData } from "@/types/canvas";
 import { getGenerationResourceNodes, getGroupResourceNodes } from "@/lib/canvas/canvas-resource-references";
+import { resolveAudioEdgeMode, supportsAudioEdgeModes } from "@/lib/canvas/canvas-audio-channels";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
+
+/** 只登记不上工作流的配音轨：成片对白，用户在剪辑软件里合。 */
+export type NodeGenerationAudioTrack = {
+    nodeId: string;
+    title: string;
+    url?: string;
+    storageKey?: string;
+    durationMs?: number;
+};
 
 export type NodeGenerationContext = {
     prompt: string;
@@ -12,6 +22,8 @@ export type NodeGenerationContext = {
     referenceImages: ReferenceImage[];
     referenceVideos: ReferenceVideo[];
     referenceAudios: ReferenceAudio[];
+    /** 挂在视频节点上、但不参与生成的配音轨。 */
+    audioTracks: NodeGenerationAudioTrack[];
     textCount: number;
     imageCount: number;
     videoCount: number;
@@ -44,7 +56,8 @@ export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData
         return buildComposerGenerationContext(inputs, nodes, prompt);
     }
 
-    const resourceInputs = orderFrameSlotInputs(flattenGenerationInputs(inputs), nodeId, connections);
+    const orderedInputs = orderFrameSlotInputs(flattenGenerationInputs(inputs), nodeId, connections);
+    const { referenceInputs: resourceInputs, audioTracks } = splitAudioTrackInputs(nodeId, orderedInputs, nodes);
     const referenceImages = resourceInputs.map((input) => input.image).filter((image): image is ReferenceImage => Boolean(image));
     const referenceVideos = resourceInputs.map((input) => input.video).filter((video): video is ReferenceVideo => Boolean(video));
     const referenceAudios = resourceInputs.map((input) => input.audio).filter((audio): audio is ReferenceAudio => Boolean(audio));
@@ -113,11 +126,49 @@ export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData
         referenceImages,
         referenceVideos,
         referenceAudios,
+        audioTracks,
         textCount: textResources.length,
         imageCount: referenceImages.length,
         videoCount: referenceVideos.length,
         audioCount: referenceAudios.length,
     };
+}
+
+/**
+ * 把"音轨通道"的音频输入从生成输入里摘出来。
+ *
+ * 摘掉的这部分既不进 ComfyUI、也不占 3 音频配额、还不进 `generationReferences`：
+ * 它是成片对白，混音是剪辑环节的事。留在生成输入里的话，配音会顶掉 H3 的音频参考名额，
+ * 正是要避免的"阉割"。
+ */
+function splitAudioTrackInputs(nodeId: string, inputs: NodeGenerationResourceInput[], nodes: CanvasNodeData[]) {
+    const target = nodes.find((node) => node.id === nodeId);
+    if (!supportsAudioEdgeModes(target)) return { referenceInputs: inputs, audioTracks: [] as NodeGenerationAudioTrack[] };
+
+    const overrides = target?.metadata?.audioEdgeModes;
+    const sourceById = new Map(nodes.map((node) => [node.id, node]));
+    const referenceInputs: NodeGenerationResourceInput[] = [];
+    const audioTracks: NodeGenerationAudioTrack[] = [];
+
+    for (const input of inputs) {
+        if (input.type !== "audio") {
+            referenceInputs.push(input);
+            continue;
+        }
+        const source = sourceById.get(input.nodeId);
+        if (!source || resolveAudioEdgeMode(overrides, source) === "reference") {
+            referenceInputs.push(input);
+            continue;
+        }
+        audioTracks.push({
+            nodeId: input.nodeId,
+            title: input.title,
+            url: input.audio?.url,
+            storageKey: input.audio?.storageKey,
+            durationMs: input.audio?.durationMs,
+        });
+    }
+    return { referenceInputs, audioTracks };
 }
 
 function buildComposerGenerationContext(inputs: NodeGenerationInput[], nodes: CanvasNodeData[], prompt: string): NodeGenerationContext {
@@ -172,6 +223,7 @@ function buildComposerGenerationContext(inputs: NodeGenerationInput[], nodes: Ca
             referenceImages: [],
             referenceVideos: [],
             referenceAudios: [],
+            audioTracks: [],
             textCount: 0,
             imageCount: 0,
             videoCount: 0,
@@ -185,6 +237,7 @@ function buildComposerGenerationContext(inputs: NodeGenerationInput[], nodes: Ca
         referenceImages,
         referenceVideos,
         referenceAudios,
+        audioTracks: [],
         textCount: counts.text,
         imageCount: referenceImages.length,
         videoCount: referenceVideos.length,
