@@ -35,7 +35,9 @@ export function buildCanvasToolRequest(name: ToolName, input: Record<string, unk
     }
     if (name === "canvas_create_generation_flow") return applyOps(generationFlowOps(input, state));
     if (name === "canvas_generate_audio") {
-        throw new Error("当前项目尚未支持 ComfyUI 音频生成");
+        // 配乐与配音共用这条链路：差别只在 metadata 上的 audioKind，生成时由画布分流。
+        // 不传 audioKind 就是配乐，保持老调用方的行为不变。
+        return applyOps(generationFlowOps({ ...input, mode: "audio", autoRun: true }, state));
     }
     if (name === "canvas_generate_text" || name === "canvas_generate_image" || name === "canvas_generate_video") {
         return applyOps(generationFlowOps({ ...input, mode: name.replace("canvas_generate_", ""), autoRun: true }, state));
@@ -302,6 +304,11 @@ function configNodeOp(id: string, input: Record<string, unknown>, x: number, y: 
             audioFormat: input.audioFormat,
             audioSpeed: input.audioSpeed,
             audioInstructions: input.audioInstructions,
+            // 配音：音色只记名字，参考音频地址由画布侧按名字查卡片拿 —— 模型不该知道 public 路径。
+            audioKind: input.audioKind,
+            voiceName: input.voice,
+            emotionText: input.emotion,
+            emotionStrength: input.strength,
         }),
     };
 }

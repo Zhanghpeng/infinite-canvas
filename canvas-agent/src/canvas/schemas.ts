@@ -97,6 +97,20 @@ const generationOptionsSchema = z.object({
     audioInstructions: z.string().optional(),
 });
 
+/**
+ * 配音参数。
+ *
+ * 音色只收名字（"阿盖"）不收 id：模型记不住 `voice-07` 这种内部编号，
+ * 而画布侧能按名字查到卡片和它的参考音频。名字对不上就不生成，
+ * 而不是悄悄退到某个默认音色 —— 那会让"选了 A 念出来是 B"变成无法归因的怪事。
+ */
+const voiceOptionsSchema = z.object({
+    audioKind: z.enum(["music", "voice"]).optional(),
+    voice: z.string().optional(),
+    emotion: z.string().optional(),
+    strength: z.number().min(0).max(1.5).optional(),
+});
+
 const generationFlowSchema = z.object({
     prompt: z.string(),
     title: z.string().optional(),
@@ -117,13 +131,13 @@ export const toolInputSchemas = {
     canvas_create_attachment_nodes: z.object({ attachmentIds: z.array(z.string()).min(1), x: z.number().optional(), y: z.number().optional(), gap: z.number().optional(), direction: z.enum(["row", "column"]).optional() }),
     canvas_create_text_node: z.object({ text: z.string().optional(), x: z.number().optional(), y: z.number().optional(), title: z.string().optional(), width: z.number().optional(), height: z.number().optional() }),
     canvas_create_text_nodes: z.object({ items: z.array(textNodeSchema).min(1), x: z.number().optional(), y: z.number().optional(), gap: z.number().optional(), direction: z.enum(["row", "column"]).optional() }),
-    canvas_create_config_node: z.object({ prompt: z.string().optional(), mode: generationModeSchema.optional(), title: z.string().optional(), x: z.number().optional(), y: z.number().optional(), width: z.number().optional(), height: z.number().optional(), autoRun: z.boolean().optional() }).merge(generationOptionsSchema),
+    canvas_create_config_node: z.object({ prompt: z.string().optional(), mode: generationModeSchema.optional(), title: z.string().optional(), x: z.number().optional(), y: z.number().optional(), width: z.number().optional(), height: z.number().optional(), autoRun: z.boolean().optional() }).merge(generationOptionsSchema).merge(voiceOptionsSchema),
     canvas_create_image_prompt_flow: z.object({ prompt: z.string(), x: z.number().optional(), y: z.number().optional(), autoRun: z.boolean().optional() }).merge(generationOptionsSchema),
-    canvas_create_generation_flow: generationFlowSchema.extend({ mode: generationModeSchema.optional(), autoRun: z.boolean().optional() }).merge(generationOptionsSchema),
+    canvas_create_generation_flow: generationFlowSchema.extend({ mode: generationModeSchema.optional(), autoRun: z.boolean().optional() }).merge(generationOptionsSchema).merge(voiceOptionsSchema),
     canvas_generate_text: generationFlowSchema.merge(generationOptionsSchema),
     canvas_generate_image: generationFlowSchema.merge(generationOptionsSchema),
     canvas_generate_video: generationFlowSchema.merge(generationOptionsSchema),
-    canvas_generate_audio: generationFlowSchema.merge(generationOptionsSchema),
+    canvas_generate_audio: generationFlowSchema.merge(generationOptionsSchema).merge(voiceOptionsSchema),
     canvas_update_node: z.object({ id: z.string(), patch: recordSchema.optional(), metadata: recordSchema.optional() }),
     canvas_update_node_text: z.object({ id: z.string(), text: z.string(), title: z.string().optional() }),
     canvas_move_nodes: z.object({ items: z.array(z.object({ id: z.string(), x: z.number().optional(), y: z.number().optional(), dx: z.number().optional(), dy: z.number().optional() })).min(1) }),
@@ -202,7 +216,7 @@ export const toolDescriptions: Record<ToolName, string> = {
     canvas_generate_text: "创建通用文本生成流程并立即触发生成。",
     canvas_generate_image: "创建通用图片生成流程并立即触发生成。",
     canvas_generate_video: "创建通用视频生成流程并立即触发生成。",
-    canvas_generate_audio: "当前项目尚未支持 ComfyUI 音频生成，调用会返回显式错误。",
+    canvas_generate_audio: "生成音频节点。默认走配乐（prompt 里用 [caption]/[lyrics] 分段）；传 audioKind=voice 则走配音：prompt 是要念的台词，voice 是音色名（如「阿盖」，先用 canvas_get_state 或问用户确认，拿不准就先不传看报错），emotion 是一句情绪描述（可留空，留空按台词自动判断），strength 是情绪强度 0-1.5。配音时长由台词决定，不要传 seconds。",
     canvas_update_node: "更新节点基础字段或 metadata。",
     canvas_update_node_text: "更新文本节点内容和标题。",
     canvas_move_nodes: "移动一个或多个节点，支持绝对坐标或 dx/dy 偏移。",

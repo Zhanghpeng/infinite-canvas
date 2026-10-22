@@ -36,6 +36,13 @@ export function findVoice(voiceId?: string): CanvasVoice | undefined {
     return voiceId ? VOICE_BY_ID.get(voiceId) : undefined;
 }
 
+/** 按名字找音色。Agent 只知道名字（"阿盖"），记不住 voice-07 这种 id。 */
+export function findVoiceByName(name?: string): CanvasVoice | undefined {
+    const target = (name || "").trim();
+    if (!target) return undefined;
+    return CANVAS_VOICES.find((voice) => voice.name === target);
+}
+
 /** 静态资源的绝对地址。`BASE_URL` 保证部署在子路径时也不丢前缀。 */
 export function voiceAssetUrl(path: string): string {
     const base = import.meta.env.BASE_URL || "/";

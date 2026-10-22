@@ -9,6 +9,7 @@ import { requestEdit, requestGeneration, requestImageQuestion } from "@/services
 import { generateRandomSeed, requestComfyuiImage } from "@/services/api/comfyui";
 import { requestAudioGeneration, requestVoiceGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { ensureVoiceAudioName, resolveVoiceSourceUrl } from "@/lib/canvas/voice-audio";
+import { findVoice, findVoiceByName, voiceAudioUrl } from "@/lib/canvas/voice-library";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { defaultConfig, findWorkflow, getDefaultComfyWorkflowItems, getDefaultWorkflow, inpaintModelOptions, resolveModelChannel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
@@ -6010,7 +6011,10 @@ function InfiniteCanvasPage() {
                         // 音色文件要先进 ComfyUI 的 input 目录，`LoadAudio.audio` 只认文件名。
                         let uploadedVoiceName: string | undefined;
                         if (isVoice) {
-                            const voiceSource = await resolveVoiceSourceUrl(sourceNode?.metadata?.voiceSource);
+                            // 音色来源可能没显式记：agent 只知道音色名字，人类也可能从卡片换了名字。
+                            // 按 id → 名字 → 卡片音频三级回退，比要求上游一定填全更可靠。
+                            const voiceCard = findVoice(sourceNode?.metadata?.voiceId) || findVoiceByName(sourceNode?.metadata?.voiceName);
+                            const voiceSource = await resolveVoiceSourceUrl(sourceNode?.metadata?.voiceSource || voiceAudioUrl(voiceCard));
                             if (!voiceSource) throw new Error("这个配音节点还没选参考音色，请先选一个音色再生成");
                             uploadedVoiceName = await ensureVoiceAudioName(generationConfig, {
                                 channelId: sourceNode?.metadata?.channelId,

@@ -26,11 +26,29 @@ test("generation flow still creates a prompt node for prose prompts", () => {
     assert.match(String(config?.metadata?.prompt), /@\[node:text-/);
 });
 
-test("canvas_generate_audio synchronously throws unsupported ComfyUI audio error", () => {
-    assert.throws(
-        () => buildCanvasToolRequest("canvas_generate_audio", { prompt: "some audio prompt" }, null),
-        /当前项目尚未支持 ComfyUI 音频生成/,
-    );
+test("canvas_generate_audio 默认走配乐，不写 audioKind", () => {
+    const ops = opsOf("canvas_generate_audio", { prompt: "[caption] lofi\n[lyrics] la la" });
+    const config = ops.find((op) => op.type === "add_node" && op.nodeType === "config");
+    assert.equal(config?.metadata?.generationMode, "audio");
+    assert.equal(config?.metadata?.audioKind, undefined);
+    assert.ok(ops.some((op) => op.type === "run_generation"));
+});
+
+test("canvas_generate_audio 传 voice 时按配音落 metadata", () => {
+    const ops = opsOf("canvas_generate_audio", {
+        prompt: "等了这么久，我们终于可以一起出发了。",
+        audioKind: "voice",
+        voice: "阿盖",
+        emotion: "克制但难掩喜悦",
+        strength: 0.62,
+    });
+    const config = ops.find((op) => op.type === "add_node" && op.nodeType === "config");
+    // 音色只记名字：参考音频地址由画布侧按名字查卡片，模型不该知道 public 路径
+    assert.equal(config?.metadata?.audioKind, "voice");
+    assert.equal(config?.metadata?.voiceName, "阿盖");
+    assert.equal(config?.metadata?.emotionText, "克制但难掩喜悦");
+    assert.equal(config?.metadata?.emotionStrength, 0.62);
+    assert.equal(config?.metadata?.voiceSource, undefined);
 });
 
 test("canvas_generate_image still produces run_generation", () => {
