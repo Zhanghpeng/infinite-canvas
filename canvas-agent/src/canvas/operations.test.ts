@@ -211,3 +211,22 @@ test("canvas_director_stage 传 check 时只写自检指令，缺 nodeId 明确�
     const both = opsOf("canvas_director_stage", { nodeId: "stage-1", sceneId: "group-pan", check: true });
     assert.equal(both[0].metadata.directorStageCommand.type, "applyScene");
 });
+
+test("connect_nodes keeps the named frame slot instead of dropping it", () => {
+    const ops = opsOf("canvas_connect_nodes", {
+        connections: [
+            { fromNodeId: "img-head", toNodeId: "video-1", slot: "first_frame" },
+            { fromNodeId: "img-tail", toNodeId: "video-1", slot: "last_frame" },
+            { fromNodeId: "ref-1", toNodeId: "video-1" },
+        ],
+    });
+    assert.equal(ops.length, 3);
+    assert.deepEqual(
+        ops.map((op) => [op.fromNodeId, op.slot]),
+        [
+            ["img-head", "first_frame"],
+            ["img-tail", "last_frame"],
+            ["ref-1", undefined],
+        ],
+    );
+});

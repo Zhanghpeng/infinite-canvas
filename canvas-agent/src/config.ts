@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const DEFAULT_PORT = 17371;
 export const CONFIG_DIR = path.join(os.homedir(), ".infinite-canvas");
@@ -79,8 +80,81 @@ function initializeWorkspace(workspacePath: string) {
     const instructionsFile = path.join(workspacePath, "AGENTS.md");
     const current = fs.existsSync(instructionsFile) ? fs.readFileSync(instructionsFile, "utf8") : "";
     if (!current || current.startsWith("# Infinite Canvas Agent")) fs.writeFileSync(instructionsFile, AGENT_PROMPT);
+    syncBuiltinSkills(workspacePath);
     initializedWorkspaces.add(workspacePath);
 }
+
+/** 内置技能标记：有这个文件才说明目录归包管，可以安全覆盖。 */
+type BuiltinSkillMarker = { version: string; sourceHash?: string; syncedAt: string };
+
+/**
+ * 把随包发布的内置技能铺到工作区 `.agents/skills/`，Codex 通过 `skills/list` 就能发现。
+ *
+ * 三条规矩：
+ * - 只覆盖带 `.builtin.json` 标记的目录 —— 用户自己装的同名技能永不碰；
+ * - 包版本与内容哈希都没变才跳过，避免每次启动都全量拷贝；
+ * - 想定制内置技能，复制一份改名（见 builtin-skills/README.md），就地改会被升级覆盖。
+ *
+ * 光看包版本不够：开发期改 SKILL.md 而不升版本时，工作区会一直用旧的（而且看不出来）。
+ * 所以标记里一并存内容哈希。
+ */
+function syncBuiltinSkills(workspacePath: string) {
+    const source = fileURLToPath(new URL("../builtin-skills", import.meta.url));
+    if (!fs.existsSync(source)) return;
+    const target = path.join(workspacePath, ".agents", "skills");
+    fs.mkdirSync(target, { recursive: true });
+    for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const from = path.join(source, entry.name);
+        // 目录里有 SKILL.md 才算技能，README 之类的辅助文件跳过
+        if (!fs.existsSync(path.join(from, "SKILL.md"))) continue;
+        const to = path.join(target, entry.name);
+        const marker = path.join(to, ".builtin.json");
+        const installed = readBuiltinMarker(marker);
+        // 同名目录存在但没标记 = 用户自己的技能，让给它
+        if (fs.existsSync(to) && !installed) continue;
+        const sourceHash = hashSkillDirectory(from);
+        if (installed?.version === VERSION && installed.sourceHash === sourceHash) continue;
+        fs.rmSync(to, { recursive: true, force: true });
+        fs.cpSync(from, to, { recursive: true });
+        const next: BuiltinSkillMarker = { version: VERSION, sourceHash, syncedAt: new Date().toISOString() };
+        fs.writeFileSync(marker, JSON.stringify(next, null, 2));
+    }
+}
+
+/** 技能目录内容哈希（相对路径 + 内容），用于判断要不要重新铺。 */
+function hashSkillDirectory(dir: string): string {
+    const hash = crypto.createHash("sha1");
+    const walk = (current: string, prefix: string) => {
+        const entries = fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+        for (const entry of entries) {
+            if (entry.name === ".builtin.json") continue;
+            const full = path.join(current, entry.name);
+            const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) {
+                walk(full, rel);
+                continue;
+            }
+            hash.update(rel);
+            hash.update("\0");
+            hash.update(fs.readFileSync(full));
+            hash.update("\0");
+        }
+    };
+    walk(dir, "");
+    return hash.digest("hex");
+}
+
+/** 读取内置技能标记，损坏或缺失都当作"不是我们装的"。 */
+function readBuiltinMarker(file: string): BuiltinSkillMarker | null {
+    try {
+        const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as BuiltinSkillMarker;
+        return typeof parsed?.version === "string" ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
 
 /** 将用户输入的工作空间路径解析为绝对路径。 */
 function resolveWorkspacePath(value: string) {

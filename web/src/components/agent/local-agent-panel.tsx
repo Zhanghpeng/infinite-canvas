@@ -19,7 +19,7 @@ import { uploadImage } from "@/services/image-storage";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
 import { useShallow } from "zustand/react/shallow";
-import { useAgentStore, type AgentAttachment, type AgentBootstrapStatus, type AgentCanvasContext, type AgentCanvasReference, type AgentChatItem, type AgentConversationState, type AgentModel, type AgentPendingApproval, type AgentPendingToolCall, type AgentPermissionMode, type AgentReasoningEffort, type AgentThreadSummary } from "@/stores/use-agent-store";
+import { useAgentStore, agentProviderLabel, AGENT_PROVIDER_STORAGE_KEY, type AgentAttachment, type AgentBootstrapStatus, type AgentCanvasContext, type AgentCanvasReference, type AgentChatItem, type AgentConversationState, type AgentModel, type AgentPendingApproval, type AgentPendingToolCall, type AgentPermissionMode, type AgentReasoningEffort, type AgentThreadSummary } from "@/stores/use-agent-store";
 import { type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { isSiteTool, runSiteTool } from "@/lib/agent/agent-site-tools";
 import { acknowledgeCodexHistory, activateAgentClient, AgentApiError, discoverAgentConfig, fetchAgentJson, interruptCodexTurn, postCodexApproval, postState, postToolResult, runWorkbuddyTurn } from "@/services/api/canvas-agent";
@@ -1248,7 +1248,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             return;
         }
         if (event.type === "item.completed" && event.item?.type === "agent_message" && event.item.id) {
-            const scoped = scopeEventChatItem(event, { id: event.item.id, role: "assistant", title: "WorkBuddy", text: stringText(event.item.text) }, event.item.id);
+            const scoped = scopeEventChatItem(event, { id: event.item.id, role: "assistant", title: agentProviderLabel(), text: stringText(event.item.text) }, event.item.id);
             const currentMessages = useAgentStore.getState().messages;
             const index = currentMessages.findIndex((message) => message.id === scoped.id);
             if (index >= 0) {
@@ -1317,7 +1317,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         if (!text) return;
         const itemId = event.item?.id;
         if (!itemId) return;
-        const scoped = scopeEventChatItem(event, { id: itemId, role: "assistant", title: "WorkBuddy", text, streamId: itemId }, itemId);
+        const scoped = scopeEventChatItem(event, { id: itemId, role: "assistant", title: agentProviderLabel(), text, streamId: itemId }, itemId);
         const currentMessages = useAgentStore.getState().messages;
         const index = currentMessages.findIndex((message) => message.id === scoped.id);
         if (index < 0) {
@@ -1340,7 +1340,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                             <Bot className="size-4" />
                         </span>
                         <div className="hidden text-base font-semibold leading-5 @min-[560px]:block">
-                            WorkBuddy
+                            {t("agent.panel.title")}
                         </div>
                         <Tooltip title={t("agent.panel.connectionSettings", { status: connectionStatus })} placement="bottom">
                             <Button size="small" type="text" className="!h-8 !w-8 !min-w-8 !px-0 @min-[560px]:!w-auto @min-[560px]:!min-w-0 @min-[560px]:!px-[7px]" aria-label={t("agent.panel.connectionSettingsLabel", { status: connectionStatus })} icon={<PlugZap className="size-3.5" style={{ color: connectionStatusColor }} />} onClick={() => setAgentState({ activeTab: "setup" })}>
@@ -1352,11 +1352,15 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                 items={[
                     { value: "chat", label: t("agent.panel.chat"), icon: <MessageSquare className="size-3.5" /> },
                     { value: "history", label: t("agent.panel.history"), icon: <History className="size-3.5" />, count: threads.length },
+                    // 技能入口必须给出来：Codex 通路的技能列表、以及「我的技能」都在这里管，
+                    // 少了它，面板上就只剩聊天 —— 用户会以为技能体系没做。
+                    { value: "skills", label: t("agent.panel.skills"), icon: <Sparkles className="size-3.5" />, count: skillCount },
                     { value: "log", label: t("agent.panel.logs"), icon: <Terminal className="size-3.5" />, count: eventLogs.length },
                 ]}
                 onChange={(activeTab) => {
                     setAgentState({ activeTab });
                     if (activeTab === "history") void loadThreads();
+                    if (activeTab === "skills" && connected) void loadSkills(endpoint, token);
                 }}
                 right={
                     <>
@@ -1375,6 +1379,13 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             {activeTab === "setup" ? (
                 <AgentConnectView
                     theme={theme}
+                    provider={agentProvider}
+                    onProviderChange={(next) => {
+                        // 记住选择，但**不自动重连**：用户可能正看着报错信息，
+                        // 切完突然重连会让他搞不清刚发生了什么。
+                        localStorage.setItem(AGENT_PROVIDER_STORAGE_KEY, next);
+                        setAgentState({ agentProvider: next, connectError: "" });
+                    }}
                     url={url}
                     token={token}
                     enabled={enabled}
@@ -1385,6 +1396,8 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                     onTokenChange={(token) => setAgentState({ token, connectError: "" })}
                     onToggleEnabled={toggleAgentConnection}
                 />
+            ) : activeTab === "skills" ? (
+                <AgentSkillsView clientId={clientIdRef.current} />
             ) : activeTab === "history" ? (
                 <AgentHistoryView
                     theme={theme}
@@ -1431,7 +1444,28 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                         onRemoveAttachment={removeAttachment}
                         confirmTools={confirmTools}
                         onConfirmToolsChange={(confirmTools) => setAgentState({ confirmTools })}
-                        models={[]}
+                        permissionMode={permissionMode}
+                        onPermissionModeChange={changePermissionMode}
+                        // 模型列表在连接后就会拉到（/agent/codex/models）；之前这里写死 models={[]}，
+                        // 于是「选模型 / 调推理强度」的控件永远不渲染 —— 用户只能被动接受 codex 默认。
+                        models={models}
+                        model={model}
+                        reasoningEffort={reasoningEffort}
+                        onModelChange={(nextModel) => {
+                            const selected = models.find((item) => item.model === nextModel);
+                            if (!selected) return;
+                            const effort = selected.defaultReasoningEffort || selected.supportedReasoningEfforts[0]?.reasoningEffort;
+                            // 三把钥匙：当前模型、用户是否亲手选过、当前推理强度。
+                            // 没有 explicit 这一把，下次加载无法区分"用户选的"与"上次自动挑的"。
+                            localStorage.setItem("canvas-agent-model", nextModel);
+                            localStorage.setItem("canvas-agent-model-explicit", nextModel);
+                            if (effort) localStorage.setItem("canvas-agent-reasoning-effort", effort);
+                            setAgentState({ model: nextModel, ...(effort ? { reasoningEffort: effort } : {}) });
+                        }}
+                        onReasoningEffortChange={(nextEffort) => {
+                            localStorage.setItem("canvas-agent-reasoning-effort", nextEffort);
+                            setAgentState({ reasoningEffort: nextEffort });
+                        }}
                         left={
                             attachments.length ? (
                                 <span className="hidden text-[11px] @min-[660px]:inline" style={{ color: theme.node.muted }}>

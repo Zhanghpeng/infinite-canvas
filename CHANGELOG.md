@@ -3,6 +3,19 @@
 ## Unreleased
 
 + [文档] 补充 Nginx 部署踩坑记录：`public/` 目录名与 SPA 路由同名时的 403 问题与 `try_files $uri /index.html;` 修复方式（以 `/workflows` 为例）。
++ [新增] Agent 面板支持显式选择执行者（Codex / WorkBuddy），默认 Codex；连接页按选择给出对应的接入方式（Codex 插件接入与移除命令、WorkBuddy Access Token 配置），并把「启动本地 Agent」说明补全。
++ [新增] 补回 Codex 插件资产 `plugins/infinite-canvas/`（plugin.json、`.mcp.json`、两个技能、marketplace、图标），消除 `.agents/plugins/marketplace.json` 指向不存在目录的悬空引用；插件 README 补本仓库内安装法与本地调试法。
++ [新增] Agent 面板恢复「技能」标签页（此前只有对话/历史/日志三个入口）。
++ [修复] Agent 连接页与日志不再把执行者写死成 WorkBuddy，标题随实际 provider 显示。
++ [修复] 模型与推理强度选择不再被关掉：连接后拉到的模型列表会真正传给输入框，选择结果持久化。
++ [调整] 画布提示词助手的「执行者」下拉如实收窄：只保留可用的 Codex，WorkBuddy / Claude 置灰并给出原因（该链路固定走 `/agent/codex/turn`）。
++ [新增] 本地 Agent 支持用环境变量 `CANVAS_CODEX_BIN` 指定 Codex 可执行文件（系统已鉴权的 Codex 或内网分发包），JS 入口与原生可执行文件自动分流。
++ [新增] 内置技能随 `canvas-agent` 发布：启动时同步到工作区 `.agents/skills/`，Codex 可直接发现；首个技能 `director-shot-design` 把导演编排与「调哪些画布工具、参数怎么填」写在一起，agent 读完即可落地成节点。
++ [新增] 内置技能 `h3-to-ltx25-prompt`：MiniMax H3 提示词换轨成 LTX-2.5 二采精修段提示词（字段映射、五条硬禁、镜头合并、双人左右方位、标签体系判定），带 `check_ltx_prompt.py` 自检与 `make_copy_html.py` 出复制页两个脚本。
++ [修复] `canvas_connect_nodes` 补上 `slot`（`first_frame` / `last_frame`）：此前该字段被 schema 丢弃，agent 无法把图连进具名槽位，首尾帧只能靠连线先后顺序，顺序一乱就生成一条接不上的片子。
+
++ [新增] 内置 MiniMax H3 官方技能 9 个（`h3-prompt-writing` 加 8 个题材生成器：极简产品广告、3D 动画短片、品牌宣传、音乐 MV 字幕、纸拼贴科普、纸艺定格科普、双人游戏开场、手绘实拍融合），随 `canvas-agent` 发布并自动铺到工作区；每个技能带 `CANVAS-RUNTIME.md` 翻译层，把 Hub 的 `hub_*` 工具、2K/768P 分辨率、独立音频链路映射为本地画布的真实工具、尺寸九档与 H3 原生音频；同时改写 frontmatter 里「需要 MiniMax Hub agent、不可移植到通用 agent」的 `compatibility`（该声明在本地不成立，会让模型以为跑不起来），`brand-promo-video-generator` 的 `allowed-tools` 白名单也从 11 个 `hub_*` 换成真实画布工具。
++ [修复] 内置技能同步改用「包版本 + 内容哈希」判定：此前只比版本号，改了 `SKILL.md` 而不升版本时工作区会一直跑旧内容且无从察觉。
 
 ## v0.19.19 - 2026-10-19
 

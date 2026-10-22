@@ -23,10 +23,12 @@ export function CanvasPromptExecutorPicker({ config, onChange, onChannelChange }
     const { t } = useTranslation();
     const channels = useEffectiveConfig().channels || [];
     const agentConnected = useAgentStore((state) => state.connected);
-    const agentProvider = useAgentStore((state) => state.agentProvider);
 
     const activeChannelId = config.channelId || channels[0]?.id;
-    const value = config.backend === "agent" ? `agent:${config.agentId || agentProvider || "codex"}` : `channel:${activeChannelId || ""}`;
+    // Agent 通道**只有 Codex 一条**：runPromptAssistantTurn 打的就是 /agent/codex/turn，
+    // 不读 agentId 也不读 store 的 agentProvider。所以下拉里别让用户以为能选别的 ——
+    // 选中一个禁不了、跑起来却仍是 Codex 的选项，比置灰更让人困惑。
+    const value = config.backend === "agent" ? "agent:codex" : `channel:${activeChannelId || ""}`;
 
     const options: SelectProps["options"] = [
         {
@@ -44,21 +46,27 @@ export function CanvasPromptExecutorPicker({ config, onChange, onChannelChange }
         },
         {
             label: <span className="text-[11px] font-semibold text-stone-400">{t("canvas.promptAssistant.agentGroup")}</span>,
-            options: (["codex", "claude", "workbuddy"] as const).map((provider) => ({
-                value: `agent:${provider}`,
-                // 目前只有 Codex / WorkBuddy 有完整通路，Claude 先禁用以免误导。
-                disabled: !agentConnected || provider === "claude",
-                label: (
-                    <span
-                        className="flex w-[176px] items-center gap-1"
-                        // Claude 仍禁用（adapter 未端到端验证），但要说清"为什么不能选"，别只是静默置灰
-                        title={!agentConnected ? t("canvas.promptAssistant.agentOffline") : provider === "claude" ? t("canvas.promptAssistant.agentUnavailable") : undefined}
-                    >
-                        <Bot className="size-3 shrink-0 text-stone-400" />
-                        <span className="min-w-0 flex-1 truncate text-xs">{t(`canvas.promptAssistant.agents.${provider}`)}</span>
-                    </span>
-                ),
-            })),
+            options: (["codex", "claude", "workbuddy"] as const).map((provider) => {
+                // 只有 Codex 是通的。其余置灰并给可读原因：Claude 的 adapter 未经端到端验证，
+                // WorkBuddy 要走右侧 Agent 面板（提示词助手的链路还没接它）。
+                const reason = !agentConnected
+                    ? t("canvas.promptAssistant.agentOffline")
+                    : provider === "claude"
+                      ? t("canvas.promptAssistant.agentUnavailable")
+                      : provider === "workbuddy"
+                        ? t("canvas.promptAssistant.agentCodexOnly")
+                        : undefined;
+                return {
+                    value: `agent:${provider}`,
+                    disabled: Boolean(reason),
+                    label: (
+                        <span className="flex w-[176px] items-center gap-1" title={reason}>
+                            <Bot className="size-3 shrink-0 text-stone-400" />
+                            <span className="min-w-0 flex-1 truncate text-xs">{t(`canvas.promptAssistant.agents.${provider}`)}</span>
+                        </span>
+                    ),
+                };
+            }),
         },
     ];
 

@@ -67,8 +67,9 @@ export class CodexAppClient {
 
     /** 启动并初始化 Codex app-server。 */
     static async start(emit: AgentEmit, onExit: () => void) {
-        logger.info("Starting Codex app-server", { executable: process.execPath, codex: codexBin() });
-        const child = spawn(process.execPath, [codexBin(), "app-server", "--stdio"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+        const launch = codexLaunch();
+        logger.info("Starting Codex app-server", { executable: launch.command, codex: launch.args.join(" ") || "(bin)" });
+        const child = spawn(launch.command, [...launch.args, "app-server", "--stdio"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
         const client = new CodexAppClient(child, emit);
         let stopped = false;
         const stop = () => {
@@ -894,7 +895,26 @@ function parseMaybeJson(value: unknown) {
     }
 }
 
-/** 定位当前依赖中 Codex CLI 的执行文件。 */
+/**
+ * 定位 Codex CLI 的执行文件。
+ *
+ * 默认用依赖里自带的 `@openai/codex`。要用系统上已鉴权的 Codex（或内网分发包），
+ * 用环境变量 `CANVAS_CODEX_BIN` 指向可执行文件或 JS 入口即可；
+ * Codex 自己的配置目录仍由它的 `CODEX_HOME` 决定，随进程环境继承。
+ */
 function codexBin() {
+    const override = process.env.CANVAS_CODEX_BIN?.trim();
+    if (override) return override;
     return path.join(path.dirname(require.resolve("@openai/codex/package.json")), "bin", "codex.js");
+}
+
+/**
+ * 组装启动命令：JS 入口（.js/.cjs/.mjs）交给 node 跑，原生可执行文件直接跑。
+ *
+ * 不区分的话，用 `CANVAS_CODEX_BIN` 指到 `codex.exe` 时会变成 `node codex.exe`，
+ * 报错还完全看不出是这个原因。
+ */
+function codexLaunch(): { command: string; args: string[] } {
+    const bin = codexBin();
+    return /\.(c?js|mjs)$/i.test(bin) ? { command: process.execPath, args: [bin] } : { command: bin, args: [] };
 }

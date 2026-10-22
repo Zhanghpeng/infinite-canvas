@@ -61,8 +61,17 @@ export function buildCanvasToolRequest(name: ToolName, input: Record<string, unk
     }
     if (name === "canvas_delete_nodes") return applyOps([{ type: "delete_node", ids: (input as { ids: string[] }).ids }]);
     if (name === "canvas_connect_nodes") {
-        const data = input as { connections: Array<{ fromNodeId: string; toNodeId: string }> };
-        return applyOps(data.connections.map((connection) => ({ type: "connect_nodes", ...connection })));
+        const data = input as { connections: Array<{ fromNodeId: string; toNodeId: string; slot?: "first_frame" | "last_frame" }> };
+        // slot 原样带下去：画布侧 connect_nodes 支持具名槽位，漏掉它会退化成"按连线先后顺序"，
+        // 首尾帧一旦顺序颠倒，模型不报错、只是生成一条接不上的片子。
+        return applyOps(
+            data.connections.map((connection) => ({
+                type: "connect_nodes",
+                fromNodeId: connection.fromNodeId,
+                toNodeId: connection.toNodeId,
+                ...(connection.slot ? { slot: connection.slot } : {}),
+            })),
+        );
     }
     if (name === "canvas_select_nodes") return applyOps([{ type: "select_nodes", ids: (input as { ids: string[] }).ids }]);
     if (name === "canvas_set_viewport") return applyOps([{ type: "set_viewport", viewport: (input as { viewport: unknown }).viewport }]);

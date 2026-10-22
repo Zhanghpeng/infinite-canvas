@@ -1,0 +1,17 @@
+subject_definitions:
+<Subject 1> is the elegant middle-aged Chinese woman in <Picture 1>, with smooth fair skin, arched brows, dark eyes, and black hair pulled into a neat low bun, wearing a sleeveless white mandarin-collar qipao dress with a side slit and red pointed high heels.
+<Subject 2> is the young visual-kei man in <Picture 2>, with shaggy black hair sweeping over one eye, dramatic dark eye makeup, a silver earring, and a small red Chinese character "愛" tattooed on his forehead, wearing a black leather biker jacket over a black shirt, black slim pants, and black lace-up combat boots.
+summary:
+[reference generation] The target video shows a fierce 10-second family quarrel between <Subject 1> and <Subject 2> in a warmly lit Chinese living room. <Subject 1> stands frame-LEFT, <Subject 2> stands frame-RIGHT, facing each other. A three-shot sequence (two-shot, close-up of the man, close-up of the woman) delivers the argument with Chinese dialogue and ends on her breaking final line.
+retention_analysis:
+<Subject 1> (appears in [Shot 1], [Shot 3]): fully_preserved - her white mandarin-collar qipao, low black bun, fair skin, and red high heels are retained.
+<Subject 2> (appears in [Shot 1], [Shot 2]): fully_preserved - his black leather biker jacket, shaggy black hair, dark eye makeup, silver earring, and the red "愛" forehead tattoo are retained.
+detailed_description:
+The target video is in a realistic Chinese family-melodrama style with warm indoor lighting and shallow depth of field.
+[Shot 1] A static medium two-shot inside a warmly lit living room, a beige sofa and tea table soft in the background. <Subject 1>, the middle-aged woman in the white sleeveless qipao with her black hair in a low bun, stands on the LEFT side of the frame, turned toward the RIGHT, facing <Subject 2> directly. <Subject 2>, the young man in the black leather jacket with the red "愛" tattoo on his forehead, stands on the RIGHT side of the frame, turned toward the LEFT, addressing <Subject 1> directly. <Subject 1> raises her right hand, points at <Subject 2>, and says in a sharp trembling female voice, <d>[Chinese] 你把房子抵押了？</d> <Subject 2> clenches his jaw and glares back at her without stepping away, saying nothing.
+[Shot 2] At 00:04.000, the shot cuts to a static close-up of <Subject 2> (S2), chest-up, facing screen-left toward the off-screen woman, his red "愛" forehead tattoo and dark eye makeup clearly visible under a warm key light. For the first beat he only breathes heavily with his fists at his sides, no dialogue. Then <Subject 2> (S2) snaps in a low defiant young male voice, <d>[Chinese] 那是我的自由！</d> He closes his mouth and holds a hard stare toward the off-screen woman.
+[Shot 3] At 00:07.000, the shot cuts to a static close-up of <Subject 1> (S1), chest-up, facing screen-right toward the off-screen man, her white qipao collar visible at the bottom of the frame. Her eyes redden and glisten under the warm light; she only trembles slightly, no large movements. Then <Subject 1> (S1) says in a cracking, heartbroken female voice, <d>[Chinese] 我白养你三十年！</d> The video ends on her grief-stricken face frozen mid-gaze.
+overall_soundscape:
+Quiet living-room room tone with a faint wall-clock ticking continues throughout; the sharp crack of a palm striking the tea table is heard just before the final line in [Shot 3].
+non_diegetic_music:
+A low tense string drone tightens under the argument and cuts off abruptly on the final line.

@@ -55,12 +55,19 @@ export const toolNames = [
 ] as const;
 export type ToolName = (typeof toolNames)[number];
 
+/**
+ * 连线槽位：只对视频/图片节点有意义的「具名输入」。
+ * 不传就按连线先后顺序排（老行为）；要锁定首尾帧必须显式传，
+ * 否则顺序错了模型不会报错，只会默默生成一条接不上的片子。
+ */
+const frameSlotSchema = z.enum(["first_frame", "last_frame"]);
+
 export const canvasOpSchema = z.discriminatedUnion("type", [
     z.object({ type: z.literal("add_node"), nodeType: nodeTypeSchema.optional(), id: z.string().optional(), title: z.string().optional(), x: z.number().optional(), y: z.number().optional(), width: z.number().optional(), height: z.number().optional(), position: positionSchema.optional(), metadata: recordSchema.optional() }).passthrough(),
     z.object({ type: z.literal("update_node"), id: z.string(), patch: recordSchema.optional(), metadata: recordSchema.optional() }).passthrough(),
     z.object({ type: z.literal("delete_node"), id: z.string().optional(), ids: z.array(z.string()).optional() }).passthrough(),
     z.object({ type: z.literal("delete_connections"), id: z.string().optional(), ids: z.array(z.string()).optional(), all: z.boolean().optional() }).passthrough(),
-    z.object({ type: z.literal("connect_nodes"), id: z.string().optional(), fromNodeId: z.string(), toNodeId: z.string() }).passthrough(),
+    z.object({ type: z.literal("connect_nodes"), id: z.string().optional(), fromNodeId: z.string(), toNodeId: z.string(), slot: frameSlotSchema.optional() }).passthrough(),
     z.object({ type: z.literal("set_viewport"), viewport: viewportSchema }).passthrough(),
     z.object({ type: z.literal("select_nodes"), ids: z.array(z.string()) }).passthrough(),
     z.object({ type: z.literal("run_generation"), nodeId: z.string(), mode: generationModeSchema.optional(), prompt: z.string().optional() }).passthrough(),
@@ -122,7 +129,7 @@ export const toolInputSchemas = {
     canvas_move_nodes: z.object({ items: z.array(z.object({ id: z.string(), x: z.number().optional(), y: z.number().optional(), dx: z.number().optional(), dy: z.number().optional() })).min(1) }),
     canvas_resize_node: z.object({ id: z.string(), width: z.number(), height: z.number(), freeResize: z.boolean().optional() }),
     canvas_delete_nodes: z.object({ ids: z.array(z.string()).min(1) }),
-    canvas_connect_nodes: z.object({ connections: z.array(z.object({ fromNodeId: z.string(), toNodeId: z.string() })).min(1) }),
+    canvas_connect_nodes: z.object({ connections: z.array(z.object({ fromNodeId: z.string(), toNodeId: z.string(), slot: frameSlotSchema.optional() })).min(1) }),
     canvas_select_nodes: z.object({ ids: z.array(z.string()) }),
     canvas_set_viewport: z.object({ viewport: viewportSchema }),
     canvas_run_generation: z.object({ nodeId: z.string(), mode: generationModeSchema.optional(), prompt: z.string().optional() }),
@@ -201,7 +208,7 @@ export const toolDescriptions: Record<ToolName, string> = {
     canvas_move_nodes: "移动一个或多个节点，支持绝对坐标或 dx/dy 偏移。",
     canvas_resize_node: "调整节点尺寸。",
     canvas_delete_nodes: "删除指定节点及相关连线。",
-    canvas_connect_nodes: "批量连接节点。",
+    canvas_connect_nodes: "批量连接节点。连接是把参考内容送进生成节点的唯一方式：参考图/参考视频必须先连线到目标节点，生成时才会被读到。connections[].slot 可选 first_frame / last_frame —— 视频做首尾帧过渡时必须显式标（否则只靠连线先后顺序，顺序一乱就接不上）；不传则按先后顺序排 ref_image_01..0N。角色参考图的顺序决定提示词里 ref_image 的编号，先连谁谁就是 01。",
     canvas_select_nodes: "设置当前选中节点。",
     canvas_set_viewport: "调整画布视口。",
     canvas_director_stage: "创建或更新一个「3D 导演台」节点（本地画布插件 director-stage）：用 objects 摆人物/道具/环境（x/z 单位米，rotationYDeg 朝向，0=面向 +Z），camera 设当前机位，shots 记关键帧机位序列（可带 holdMs 停留），motion 设运镜时长/帧率/缓动。传 nodeId 则更新已有导演台节点（未给的字段保留原值）。两种用法：① 直接给 objects/camera/shots/motion 摆场景；② 传 sceneId 让插件**套用内置场景模板**（推荐先套模板再微调，比从零拼坐标稳得多），模板 id：dialogue-over-shoulder 过肩正反打 / dialogue-external-reverse 外反打 / solo-monologue-push-in 单人独白推近 / hero-low-angle-crane 英雄低角度上摇 / rooftop-lookout-crane 天台摇臂拉起 / tracking-street-walk 横移跟拍 / chase-low-night 雨夜对峙 / group-pan 群像横扫 / product-orbit 静物环绕 / seaside-lookout 海边缓推。sceneId 也可以是用户在导演台里存过的「我的模板」id（节点 metadata.stageTemplateIds 里能读到 id 与名字，套用后会带上用户自己的模型与人物走位）。摆好之后可以传 exportMode 让插件导出（prompt 运镜提示词文本节点 / current 当前机位参考图 / firstLast 首尾帧 / multiView 多视图 / video 运镜视频），导出是异步的，节点与连线会自动出现。objects[].track 可以给人物记走位点（x/z/rotationYDeg/holdMs，≥2 个点就按 motion 的时间轴移动，与相机关键帧同步）。推荐用内置素材（objects[].assetId）而不是裸占位体，素材 id：人物 person-man / person-woman / person-child / person-sitting；道具 prop-table / prop-chair / prop-sofa / prop-box / prop-pillar / prop-door / prop-tree / prop-streetlamp / prop-car；环境 env-room（6m 房间）/ env-street（10m 街道）/ env-terrain（12m 地形）/ env-skyline（远景楼群，放在原点即可 —— 楼群自身已在 z≈-9）。环境类 kind 用 env、放在原点让人物站进去。摆好之后可以再用 canvas_create_node 建参考图/视频节点并连线，或让用户在导演台大窗口里微调。backdropNodeId 可以把画布上某个图片节点（通常是刚生成的环境/空镜）设为导演台的**背景板** —— 导出时人物就合成在真画面里，那张图重新生成后背景板会自动更新；传空串清除。backdropHideEnvironment（默认 true）表示背景板打开时环境类素材不再渲染（真环境就是那张图）。搭完/改完之后可以传 check: true（需要 nodeId）让插件做一次**几何自检** —— 检查主体是否出画、占比是否过小过大、机位是否贴脸、两个物体是否重叠、走位过程是否出画；自检是纯计算，一两秒后用 canvas_get_state 读回该节点 metadata 的 directorStageCheck（含 ok / issues / text），按 text 里的 ✗ 提示调机位或位置后再 check 一次；交付前不要留 ✗ 级问题。",

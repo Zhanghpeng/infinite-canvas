@@ -39,6 +39,18 @@ export type AgentConversationState = {
 };
 export type AgentPanelTab = "chat" | "setup" | "history" | "skills" | "log";
 export type AgentProvider = "workbuddy" | "codex";
+/** provider 选择持久化用的 key：换机器/清缓存后回到默认（codex）。 */
+export const AGENT_PROVIDER_STORAGE_KEY = "canvas-agent-provider";
+
+/**
+ * provider 显示名：事件标题、日志标题统一用它。
+ *
+ * 之前这里写死 "WorkBuddy"，明明跑的是 Codex，日志却标 WorkBuddy —— 用户没法判断
+ * 这一轮到底是谁在回答、该去哪看授权。
+ */
+export function agentProviderLabel(provider: AgentProvider = useAgentStore.getState().agentProvider) {
+    return provider === "workbuddy" ? "WorkBuddy" : "Codex";
+}
 
 const CONNECT_TIMEOUT_MS = 6000;
 let agentSource: EventSource | null = null;
@@ -137,7 +149,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     connectError: "",
     pendingTool: null,
     pendingApprovals: [],
-    agentProvider: "workbuddy",
+    // 默认走 Codex：本地 Agent 的 codex 通路不依赖额外授权（用 Codex 自己的登录态），
+    // 而 workbuddy 需要 Access Token。默认值给错时，用户一打开面板就是一条死路。
+    agentProvider: typeof window === "undefined" ? "codex" : (localStorage.getItem(AGENT_PROVIDER_STORAGE_KEY) as AgentProvider) || "codex",
     workbuddyOnline: false,
     workbuddyConfigured: false,
     setAgentState: (patch) => set(patch),

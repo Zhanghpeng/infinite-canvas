@@ -12,6 +12,7 @@
   "files": [
     "dist",
     "agent-instructions.md",
+    "builtin-skills",
     "README.md"
   ],
   "scripts": {
