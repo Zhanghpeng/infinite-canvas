@@ -2,6 +2,13 @@
 
 ## Unreleased
 
++ [新增] 画布配音能力：音频节点分「配乐 / 配音」两条产线，配音走 ComfyUI 的 IndexTTS 2.5 工作流，台词与情绪分区输入，情绪强度跟随音色卡；同一节点两种用途，历史节点零迁移。
++ [新增] 音色库 27 张卡（21 张走情绪描述、6 张跟随音色参考），带头像、音别与风格分面搜索，支持上传自己的音色；参考音频按需上传到 ComfyUI input 目录，已存在则复用。
++ [新增] 视频节点的音频入边分「参考 / 音轨」两通道：配音默认走音轨（成片对白，不占 3 条音频配额、不进工作流、不写进提示词的 `<Audio N>`），音乐默认走参考，点角标即可切换；音轨只做登记与试听，混音留给剪辑环节。
++ [新增] agent 侧画布工具支持出配音：`canvas_create_config_node` / `canvas_create_generation_flow` / `canvas_generate_audio` 接受 `audioKind`、音色名、情绪与强度，音色只认名字由画布侧回查音色卡。
++ [修复] ComfyUI 生成失败的报错不再是一整串 JSON：挑出执行期异常拼成「节点类型（节点号）：原因」，ImportError、显存不足这类信息直接可读，图片/视频/配乐/配音共用同一条轮询。
++ [修复] 兼容 ComfyUI 新版 COMBO 定义（`["COMBO", { options }]`）：此前取到的是字符串 `"COMBO"`，导致音色文件每次都重传，且判不出文件已丢。
+
 + [文档] 补充 Nginx 部署踩坑记录：`public/` 目录名与 SPA 路由同名时的 403 问题与 `try_files $uri /index.html;` 修复方式（以 `/workflows` 为例）。
 + [新增] Agent 面板支持显式选择执行者（Codex / WorkBuddy），默认 Codex；连接页按选择给出对应的接入方式（Codex 插件接入与移除命令、WorkBuddy Access Token 配置），并把「启动本地 Agent」说明补全。
 + [新增] 补回 Codex 插件资产 `plugins/infinite-canvas/`（plugin.json、`.mcp.json`、两个技能、marketplace、图标），消除 `.agents/plugins/marketplace.json` 指向不存在目录的悬空引用；插件 README 补本仓库内安装法与本地调试法。
