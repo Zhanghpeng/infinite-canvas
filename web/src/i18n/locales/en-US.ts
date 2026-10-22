@@ -551,6 +551,7 @@ export default {
             "emptyImage": "Empty image node",
             "emptyVideo": "Empty video node",
             "emptyAudio": "Empty audio node",
+            "emptyVoice": "Voice node: write the line and pick a voice",
             "audio": "Audio",
             "batchExpanded": "Image group expanded",
             "batchCollapsed": "Image group collapsed",
@@ -1248,7 +1249,17 @@ export default {
             "fullscreen": "Fullscreen",
             "exitFullscreen": "Exit fullscreen",
             "done": "Done",
-            "charCount": "{{count}} characters"
+            "charCount": "{{count}} characters",
+            "voiceScript": "Write the line to speak. Blank lines pause naturally; use <pause=0.8> for an explicit pause.",
+            "voiceEmotion": "Emotion (optional — inferred from the script when empty)",
+            "voiceEmotionHint": "One sentence of direction, e.g. \"restrained but visibly pleased, slightly fast\"",
+            "voiceEmotionDisabled": "This voice follows the reference audio's emotion; the description has no effect",
+            "voiceKind": "Audio use",
+            "voiceKindMusic": "Music",
+            "voiceKindVoice": "Voice",
+            "voiceSelect": "Choose a voice",
+            "voiceRequired": "Pick a reference voice before generating",
+            "voiceUploadFailed": "Failed to store the voice file, try another one"
         },
         "references": {
             "title": "References",

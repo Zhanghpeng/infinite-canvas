@@ -188,6 +188,43 @@ export type CanvasNodeMetadata = {
     audioFormat?: string;
     audioSpeed?: string;
     audioInstructions?: string;
+    /**
+     * 音频节点的产线：配乐还是配音。
+     *
+     * 不新造节点类型 —— 音频节点已经有播放器、能连线、能被视频当参考上游、能被 agent 创建，
+     * 缺的只是面板和绑定的分流。缺省按 `music` 处理，历史节点零迁移。
+     * 升级阈值：等需要「按句切分 + 逐句重跑」时再独立成节点。
+     */
+    audioKind?: "music" | "voice";
+    /** 台词。复用 `prompt` 存放，这里只是标记它同时是"要念的内容"。 */
+    voiceScript?: string;
+    /** 选中的音色卡 id（空表示用户上传的自定义音色）。 */
+    voiceId?: string;
+    /** 音色显示名，画布上扫一眼能分清谁在说话。 */
+    voiceName?: string;
+    /** 音色头像（压缩后的 webp 路径）。 */
+    voiceAvatar?: string;
+    /**
+     * 音色音频的取用地址（内置卡是 public 下的路径，自定义音色是媒体库地址）。
+     *
+     * 记它是因为生成前要把音频送到 ComfyUI 的 input 目录，而这件事必须能重新做一遍：
+     * 用户清了 input 目录、换了台 ComfyUI，`voiceAudioName` 就失效了。
+     */
+    voiceSource?: string;
+    /**
+     * 已上传到 ComfyUI input 目录的音色文件名。
+     *
+     * 存下来是为了不每次生成都重传（上传会加随机前缀，重传等于换文件、白占磁盘）。
+     * 但它不代表"文件还在" —— 用户清了 input 目录或换了台 ComfyUI，
+     * 这里仍会有值，所以生成前还要用 `/object_info/LoadAudio` 核一遍。
+     */
+    voiceAudioName?: string;
+    /** 音色自带的情绪模式：text 用情绪描述，speaker 跟随音色参考（此时情绪框不生效）。 */
+    voiceEmoMode?: "text" | "speaker";
+    /** 情绪描述（给 IndexTTS 的一句自然语言）。留空则由模型按台词自行推断。 */
+    emotionText?: string;
+    /** 情绪强度，跟着音色卡走，可微调。 */
+    emotionStrength?: number;
     references?: string[];
     naturalWidth?: number;
     naturalHeight?: number;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowUp, LoaderCircle, Maximize2, Minimize2, RefreshCw, Sparkles, Square } from "lucide-react";
-import { Button, Modal, Select, Tooltip } from "antd";
+import { Button, Modal, Segmented, Select, Tooltip, message } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -17,8 +17,11 @@ import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
 import { CanvasTextSettingsPopover } from "./canvas-text-settings-popover";
 import { CanvasPromptExecutorPicker, CanvasPromptSkillPicker } from "./canvas-prompt-skill-picker";
 import { resolveSkillProduces, type PromptAssistantConfig } from "@/lib/canvas/canvas-prompt-assistant";
-import { CanvasNodeType, type CanvasGenerationIntent, type CanvasGenerationMode, type CanvasNodeData } from "@/types/canvas";
+import { voiceAssetUrl, voiceAudioUrl, type CanvasVoice } from "@/lib/canvas/voice-library";
+import { uploadMediaFile } from "@/services/file-storage";
+import { CanvasNodeType, type CanvasGenerationIntent, type CanvasGenerationMode, type CanvasNodeData, type CanvasNodeMetadata } from "@/types/canvas";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { CanvasVoicePicker } from "./canvas-voice-picker";
 import { CanvasNodeReferenceBar } from "./canvas-node-reference-bar";
 import { CanvasVideoSegmentReference } from "./canvas-video-segment-reference";
 
@@ -92,12 +95,19 @@ export function CanvasNodePromptPanel({
     const canRepeat = node.metadata?.status === "success";
     const isGenerating = isRunning || node.metadata?.status === "loading";
     const [prompt, setPrompt] = useState(node.metadata?.composerContent ?? node.metadata?.prompt ?? "");
+    const [emotionText, setEmotionText] = useState(node.metadata?.emotionText ?? "");
+    // 同一个音频节点跑两条产线：配乐（caption/lyrics）与配音（台词 + 情绪 + 音色）。
+    // 不新造节点类型 —— 缺省按 music 处理，历史节点零迁移。
+    const audioKind = node.metadata?.audioKind === "voice" ? "voice" : "music";
+    const isVoiceNode = mode === "audio" && audioKind === "voice";
+    const voiceEmoMode = node.metadata?.voiceEmoMode === "speaker" ? "speaker" : "text";
     const [expanded, setExpanded] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
     // Restore prompts only when switching nodes; preserve the current input after generation on the same node.
     useEffect(() => {
         setPrompt(node.metadata?.composerContent ?? node.metadata?.prompt ?? "");
+        setEmotionText(node.metadata?.emotionText ?? "");
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [node.id]);
 
@@ -105,6 +115,48 @@ export function CanvasNodePromptPanel({
         setPrompt(value);
         if (isEditingExistingContent) onConfigChange(node.id, { composerContent: value });
         else onPromptChange(node.id, value);
+    };
+
+    const hasVoice = Boolean(node.metadata?.voiceSource || node.metadata?.voiceId);
+
+    const patchMetadata = (patch: Partial<CanvasNodeMetadata>) => onConfigChange(node.id, patch);
+
+    /** 选中音色卡：音色、模式、强度、参考音频一次性落到节点上。 */
+    const selectVoice = (voice: CanvasVoice) => {
+        const patch: Partial<CanvasNodeMetadata> = {
+            voiceId: voice.id,
+            voiceName: voice.name,
+            voiceAvatar: voice.avatar || undefined,
+            voiceSource: voiceAudioUrl(voice),
+            voiceEmoMode: voice.emoMode,
+            emotionStrength: voice.emoWeight,
+            // 换了音色，之前缓存的 ComfyUI 文件名指向的是上一个音色的文件，必须作废。
+            voiceAudioName: undefined,
+        };
+        // 卡里那句情绪描述是实测过的，白给；但只在用户还没动手写的时候才填。
+        if (!emotionText.trim() && voice.emoMode === "text" && voice.emoText) {
+            patch.emotionText = voice.emoText;
+            setEmotionText(voice.emoText);
+        }
+        patchMetadata(patch);
+    };
+
+    const uploadVoice = async (file: File) => {
+        try {
+            const uploaded = await uploadMediaFile(file, "audio");
+            patchMetadata({
+                voiceId: undefined,
+                voiceName: file.name.replace(/\.[^.]+$/, ""),
+                voiceAvatar: undefined,
+                // 自定义音色没有卡片，存媒体库的 storageKey；生成前再解析成可取用的地址。
+                voiceSource: uploaded.storageKey,
+                voiceEmoMode: "text",
+                voiceAudioName: undefined,
+                emotionStrength: node.metadata?.emotionStrength ?? 0.8,
+            });
+        } catch {
+            message.error(t("canvas.promptPanel.voiceUploadFailed"));
+        }
     };
 
     // 选了技能就走技能执行（执行者/形态由技能决定），没选就是原来的文本生成。
@@ -122,6 +174,12 @@ export function CanvasNodePromptPanel({
         }
         const text = prompt.trim();
         if (!text && intent !== "repeat") return;
+        // 没选音色时不能像视频那样"剪掉参考节点"：音色是配音生成节点的必需输入，
+        // 剪了只会变成缺输入的 400，报错还指向工作流。所以在入口把话说明白。
+        if (isVoiceNode && !hasVoice) {
+            message.warning(t("canvas.promptPanel.voiceRequired"));
+            return;
+        }
         onGenerate(node.id, mode, text, intent);
     };
 
@@ -162,10 +220,34 @@ export function CanvasNodePromptPanel({
                 references={mentionReferences}
                 onChange={updatePrompt}
                 onSubmit={submit}
-                className="thin-scrollbar h-40 w-full cursor-text resize-none rounded-xl px-3 py-2 text-sm leading-5 outline-none"
+                className={cn("thin-scrollbar w-full cursor-text resize-none rounded-xl px-3 py-2 text-sm leading-5 outline-none", isVoiceNode ? "h-32" : "h-40")}
                 style={{ background: "transparent", color: theme.node.text }}
-                placeholder={t(`canvas.promptPanel.${mode === "image" && hasImageContent ? "editImage" : mode === "text" && hasTextContent ? "editText" : mode}`)}
+                placeholder={isVoiceNode ? t("canvas.promptPanel.voiceScript") : t(`canvas.promptPanel.${mode === "image" && hasImageContent ? "editImage" : mode === "text" && hasTextContent ? "editText" : mode}`)}
             />
+
+            {isVoiceNode ? (
+                <>
+                    {/* 台词要能 @ 引用文本节点，情绪不需要 —— 它是给模型的一句自然语言描述。 */}
+                    <div className="my-2 border-t border-dashed" style={{ borderColor: theme.toolbar.border }} />
+                    <div className="px-3">
+                        <div className="mb-1 flex items-baseline justify-between gap-2 text-[11px]" style={{ color: theme.node.muted }}>
+                            <span>{t("canvas.promptPanel.voiceEmotion")}</span>
+                            {voiceEmoMode === "speaker" ? <span className="shrink-0">{t("canvas.promptPanel.voiceEmotionDisabled")}</span> : null}
+                        </div>
+                        <textarea
+                            className="thin-scrollbar h-16 w-full resize-none rounded-xl px-3 py-2 text-sm leading-5 outline-none"
+                            style={{ background: "transparent", color: theme.node.text, opacity: voiceEmoMode === "speaker" ? 0.5 : 1 }}
+                            value={emotionText}
+                            disabled={voiceEmoMode === "speaker"}
+                            placeholder={voiceEmoMode === "speaker" ? t("canvas.promptPanel.voiceEmotionDisabled") : t("canvas.promptPanel.voiceEmotionHint")}
+                            onChange={(event) => {
+                                setEmotionText(event.target.value);
+                                patchMetadata({ emotionText: event.target.value });
+                            }}
+                        />
+                    </div>
+                </>
+            ) : null}
 
             <div className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-2">
                 <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -222,18 +304,47 @@ export function CanvasNodePromptPanel({
                         </>
                     ) : mode === "audio" ? (
                         <>
+                            <Segmented
+                                size="small"
+                                value={audioKind}
+                                onChange={(value) =>
+                                    onConfigChange(node.id, {
+                                        audioKind: value === "voice" ? "voice" : "music",
+                                        // 换了产线，之前选的工作流属于另一条产线，留着会拿配乐工作流去配音。
+                                        workflowId: undefined,
+                                    })
+                                }
+                                options={[
+                                    { label: t("canvas.promptPanel.voiceKindMusic"), value: "music" },
+                                    { label: t("canvas.promptPanel.voiceKindVoice"), value: "voice" },
+                                ]}
+                            />
                             <ChannelWorkflowPicker
-                                category="audio"
+                                category={isVoiceNode ? "voice" : "audio"}
                                 channelId={node.metadata?.channelId}
                                 workflowId={node.metadata?.workflowId}
                                 onChange={(channelId, workflowId) => onConfigChange(node.id, { channelId, workflowId })}
                             />
-                            <CanvasAudioSettingsPopover
-                                config={config}
-                                buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
-                                onConfigChange={(key, value) => onConfigChange(node.id, audioConfigPatch(key, value))}
-                                onOpenChange={handleSettingsOpenChange}
-                            />
+                            {isVoiceNode ? (
+                                <CanvasVoicePicker
+                                    voiceId={node.metadata?.voiceId}
+                                    voiceName={node.metadata?.voiceName}
+                                    voiceAvatar={node.metadata?.voiceAvatar}
+                                    strength={node.metadata?.emotionStrength ?? 0.8}
+                                    buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
+                                    onSelect={selectVoice}
+                                    onUpload={(file) => void uploadVoice(file)}
+                                    onStrengthChange={(value) => patchMetadata({ emotionStrength: value })}
+                                    onOpenChange={handleSettingsOpenChange}
+                                />
+                            ) : (
+                                <CanvasAudioSettingsPopover
+                                    config={config}
+                                    buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
+                                    onConfigChange={(key, value) => onConfigChange(node.id, audioConfigPatch(key, value))}
+                                    onOpenChange={handleSettingsOpenChange}
+                                />
+                            )}
                         </>
                     ) : (
                         <>

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ChevronRight, Copy, Download, FileText, Group, Image as ImageIcon, Layers, Lock, Music2, Plus, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
+import { ChevronRight, Copy, Download, FileText, Group, Image as ImageIcon, Layers, Lock, Mic, Music2, Plus, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
@@ -889,18 +889,22 @@ function VideoNodeContent({ node, theme, onViewMedia }: NodeContentRendererProps
 
 function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
     const { t } = useTranslation();
+    // 同一个音频节点跑两条产线，画布上至少要能一眼分清谁在说什么、哪个是配乐。
+    const isVoice = node.metadata?.audioKind === "voice";
+    const KindIcon = isVoice ? Mic : Music2;
+    const kindLabel = isVoice ? node.metadata?.voiceName || t("canvas.promptPanel.voiceKindVoice") : t("canvas.node.audio");
     if (!node.metadata?.content)
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2" style={{ color: theme.node.placeholder }}>
-                <Music2 className="size-7 opacity-35" />
-                <span className="text-sm">{t("canvas.node.emptyAudio")}</span>
+                <KindIcon className="size-7 opacity-35" />
+                <span className="text-sm">{isVoice ? t("canvas.node.emptyVoice") : t("canvas.node.emptyAudio")}</span>
             </div>
         );
     return (
         <div className="flex h-full w-full flex-col justify-center gap-3 px-4" style={{ background: theme.node.fill, color: theme.node.text }}>
             <div className="flex min-w-0 items-center gap-2 text-sm opacity-70">
-                <Music2 className="size-4 shrink-0" />
-                <span className="truncate">{t("canvas.node.audio")}</span>
+                <KindIcon className="size-4 shrink-0" />
+                <span className="truncate">{kindLabel}</span>
             </div>
             <audio src={node.metadata.content} controls className="w-full" data-canvas-no-zoom />
         </div>

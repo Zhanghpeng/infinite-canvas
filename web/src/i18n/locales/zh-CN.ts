@@ -551,6 +551,7 @@ export default {
             "emptyImage": "空图片节点",
             "emptyVideo": "空视频节点",
             "emptyAudio": "空音频节点",
+            "emptyVoice": "配音节点：写下台词并选一个音色",
             "audio": "音频",
             "batchExpanded": "图片组已展开",
             "batchCollapsed": "图片组已收起",
@@ -1248,7 +1249,17 @@ export default {
             "fullscreen": "全屏编辑",
             "exitFullscreen": "退出全屏",
             "done": "完成",
-            "charCount": "{{count}} 字符"
+            "charCount": "{{count}} 字符",
+            "voiceScript": "写下要念的台词。空行会自然停顿，也可以用 <pause=0.8> 指定停顿秒数。",
+            "voiceEmotion": "情绪（可留空，留空按台词自动判断）",
+            "voiceEmotionHint": "一句话描述表演，例如「克制但难掩喜悦，语速稍快」",
+            "voiceEmotionDisabled": "这个音色跟随参考音频的情绪，情绪描述不生效",
+            "voiceKind": "音频用途",
+            "voiceKindMusic": "配乐",
+            "voiceKindVoice": "配音",
+            "voiceSelect": "选择音色",
+            "voiceRequired": "先选一个参考音色再生成",
+            "voiceUploadFailed": "音色文件上传失败，请换一个文件试试"
         },
         "references": {
             "title": "参考内容",

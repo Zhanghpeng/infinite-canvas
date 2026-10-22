@@ -7,7 +7,8 @@ import { useTranslation } from "react-i18next";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
 import { generateRandomSeed, requestComfyuiImage } from "@/services/api/comfyui";
-import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
+import { requestAudioGeneration, requestVoiceGeneration, storeGeneratedAudio } from "@/services/api/audio";
+import { ensureVoiceAudioName, resolveVoiceSourceUrl } from "@/lib/canvas/voice-audio";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { defaultConfig, findWorkflow, getDefaultComfyWorkflowItems, getDefaultWorkflow, inpaintModelOptions, resolveModelChannel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
@@ -5943,6 +5944,19 @@ function InfiniteCanvasPage() {
                 }
 
                 if (mode === "audio") {
+                    // 同一个音频节点两条产线：配乐（caption/lyrics + 时长）与配音（台词 + 情绪 + 音色）。
+                    const isVoice = sourceNode?.metadata?.audioKind === "voice";
+                    const voicePatch: Partial<CanvasNodeMetadata> = isVoice
+                        ? {
+                              voiceId: sourceNode?.metadata?.voiceId,
+                              voiceName: sourceNode?.metadata?.voiceName,
+                              voiceAvatar: sourceNode?.metadata?.voiceAvatar,
+                              voiceSource: sourceNode?.metadata?.voiceSource,
+                              voiceEmoMode: sourceNode?.metadata?.voiceEmoMode,
+                              emotionText: sourceNode?.metadata?.emotionText,
+                              emotionStrength: sourceNode?.metadata?.emotionStrength,
+                          }
+                        : {};
                     const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
                     const isEmptyAudioNode = sourceNode?.type === CanvasNodeType.Audio && !sourceNode.metadata?.content;
                     const audioId = isEmptyAudioNode ? nodeId : nanoid();
@@ -5965,7 +5979,8 @@ function InfiniteCanvasPage() {
                             generationMode: mode,
                             generationReferences: generationContext.generationReferences,
                             generationOriginNodeId: sourceNode?.metadata?.generationOriginNodeId || nodeId,
-                            ...buildAudioGenerationMetadata(generationConfig),
+                            ...buildAudioGenerationMetadata(generationConfig, undefined, isVoice ? "voice" : "music"),
+                            ...voicePatch,
                             images: undefined,
                             primaryImageId: undefined,
                             texts: undefined,
@@ -5992,13 +6007,36 @@ function InfiniteCanvasPage() {
                     try {
                         const duration = Number(sourceNode?.metadata?.seconds || generationConfig.audioSeconds) || 60;
                         const initialSeed = sourceNode?.metadata?.seed;
-                        const result = await requestAudioGeneration(generationConfig, effectivePrompt, {
-                            signal: controller.signal,
-                            duration,
-                            seed: initialSeed,
-                            channelId: sourceNode?.metadata?.channelId,
-                            workflowId: sourceNode?.metadata?.workflowId,
-                        });
+                        // 音色文件要先进 ComfyUI 的 input 目录，`LoadAudio.audio` 只认文件名。
+                        let uploadedVoiceName: string | undefined;
+                        if (isVoice) {
+                            const voiceSource = await resolveVoiceSourceUrl(sourceNode?.metadata?.voiceSource);
+                            if (!voiceSource) throw new Error("这个配音节点还没选参考音色，请先选一个音色再生成");
+                            uploadedVoiceName = await ensureVoiceAudioName(generationConfig, {
+                                channelId: sourceNode?.metadata?.channelId,
+                                sourceUrl: voiceSource,
+                                cachedName: sourceNode?.metadata?.voiceAudioName,
+                                signal: controller.signal,
+                            });
+                        }
+                        const result = isVoice
+                            ? await requestVoiceGeneration(generationConfig, effectivePrompt, {
+                                  signal: controller.signal,
+                                  refAudioName: uploadedVoiceName as string,
+                                  emotion: sourceNode?.metadata?.emotionText,
+                                  strength: sourceNode?.metadata?.emotionStrength,
+                                  emotionMode: sourceNode?.metadata?.voiceEmoMode,
+                                  seed: initialSeed,
+                                  channelId: sourceNode?.metadata?.channelId,
+                                  workflowId: sourceNode?.metadata?.workflowId,
+                              })
+                            : await requestAudioGeneration(generationConfig, effectivePrompt, {
+                                  signal: controller.signal,
+                                  duration,
+                                  seed: initialSeed,
+                                  channelId: sourceNode?.metadata?.channelId,
+                                  workflowId: sourceNode?.metadata?.workflowId,
+                              });
                         const audio = await storeGeneratedAudio(result.blob);
                         setNodes((prev) =>
                             prev.map((node) =>
@@ -6012,9 +6050,11 @@ function InfiniteCanvasPage() {
                                               effectivePrompt,
                                               channelId: sourceNode?.metadata?.channelId,
                                               workflowId: sourceNode?.metadata?.workflowId,
-                                              seconds: String(duration),
+                                              // 配音的时长由台词决定：回填实测时长，而不是把配乐那个输入秒数抄过来。
+                                              seconds: isVoice ? String(Math.max(1, Math.round((audio.durationMs || 0) / 1000))) : String(duration),
                                               seed: result.seed,
                                               jobId: result.jobId,
+                                              ...(isVoice ? { voiceAudioName: uploadedVoiceName } : {}),
                                               status: NODE_STATUS_SUCCESS,
                                           },
                                       }
