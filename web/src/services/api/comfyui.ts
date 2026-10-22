@@ -705,6 +705,36 @@ export class ComfyuiJobError extends ComfyuiError {
     }
 }
 
+/**
+ * 把 ComfyUI 的 `status.messages` 翻成一句人话。
+ *
+ * 原始值是一整个消息数组，直接 stringify 出来是几百字符的 JSON，用户只看到一堆括号，
+ * 真正有用的信息（哪个节点、缺什么依赖、ImportError 还是显存不足）被埋在中间。
+ * 这里只挑执行期的两条突发消息出来，其余原样返回，至少不丢信息。
+ */
+export function describeExecutionFailure(messages: unknown): string {
+    if (!Array.isArray(messages)) return "";
+    for (const entry of messages) {
+        if (!Array.isArray(entry)) continue;
+        const [type, payload] = entry as [unknown, unknown];
+        if (type === "execution_interrupted") return "任务被中断";
+        if (type !== "execution_error") continue;
+
+        const info = (payload ?? {}) as Record<string, unknown>;
+        const nodeType = typeof info.node_type === "string" && info.node_type ? info.node_type : "";
+        const nodeId = typeof info.node_id === "string" || typeof info.node_id === "number" ? String(info.node_id) : "";
+        const exceptionMessage = typeof info.exception_message === "string" ? info.exception_message.trim() : "";
+        const exceptionType = typeof info.exception_type === "string" ? info.exception_type : "";
+        const detail = exceptionMessage || exceptionType || "未知错误";
+
+        // 节点类型比节点号可读，两个都给出来方便对着 ComfyUI 面板定位
+        const where = nodeType ? `${nodeType}${nodeId ? `（节点 ${nodeId}）` : ""}` : nodeId ? `节点 ${nodeId}` : "";
+        const text = detail.length > 400 ? `${detail.slice(0, 400)}…` : detail;
+        return where ? `${where}：${text}` : text;
+    }
+    return "";
+}
+
 /** Thrown when the job has not reached a terminal state within the timeout window. */
 export class ComfyuiTimeoutError extends ComfyuiError {
     readonly timeoutMs: number;
@@ -1060,7 +1090,9 @@ export async function pollJobRaw(jobId: string, baseUrl: string, token?: string,
         if (jobEntry) {
             const statusStr = jobEntry.status?.status_str;
             if (statusStr === "error") {
-                const msg = Array.isArray(jobEntry.status?.messages) ? JSON.stringify(jobEntry.status?.messages) : statusStr;
+                // 优先用可读的执行期报错；没有就退回整串消息，别把失败原因吞掉
+                const readable = describeExecutionFailure(jobEntry.status?.messages);
+                const msg = readable || (Array.isArray(jobEntry.status?.messages) ? JSON.stringify(jobEntry.status?.messages) : statusStr);
                 throw new ComfyuiJobError(`ComfyUI 执行失败: ${msg}`, statusStr);
             }
 
@@ -3072,13 +3104,6 @@ export async function requestComfyuiVoice(req: ComfyuiVoiceRequest): Promise<Com
 }
 
 /**
- * 读出 ComfyUI input 目录里现成的音频文件名（`LoadAudio` 的可选项就是它）。
- *
- * 用它判断音色要不要重传，而不是在本地记一个"传过了"的标记：用户可能清了 input 目录，
- * 或者换了台 ComfyUI。标记还在、文件没了，生成时才会 FileNotFoundError，而那个报错
- * 指向的是工作流文件名，看起来完全不像"少传一个文件"。
- */
-/**
  * 从 `/object_info` 的 COMBO 定义里取出可选项。
  *
  * 这个字段的形态换过一次版本，两种都要认：
@@ -3095,6 +3120,13 @@ function readComboOptions(definition: unknown): string[] | undefined {
     return list.filter((item): item is string => typeof item === "string");
 }
 
+/**
+ * 读出 ComfyUI input 目录里现成的音频文件名（`LoadAudio` 的可选项就是它）。
+ *
+ * 用它判断音色要不要重传，而不是在本地记一个"传过了"的标记：用户可能清了 input 目录，
+ * 或者换了台 ComfyUI。标记还在、文件没了，生成时才会 FileNotFoundError，而那个报错
+ * 指向的是工作流文件名，看起来完全不像"少传一个文件"。
+ */
 export async function listComfyuiInputAudio(baseUrl: string, token?: string): Promise<string[] | undefined> {
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;

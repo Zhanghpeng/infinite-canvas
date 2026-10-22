@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
-import { adaptWorkflowModelPaths, applyAudioBindings, applyBindings, cancelJob, collectVideoAssetIds, ComfyuiAbortedError, ComfyuiApiError, ComfyuiJobError, ComfyuiNoWorkflowError, ComfyuiTimeoutError, downloadAsset, generateRandomSeed, parseSize, pollComfyuiVideoJob, pollJob, requestComfyuiImage, resolveSlotInputKey, submitComfyuiVideoJob, submitJob, validateComfyuiWorkflow, writeSlot } from "@/services/api/comfyui";
+import { adaptWorkflowModelPaths, applyAudioBindings, applyBindings, cancelJob, collectVideoAssetIds, ComfyuiAbortedError, ComfyuiApiError, ComfyuiJobError, ComfyuiNoWorkflowError, ComfyuiTimeoutError, downloadAsset, generateRandomSeed, parseSize, pollComfyuiVideoJob, pollJob, requestComfyuiImage, resolveSlotInputKey, submitComfyuiVideoJob, submitJob, validateComfyuiWorkflow, writeSlot, describeExecutionFailure } from "@/services/api/comfyui";
 import type { ComfyuiWorkflowJson } from "@/services/api/comfyui";
 import { defaultConfig, findWorkflow, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { DEFAULT_BUILTIN_COMFYUI_DEPTH_VIDEO_WORKFLOW, DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW, DEFAULT_BUILTIN_COMFYUI_VOICE_WORKFLOW, DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW } from "@/services/api/comfyui-default-workflows";
@@ -1099,5 +1099,43 @@ describe("槽位写入与配音绑定", () => {
         expect(resolveSlotInputKey("emotion", emotionNode)).toBe("value");
         const strengthNode = voiceWorkflow["10"] as Parameters<typeof resolveSlotInputKey>[1];
         expect(resolveSlotInputKey("strength", strengthNode)).toBe("value");
+    });
+});
+
+describe("describeExecutionFailure", () => {
+    it("picks the executed node and its exception message out of the raw message array", () => {
+        const messages = [
+            ["execution_start", { prompt_id: "p1" }],
+            ["execution_cached", { nodes: [] }],
+            [
+                "execution_error",
+                {
+                    node_id: "4",
+                    node_type: "T8_IndexTTS25_Generate",
+                    exception_type: "ImportError",
+                    exception_message: "无法导入节点内置的 IndexTTS 2.5 核心（ImportError: cannot import name 'isin_mps_friendly'）",
+                    traceback: ["line a", "line b"],
+                },
+            ],
+        ];
+        const text = describeExecutionFailure(messages);
+        expect(text).toContain("T8_IndexTTS25_Generate");
+        expect(text).toContain("节点 4");
+        expect(text).toContain("isin_mps_friendly");
+        // 不是整串 JSON：traceback 这种噪音不该进来
+        expect(text).not.toContain("traceback");
+        expect(text).not.toContain("execution_start");
+    });
+
+    it("falls back to the exception type when ComfyUI sends an empty message", () => {
+        const text = describeExecutionFailure([["execution_error", { node_id: 7, exception_type: "OutOfMemoryError" }]]);
+        expect(text).toContain("节点 7");
+        expect(text).toContain("OutOfMemoryError");
+    });
+
+    it("reports an interrupted task and returns empty for unrecognised payloads", () => {
+        expect(describeExecutionFailure([["execution_interrupted", {}]])).toBe("任务被中断");
+        expect(describeExecutionFailure([["execution_success", { prompt_id: "p1" }]])).toBe("");
+        expect(describeExecutionFailure(undefined)).toBe("");
     });
 });
