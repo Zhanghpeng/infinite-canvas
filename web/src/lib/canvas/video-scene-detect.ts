@@ -87,8 +87,42 @@ export async function buildFilmstrip(src: string, count: number, options: { widt
     });
 }
 
-/** 抽某一时刻的单帧，用于首尾帧锚定。 */
-export async function captureFrameDataUrl(src: string, timeMs: number, options: { width?: number; signal?: AbortSignal } = {}): Promise<string> {
+/**
+ * 分段缩略条：每段抽起点 / 中段 / 尾帧三张。
+ *
+ * 只给起点一帧看不出「这段里有几个人、角色站在哪一侧」—— 而每段的参考图该挂谁，
+ * 恰恰取决于这个。三帧横拼在段卡上，用户扫一眼就能判断，不用先跑一遍再从结果反推。
+ * 一次 load 视频串行 seek，比每帧单独调 captureFrameDataUrl 少几十次解码初始化。
+ */
+export async function buildSegmentStrips(src: string, ranges: Array<{ startMs: number; endMs: number }>, options: { width?: number; signal?: AbortSignal } = {}): Promise<string[][]> {
+    if (!ranges.length) return [];
+    const thumbWidth = Math.max(48, options.width ?? 160);
+    return withVideo(src, options.signal, async (video, canvas, context) => {
+        const durationMs = Math.round((video.duration || 0) * 1000);
+        if (!durationMs) throw new Error("VIDEO_NO_DURATION");
+        const aspect = video.videoHeight && video.videoWidth ? video.videoHeight / video.videoWidth : 9 / 16;
+        canvas.width = thumbWidth;
+        canvas.height = Math.max(2, Math.round(thumbWidth * aspect));
+        const strips: string[][] = [];
+        for (const range of ranges) {
+            throwIfAborted(options.signal);
+            const length = Math.max(1, range.endMs - range.startMs);
+            // 起点和尾点各内缩一点：紧贴边界的帧常常是转场残影，反而看不清主体。
+            const inset = Math.min(140, length * 0.06);
+            const times = [range.startMs + inset, range.startMs + length / 2, range.endMs - inset];
+            const frames: string[] = [];
+            for (const timeMs of times) {
+                await seekTo(video, Math.max(0, Math.min(durationMs - 20, timeMs)) / 1000);
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                frames.push(canvas.toDataURL("image/jpeg", 0.62));
+            }
+            strips.push(frames);
+        }
+        return strips;
+    });
+}
+
+/** 抽某一时刻的单帧，用于首尾帧锚定。 */export async function captureFrameDataUrl(src: string, timeMs: number, options: { width?: number; signal?: AbortSignal } = {}): Promise<string> {
     return withVideo(src, options.signal, async (video, canvas, context) => {
         const durationMs = Math.round((video.duration || 0) * 1000);
         const safeTime = Math.max(0, Math.min(Math.max(0, durationMs - 20), timeMs));

@@ -20,6 +20,7 @@ import { resolveSkillProduces, type PromptAssistantConfig } from "@/lib/canvas/c
 import { CanvasNodeType, type CanvasGenerationIntent, type CanvasGenerationMode, type CanvasNodeData } from "@/types/canvas";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasNodeReferenceBar } from "./canvas-node-reference-bar";
+import { CanvasVideoSegmentReference } from "./canvas-video-segment-reference";
 
 export type CanvasNodeGenerationMode = CanvasGenerationMode;
 
@@ -84,6 +85,10 @@ export function CanvasNodePromptPanel({
     const hasTextContent = node.type === CanvasNodeType.Text && Boolean(node.metadata?.content?.trim());
     const hasImageContent = node.type === CanvasNodeType.Image && Boolean(node.metadata?.content);
     const isEditingExistingContent = hasTextContent || hasImageContent;
+    // 段节点：它的参考（角色图 + 首尾帧 + 参考片段）由分段处理写入 metadata，
+    // 不来自画布连线。展示与生成都得走分段那套，否则用户改完提示词点生成，
+    // 拿到的是另一条不带任何参考的独立视频。
+    const segmentInfo = node.metadata?.videoSegment;
     const canRepeat = node.metadata?.status === "success";
     const isGenerating = isRunning || node.metadata?.status === "loading";
     const [prompt, setPrompt] = useState(node.metadata?.composerContent ?? node.metadata?.prompt ?? "");
@@ -139,15 +144,19 @@ export function CanvasNodePromptPanel({
             onPointerDown={(event) => event.stopPropagation()}
             onWheel={(event) => event.stopPropagation()}
         >
-            <CanvasNodeReferenceBar
-                nodeId={node.id}
-                nodes={nodes}
-                connectedNodes={connectedNodes}
-                onDisconnect={onDisconnectReference}
-                onStartSelection={onStartReferenceSelection}
-                onReorder={onReorderReferences}
-                onLocateNode={onLocateNode}
-            />
+            {segmentInfo ? (
+                <CanvasVideoSegmentReference node={node} nodes={nodes} onLocateNode={onLocateNode} />
+            ) : (
+                <CanvasNodeReferenceBar
+                    nodeId={node.id}
+                    nodes={nodes}
+                    connectedNodes={connectedNodes}
+                    onDisconnect={onDisconnectReference}
+                    onStartSelection={onStartReferenceSelection}
+                    onReorder={onReorderReferences}
+                    onLocateNode={onLocateNode}
+                />
+            )}
             <CanvasPromptChipInput
                 value={prompt}
                 references={mentionReferences}
@@ -304,14 +313,18 @@ export function CanvasNodePromptPanel({
                         </Button>
                     </Tooltip>
                 ) : canRepeat ? (
-                    <Button
-                        type="primary"
-                        className="ml-auto !h-10 !rounded-full !px-4"
-                        icon={<RefreshCw className="size-3.5" />}
-                        onClick={() => submit("repeat")}
-                    >
-                        {t("canvas.promptPanel.repeatGeneration")}
-                    </Button>
+                    <span className="ml-auto shrink-0">
+                        <Tooltip title={segmentInfo ? t("canvas.videoTimeline.reference.rerunHint") : undefined}>
+                            <Button
+                                type="primary"
+                                className="!h-10 !rounded-full !px-4"
+                                icon={<RefreshCw className="size-3.5" />}
+                                onClick={() => submit("repeat")}
+                            >
+                                {segmentInfo ? t("canvas.videoTimeline.reference.rerun") : t("canvas.promptPanel.repeatGeneration")}
+                            </Button>
+                        </Tooltip>
+                    </span>
                 ) : (
                     <Tooltip title={agentNeedsSkill ? t("canvas.promptAssistant.pickSkillFirst") : undefined}>
                         <Button type="primary" className="ml-auto !h-10 !min-w-16 shrink-0 !rounded-full !px-3" disabled={agentNeedsSkill || !prompt.trim()} onClick={() => submit("new")} aria-label={t("canvas.promptPanel.generate")}>

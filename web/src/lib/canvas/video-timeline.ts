@@ -36,6 +36,8 @@ export type VideoRange = {
 export type SegmentPlan = VideoRange & {
     /** 本段参与生成的角色参考图节点 id；为空表示跟随全局角色。 */
     castNodeIds?: string[];
+    /** 本段的提示词覆盖；为空表示跟随全局提示词。 */
+    prompt?: string;
 };
 
 export type SegmentPlanOptions = {
@@ -51,6 +53,71 @@ export const DEFAULT_MAX_SEGMENT_MS = 6000;
 export const DEFAULT_MIN_SEGMENT_MS = 1200;
 /** 低于该分数视为渐变/运动，不算切点。 */
 export const DEFAULT_SCENE_THRESHOLD = 0.22;
+
+/**
+ * 单段时长的硬约束。
+ *
+ * 这不是审美偏好，是模型接口的能力边界：MiniMax 系列（海螺 / H3 reference-to-video）
+ * 只接受 5–15 秒的参考视频，喂 2 秒进去会被拒绝或静默改成 5 秒 —— 后者更糟，
+ * 用户以为成功了，拼回去才发现节奏全错。所以段长必须在规划阶段就落进区间。
+ */
+export type SegmentLimits = { minMs: number; maxMs: number };
+
+export const MINIMAX_SEGMENT_LIMITS: SegmentLimits = { minMs: 5000, maxMs: 15000 };
+/** 认不出渠道时的保守兜底：短段也能跑，只是段数会多。 */
+export const FALLBACK_SEGMENT_LIMITS: SegmentLimits = { minMs: DEFAULT_MIN_SEGMENT_MS, maxMs: DEFAULT_MAX_SEGMENT_MS };
+
+/**
+ * 尾帧抽帧点相对区间终点的回退量（毫秒）。
+ *
+ * 区间是左闭右开，直接在 endMs 取值会落到下一段的第一帧上（如果正好是切点，就是
+ * 另一场戏的画面），拿它当"尾帧锚定"等于把接缝锚错地方。回退一格视频帧即可。
+ */
+export const SEGMENT_TAIL_FRAME_BACKOFF_MS = 34;
+
+/**
+ * 一段首尾帧的实际抽帧时间点。
+ *
+ * 抽帧点和区间边界不是一回事，必须由同一个函数产出：预铺时记进 metadata 的值，
+ * 要与真正抽帧时用的值一致，否则"节点上写的参考帧"和"模型吃的参考帧"不是同一张，
+ * 事后核对就失去了意义。
+ */
+export function segmentAnchorTimes(range: { startMs: number; endMs: number }): { headMs: number; tailMs: number } {
+    const headMs = Math.max(0, Math.round(range.startMs));
+    const tailMs = Math.max(headMs, Math.round(range.endMs - SEGMENT_TAIL_FRAME_BACKOFF_MS));
+    return { headMs, tailMs };
+}
+
+/**
+ * 角色数 → 提示词模板档位。
+ *
+ * 人数必须写进提示词：单人段套双人模板，模型会凭空再画一个人；双人段套单人模板，
+ * 第二个人会被抹掉。这种错模型不会报错，只会安静地多画或少画一个人，所以档位规则
+ * 只在这里定一份 —— 弹窗填默认值、提交前的兜底都走它，免得两个地方各写一套分界。
+ */
+export function promptTemplateKey(count: number): "one" | "two" | "many" | null {
+    if (!Number.isFinite(count) || count <= 0) return null;
+    if (count === 1) return "one";
+    if (count === 2) return "two";
+    return "many";
+}
+
+/**
+ * 从渠道/模型/工作流的名字里认出能力区间。
+ *
+ * 传进来的字符串越具体越好（工作流 id、模型名、渠道名一起传）。全都没给时按
+ * MiniMax 处理 —— 本项目视频主力就是这个渠道，猜错方向的代价（提交必失败）比
+ * 猜保守（段数偏多但能跑）大得多。
+ */
+export function resolveSegmentLimits(hints: Array<string | undefined | null>): SegmentLimits {
+    const text = hints
+        .filter((value): value is string => Boolean(value))
+        .join(" ")
+        .toLowerCase();
+    if (!text.trim()) return MINIMAX_SEGMENT_LIMITS;
+    if (/minimax|hailuo|海螺|abab|referencetovideo/.test(text)) return MINIMAX_SEGMENT_LIMITS;
+    return FALLBACK_SEGMENT_LIMITS;
+}
 
 const GRID_W = 32;
 const GRID_H = 18;
@@ -159,7 +226,7 @@ export function planSegments(durationMs: number, cuts: SceneCut[], options: Segm
         sceneStart = inner.includes(end);
         cursor = end;
     }
-    return mergeShortRanges(ranges, minMs, maxMs);
+    return fitRangesToLimits(ranges, minMs, maxMs);
 }
 
 /**
@@ -168,6 +235,7 @@ export function planSegments(durationMs: number, cuts: SceneCut[], options: Segm
  */
 export function planSelectionRanges(startMs: number, endMs: number, cuts: SceneCut[], options: SegmentPlanOptions = {}): VideoRange[] {
     const maxMs = Math.max(500, options.maxMs ?? DEFAULT_MAX_SEGMENT_MS);
+    const minMs = Math.max(0, options.minMs ?? DEFAULT_MIN_SEGMENT_MS);
     const start = Math.max(0, Math.min(startMs, endMs));
     const end = Math.max(start, Math.max(startMs, endMs));
     if (end - start <= 1) return [];
@@ -184,22 +252,95 @@ export function planSelectionRanges(startMs: number, endMs: number, cuts: SceneC
         ranges.push({ startMs: cursor, endMs: next, sceneStart: cursor === start ? false : inner.includes(cursor) });
         cursor = next;
     }
-    return ranges;
+    return fitRangesToLimits(ranges, minMs, maxMs);
 }
 
-function mergeShortRanges(ranges: VideoRange[], minMs: number, maxMs: number): VideoRange[] {
-    const result: VideoRange[] = [];
+/**
+ * 把切出来的段捏进模型的能力区间。
+ *
+ * 场景检测只认画面变化，产出的段长完全不受模型约束：一段 0.8 秒的闪白、
+ * 一段 22 秒的固定镜头都会原样冒出来。前者提交必被拒，后者超出上限被截断，
+ * 都在用户按下生成之后才暴露 —— 所以要在规划阶段就修掉。
+ *
+ * 两条规则：
+ * 1. 短于下限的段并入邻居（优先前一段），合并不下（会超上限）就留给第 2 步；
+ * 2. 长于上限的段按上限均分 —— 均分天然满足下限（上限是下限的 3 倍以上时，
+ *    每一份都 > 上限/2），比"从头硬切、尾段剩个零头"稳。
+ *
+ * sceneStart 只在原段起点保留：均分出来的后半段起于画面正中，本来就没有连续性。
+ */
+export function fitRangesToLimits(ranges: VideoRange[], minMs: number, maxMs: number): VideoRange[] {
+    if (!ranges.length) return [];
+    const floor = Math.max(0, minMs);
+    const ceiling = Math.max(floor + 1, maxMs);
+
+    // 1. 短段向前并。合并后可能超上限 —— 不在这里拦，交给第 2 步均分，
+    //    否则会留下一个"并了超限、不并又不合规"的短段，两边都不成立。
+    const merged: VideoRange[] = [];
     for (const range of ranges) {
-        const previous = result[result.length - 1];
-        const tooShort = range.endMs - range.startMs < minMs;
-        // 合并后会超过上限 1.2 倍就宁可留一个短段，也不要让单段超模型能力。
-        if (previous && tooShort && range.endMs - previous.startMs <= maxMs * 1.2) {
+        const previous = merged[merged.length - 1];
+        if (previous && range.endMs - range.startMs < floor) {
             previous.endMs = range.endMs;
             continue;
         }
-        result.push({ ...range });
+        merged.push({ ...range });
+    }
+
+    // 1.1 首段仍然过短，且只有它一个"没人可并"时并给下一段
+    if (merged.length > 1 && merged[0].endMs - merged[0].startMs < floor) {
+        const head = merged.shift() as VideoRange;
+        merged[0] = { ...merged[0], startMs: head.startMs, sceneStart: head.sceneStart };
+    }
+
+    // 2. 超长段均分
+    const result: VideoRange[] = [];
+    for (const range of merged) {
+        const length = range.endMs - range.startMs;
+        if (length <= ceiling) {
+            result.push(range);
+            continue;
+        }
+        const parts = Math.ceil(length / ceiling);
+        const piece = length / parts;
+        for (let index = 0; index < parts; index += 1) {
+            const startMs = index === 0 ? range.startMs : Math.round(range.startMs + piece * index);
+            const endMs = index === parts - 1 ? range.endMs : Math.round(range.startMs + piece * (index + 1));
+            result.push({ startMs, endMs, sceneStart: index === 0 ? range.sceneStart : false });
+        }
     }
     return result;
+}
+
+/** 段长是否落在模型能接受的区间内。UI 用它给每张段卡打标、决定能不能提交。 */
+export function isRangeWithinLimits(range: { startMs: number; endMs: number }, limits: SegmentLimits, toleranceMs = 60): boolean {
+    const length = range.endMs - range.startMs;
+    return length >= limits.minMs - toleranceMs && length <= limits.maxMs + toleranceMs;
+}
+
+/**
+ * 这一段现在能不能直接跑。
+ *
+ * 局部重绘永远能跑（不需要角色参考图）。角色替换则要求"生效的角色集合"非空 ——
+ * 没挂任何参考图跑角色替换，模型只会把原画面重新画一遍，白烧一轮额度。
+ *
+ * 显式给过（哪怕给的是空数组）都算能跑：空数组是"这段确定不换人"的有效语义，
+ * 比如纯空镜，用户就是要它按原样重画一遍保持画质一致。
+ */
+export function isSegmentRunnable(range: SegmentPlan, globalCastIds: string[], requiresCast: boolean): boolean {
+    if (!requiresCast) return true;
+    if (range.castNodeIds !== undefined) return true;
+    return globalCastIds.length > 0;
+}
+
+/**
+ * 两组分段计划是不是同一套切法。
+ *
+ * 逐段配的角色是按序号存的，边界一变序号就指向另一段时间。所以"接着上一批跑"
+ * 必须先确认边界完全一致，否则宁可开新批，也不能把角色套错人。
+ */
+export function sameRangeBoundaries(a: Array<{ startMs: number; endMs: number }>, b: Array<{ startMs: number; endMs: number }>): boolean {
+    if (a.length !== b.length || !a.length) return false;
+    return a.every((range, index) => range.startMs === b[index].startMs && range.endMs === b[index].endMs);
 }
 
 /** 把时间点吸到最近的切点上；超出容差就原样返回。 */

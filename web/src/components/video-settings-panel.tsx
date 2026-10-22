@@ -5,37 +5,18 @@ import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
 import { type CanvasTheme } from "@/lib/canvas-theme";
+import { MINIMAX_VIDEO_SIZE_TIERS, normalizeVideoSizeValue, parseVideoSize, videoSizeOptions, type MiniMaxVideoTier } from "@/lib/canvas/video-size";
 import { type AiConfig } from "@/stores/use-config-store";
 
-export type MiniMaxVideoTier = {
-    mp: string;
-    landscapeW: number;
-    landscapeH: number;
-};
-
-/**
- * MiniMax H3 官方支持的 32 整数倍尺寸档位（最大支持到 0.98 MP）
- */
-export const MINIMAX_VIDEO_SIZE_TIERS: MiniMaxVideoTier[] = [
-    { mp: "0.2M", landscapeW: 608, landscapeH: 352 },
-    { mp: "0.3M", landscapeW: 736, landscapeH: 416 },
-    { mp: "0.4M", landscapeW: 864, landscapeH: 480 },
-    { mp: "0.5M", landscapeW: 960, landscapeH: 544 },
-    { mp: "0.6M", landscapeW: 1056, landscapeH: 608 },
-    { mp: "0.7M", landscapeW: 1152, landscapeH: 640 },
-    { mp: "0.8M", landscapeW: 1216, landscapeH: 672 },
-    { mp: "0.9M", landscapeW: 1280, landscapeH: 736 },
-    { mp: "0.98M", landscapeW: 1344, landscapeH: 768 },
-];
+// 尺寸档位与解析逻辑在 lib 里（分段链路也要用同一套口径），这里只做转出，
+// 免得页面与组件各自维护一份档位表，改一处漏一处。
+export { MINIMAX_VIDEO_SIZE_TIERS, normalizeVideoSizeValue, parseVideoSize, videoSizeOptions };
+export type { MiniMaxVideoTier };
 
 const quickSecondOptions = [5, 10, 15];
 
 export const videoSecondOptions = quickSecondOptions.map((value) => String(value));
 export const videoResolutionOptions = [{ value: "720", label: "720p" }];
-export const videoSizeOptions = MINIMAX_VIDEO_SIZE_TIERS.flatMap((tier) => [
-    { value: `${tier.landscapeW}x${tier.landscapeH}`, label: `16:9 · ${tier.landscapeW}×${tier.landscapeH} (${tier.mp})`, width: tier.landscapeW, height: tier.landscapeH },
-    { value: `${tier.landscapeH}x${tier.landscapeW}`, label: `9:16 · ${tier.landscapeH}×${tier.landscapeW} (${tier.mp})`, width: tier.landscapeH, height: tier.landscapeW },
-]);
 
 type VideoSettingsPanelProps = {
     config: AiConfig;
@@ -218,42 +199,8 @@ export function videoSecondsLabel(value: string) {
     return `${s}s`;
 }
 
-export function normalizeVideoSizeValue(value?: string) {
-    if (!value) return "544x960";
-    const isValid = videoSizeOptions.some((option) => option.value === value);
-    return isValid ? value : "544x960";
-}
-
 export function normalizeVideoResolutionValue(value?: string) {
     return "720";
-}
-
-export function parseVideoSize(sizeStr?: string): { width: number; height: number; aspect: "16:9" | "9:16"; tier: MiniMaxVideoTier } {
-    const raw = (sizeStr || "").trim().toLowerCase();
-    const match = raw.match(/^(\d+)\s*[x×]\s*(\d+)$/);
-    const w = Number(match?.[1]) || 544;
-    const h = Number(match?.[2]) || 960;
-
-    const isLandscape = w >= h;
-    const aspect: "16:9" | "9:16" = isLandscape ? "16:9" : "9:16";
-    const longSide = Math.max(w, h);
-    const shortSide = Math.min(w, h);
-
-    // 寻找最接近的 tier（默认 0.5M）
-    let matchedTier = MINIMAX_VIDEO_SIZE_TIERS[3]; // 0.5M
-    let minDiff = Infinity;
-    for (const t of MINIMAX_VIDEO_SIZE_TIERS) {
-        const diff = Math.abs(t.landscapeW - longSide) + Math.abs(t.landscapeH - shortSide);
-        if (diff < minDiff) {
-            minDiff = diff;
-            matchedTier = t;
-        }
-    }
-
-    const finalW = aspect === "16:9" ? matchedTier.landscapeW : matchedTier.landscapeH;
-    const finalH = aspect === "16:9" ? matchedTier.landscapeH : matchedTier.landscapeW;
-
-    return { width: finalW, height: finalH, aspect, tier: matchedTier };
 }
 
 function OptionPill({ selected, disabled = false, theme, onClick, children }: { selected: boolean; disabled?: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {

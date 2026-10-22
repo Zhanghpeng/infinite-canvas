@@ -23,7 +23,9 @@ import { captureVideoFrame, type VideoFramePosition } from "@/lib/canvas/canvas-
 import { extractAudioFromVideo } from "@/lib/canvas/canvas-video-audio";
 import { concatVideoParts, cutVideoSegment, isMediaProcessingSupported, probeVideo, type ConcatPart } from "@/lib/canvas/video-clip";
 import { captureFrameDataUrl } from "@/lib/canvas/video-scene-detect";
-import { formatDuration, type VideoRange } from "@/lib/canvas/video-timeline";
+import { formatDuration, isSegmentRunnable, promptTemplateKey, resolveSegmentLimits, sameRangeBoundaries, segmentAnchorTimes, type SegmentPlan, type VideoRange } from "@/lib/canvas/video-timeline";
+import { resolveSegmentVideoSize } from "@/lib/canvas/video-size";
+import { videoSizeLabel } from "@/components/video-settings-panel";
 import { App, Button, Modal } from "antd";
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "@/constant/canvas";
 import { ActiveConnectionPath, ConnectionPath } from "@/components/canvas/canvas-connections";
@@ -159,6 +161,56 @@ type CanvasGenerationRequest = {
     originNodeId: string;
     runningNodeId: string;
     controller: AbortController;
+};
+
+/** 分批里跑完的一段：合成时按它拼，行光标按它的实际高度排。 */
+type ProducedVideoPart = { nodeId: string; blob: Blob; range: VideoRange };
+
+/**
+ * 未跑完的分批（有段失败或被取消）。只存内存：刷新页面任务本身也没了，续跑无从谈起。
+ * 存在的意义是"别让用户整批重来"——已成功的段和参考片段都在画布上，重跑只会多出一批重复节点。
+ */
+type PendingVideoBatch = {
+    plan: VideoEditPlan;
+    sourceId: string;
+    clipColumnX: number;
+    segmentColumnX: number;
+    clipWidth: number;
+    clipHeight: number;
+    /** 本批新建的全部节点 id（段 + 参考片段）：行光标、收尾聚焦都靠它。 */
+    nodeIds: string[];
+    /**
+     * 段序号 → 已铺在画布上的段节点 id。
+     *
+     * 提交时就把这一拨的段节点全部铺出来（排队态），续跑必须按这张表复用，
+     * 否则重铺一次会在同一列里多出一批重复节点。
+     */
+    spots: Map<number, string>;
+    /** 已成功的段。段一成功就 push，中途取消也已记录，续跑据此跳过。 */
+    produced: ProducedVideoPart[];
+};
+
+/**
+ * 已经"铺好节点、等执行"的一批。
+ *
+ * 节点在提交那一瞬就落到画布上了（排队态），执行可能被推后到队列里 —— 中间隔着
+ * 上一批的十几分钟。所以预铺阶段算出来的一切（规格、列坐标、提示词）都得带上，
+ * 轮到它时不再重算、更不能重铺：再铺一遍就是同一列里多出一批重复节点。
+ */
+type PreparedVideoBatch = {
+    plan: VideoEditPlan;
+    source: CanvasNodeData;
+    sourceTitle: string;
+    /** 实际下发的兜底提示词（段级覆盖优先，逐段在循环里取）。 */
+    promptText: string;
+    config: AiConfig;
+    batch: PendingVideoBatch;
+    clipColumnX: number;
+    segmentColumnX: number;
+    clipWidth: number;
+    clipHeight: number;
+    /** 这次只跑这些段序号；空表示按 spots 里的来。 */
+    onlyIndices: number[] | undefined;
 };
 
 const VIDEO_NODE_MAX_WIDTH = 420;
@@ -332,8 +384,23 @@ function InfiniteCanvasPage() {
     const [depthVideoNode, setDepthVideoNode] = useState<CanvasNodeData | null>(null);
     const [videoTimelineNode, setVideoTimelineNode] = useState<CanvasNodeData | null>(null);
     const [videoTimelineSubmitting, setVideoTimelineSubmitting] = useState(false);
+    /** 该源片上次未跑完的分批概况：有值就在弹窗里给"继续剩余段"入口，省得用户整批重来。 */
+    const [videoTimelinePending, setVideoTimelinePending] = useState<{ done: number; total: number; runnableRemain: number } | null>(null);
     /** 正在跑分段任务的源片节点 id：提交即关弹窗，靠它防止同一个源片被重复提交。 */
     const runningVideoEditsRef = useRef<Set<string>>(new Set());
+    /** 未跑完的分批，按源片节点 id 索引：断点续跑与弹窗"继续剩余段"都读它。 */
+    const pendingVideoBatchRef = useRef<Map<string, PendingVideoBatch>>(new Map());
+    /**
+     * 正在跑的时候又提交了一次的配置。逐段配角色本来就该和生成并行：
+     * 用户配完第二批点生成时第一批还没跑完，直接把任务排在这里，当前这批收尾就接着跑，
+     * 而不是弹一句"等跑完再开"让他干等、还得自己记着回来。
+     * 源片一并存着 —— 队列在弹窗关闭后才执行，那时候 videoTimelineNode 已经清空了。
+     * 存的是**已经铺好节点**的批（PreparedVideoBatch），不是裸 plan：轮到它时只差执行，
+     * 再走一遍提交会重复铺节点。
+     */
+    const queuedVideoPlansRef = useRef<Map<string, PreparedVideoBatch[]>>(new Map());
+    /** 队列续跑要能回头执行"已铺好节点的那一批"；用 ref 存引用，避免塞进依赖里导致调用方失稳。 */
+    const runPreparedBatchRef = useRef<((prepared: PreparedVideoBatch) => Promise<void>) | null>(null);
     const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
     const [previewImageId, setPreviewImageId] = useState<string | null>(null);
     const [titleEditing, setTitleEditing] = useState(false);
@@ -1600,6 +1667,20 @@ function InfiniteCanvasPage() {
         [animateToViewport, size.height, size.width],
     );
 
+    /** 把一块世界坐标区域平滑带入视野：适配视图与"铺开后聚焦新节点"共用一套手感与留白。 */
+    const animateToBounds = useCallback(
+        (bounds: { left: number; top: number; right: number; bottom: number }) => {
+            const padding = 72;
+            const contentWidth = Math.max(1, bounds.right - bounds.left);
+            const contentHeight = Math.max(1, bounds.bottom - bounds.top);
+            const k = Math.min(Math.max(Math.min((size.width - padding * 2) / contentWidth, (size.height - padding * 2) / contentHeight), 0.05), 1.2);
+            const centerX = (bounds.left + bounds.right) / 2;
+            const centerY = (bounds.top + bounds.bottom) / 2;
+            animateToViewport({ x: size.width / 2 - centerX * k, y: size.height / 2 - centerY * k, k });
+        },
+        [animateToViewport, size.height, size.width],
+    );
+
     /**
      * 适配视图：把所有内容（或只把选中的内容）缩放到刚好铺满可视区。
      *
@@ -1615,15 +1696,49 @@ function InfiniteCanvasPage() {
                 message.info(t("canvas.layout.emptyCanvas"));
                 return;
             }
-            const padding = 72;
-            const contentWidth = Math.max(1, bounds.right - bounds.left);
-            const contentHeight = Math.max(1, bounds.bottom - bounds.top);
-            const k = Math.min(Math.max(Math.min((size.width - padding * 2) / contentWidth, (size.height - padding * 2) / contentHeight), 0.05), 1.2);
-            const centerX = (bounds.left + bounds.right) / 2;
-            const centerY = (bounds.top + bounds.bottom) / 2;
-            animateToViewport({ x: size.width / 2 - centerX * k, y: size.height / 2 - centerY * k, k });
+            animateToBounds(bounds);
         },
-        [animateToViewport, message, size.height, size.width, t],
+        [animateToBounds, message, t],
+    );
+
+    /**
+     * 把指定节点组平滑带入视野，不动用户选区。
+     * 分段批量收尾时必须调它：不 focus 的话，新铺出来的列落在空画布里，
+     * 用户回来只看到一片灰，还以为没生成。
+     */
+    const fitToNodes = useCallback(
+        (nodeIds: string[]) => {
+            const pool = nodesRef.current.filter((node) => nodeIds.includes(node.id) && !collapsedNodeIdsRef.current.has(node.id));
+            const bounds = boundsOfNodes(pool);
+            if (!bounds) return;
+            animateToBounds(bounds);
+        },
+        [animateToBounds],
+    );
+
+    /** 节点是否完整落在当前视野内：用来判断收尾时要不要把视角拉回来。 */
+    const isNodeWithinViewport = useCallback(
+        (nodeId: string) => {
+            const node = nodesRef.current.find((item) => item.id === nodeId);
+            if (!node) return true;
+            const { x, y, k } = viewportRef.current;
+            const left = node.position.x * k + x;
+            const top = node.position.y * k + y;
+            return left >= 0 && top >= 0 && left + node.width * k <= size.width && top + node.height * k <= size.height;
+        },
+        [size.height, size.width],
+    );
+
+    /**
+     * 收尾聚焦：整批节点（含成片）按实际大小带入视野。
+     * 用户可能已滑去看别处——整批都在屏幕外才拉回来，正在别处干活时不抢视角。
+     */
+    const focusVideoBatch = useCallback(
+        (nodeIds: string[]) => {
+            if (!nodeIds.length || nodeIds.every((id) => isNodeWithinViewport(id))) return;
+            fitToNodes(nodeIds);
+        },
+        [fitToNodes, isNodeWithinViewport],
     );
 
     /** 批量排版后同步分组关系：组框动了，成员归属要跟着重新判定，与拖拽组框的行为一致。 */
@@ -3375,6 +3490,94 @@ function InfiniteCanvasPage() {
         [nodes],
     );
 
+    /**
+     * 分段用的生成配置：**必须从源节点推导，不能直接吃全局配置**。
+     *
+     * 渠道、工作流、模型、画面比例、清晰度这些都是节点级的 —— 用户在视频节点的
+     * 设置里选的是"这条片子按什么规格生成"。分段链路原来只搬了 channelId/workflowId
+     * 两项，其余全落在全局默认值上，于是出现了最典型的一种偏差：节点上选的是
+     * 960×544 横屏，跑出来的段却是 544×960 竖屏（全局 size 是 auto 时 ComfyUI 的默认值）。
+     * 竖屏段拼不进横屏片，用户看到的结论就是"工作流和画面比例没生效"。
+     *
+     * 画面比例还有一条更硬的约束：**整批段必须同尺寸**，否则拼接时画幅对不上。
+     * 所以节点上没显式选过尺寸时，不回落全局，而是跟随参考视频的方向推一个档位
+     * （见 resolveSegmentVideoSize）。
+     */
+    const buildSegmentConfig = useCallback(
+        (source: CanvasNodeData, override?: { channelId?: string; workflowId?: string; model?: string; size?: string }): AiConfig => {
+            const base = buildGenerationConfig(effectiveConfig, source, "video");
+            return {
+                ...base,
+                // 分段链路必须把原片段当参考视频送进去，首尾帧工作流不收这个槽位。
+                videoMode: "omni",
+                channelId: override?.channelId || base.channelId,
+                workflowId: override?.workflowId || base.workflowId,
+                videoModel: override?.model || base.videoModel,
+                size: resolveSegmentVideoSize({ size: override?.size || source.metadata?.size, width: source.width, height: source.height }),
+            };
+        },
+        [effectiveConfig],
+    );
+
+    /** 按一份生成配置认渠道能力区间：用户在节点上换了渠道/工作流，段长窗口要跟着走。 */
+    const segmentLimitsFor = useCallback((config: AiConfig) => {
+        const workflow = findWorkflow(config, config.channelId, config.workflowId);
+        return resolveSegmentLimits([config.channelId, config.workflowId, config.videoModel, config.model, workflow?.id, workflow?.name, workflow?.category]);
+    }, []);
+
+    /**
+     * 当前视频渠道能接受的单段时长区间。
+     *
+     * MiniMax 系（海螺 / H3 reference-to-video）只吃 5–15 秒的参考视频：喂 2 秒进去
+     * 会被拒，喂 20 秒会被截。段长这件事必须在规划阶段就守住，等提交失败再回头
+     * 改段，前面排的段全白费。
+     */
+    const videoSegmentLimits = useMemo(() => segmentLimitsFor(videoTimelineNode ? buildSegmentConfig(videoTimelineNode) : effectiveConfig), [buildSegmentConfig, effectiveConfig, segmentLimitsFor, videoTimelineNode]);
+
+    /** 弹窗里要如实展示"这一批按什么规格生成"，否则用户只能靠结果反推参数有没有生效。 */
+    const videoTimelineSpec = useMemo(() => {
+        if (!videoTimelineNode) return null;
+        const config = buildSegmentConfig(videoTimelineNode);
+        const workflow = findWorkflow(config, config.channelId, config.workflowId);
+        return {
+            workflow: workflow?.name || t("canvas.videoTimeline.spec.workflowFallback"),
+            size: videoSizeLabel(config.size),
+            // 首尾帧要不要送，取决于处理方式与工作流类别（见 runVideoSegment 2.1 节）。
+            // 同一个工作流下，重绘送、换人不送，弹窗得如实反映。
+            frameWorkflow: workflow?.category === "frameVideo",
+        };
+    }, [buildSegmentConfig, t, videoTimelineNode]);
+
+    /**
+     * 重开时间轴时把上一批的切段参数与已产出的段带进弹窗。
+     *
+     * 不这么做的话，重开等于重新分段：单段上限回到默认值 → 边界全变 → 段级配置作废，
+     * 而且提交时判定"边界不一致"会另起一批，画布上多出一列重复节点。
+     * 用户只是想把剩下的段配完接着跑，不该付这个代价。
+     */
+    const videoTimelineBatchView = useMemo(() => {
+        const pending = videoTimelineNode ? pendingVideoBatchRef.current.get(videoTimelineNode.id) : null;
+        if (!pending) return { restore: null, doneRanges: null };
+        const first = pending.plan.ranges[0];
+        const last = pending.plan.ranges[pending.plan.ranges.length - 1];
+        return {
+            restore: {
+                mode: pending.plan.mode === "repaint" ? ("repaint" as const) : ("character" as const),
+                maxMs: pending.plan.maxMs,
+                prompt: pending.plan.prompt,
+                crossfadeFrames: pending.plan.crossfadeFrames,
+                keepAudio: pending.plan.keepAudio,
+                selection: pending.plan.mode === "repaint" && first && last ? { startMs: first.startMs, endMs: last.endMs } : null,
+                // 逐段配置也要还原：不然重开一次，用户配过的七八段全变回"未挂角色"，
+                // 得一段段重新点 —— 而"先跑一批再配剩下的"本来就是要在两次打开之间接上的。
+                casts: pending.plan.ranges
+                    .filter((range) => range.castNodeIds !== undefined || Boolean(range.prompt))
+                    .map((range) => ({ startMs: range.startMs, endMs: range.endMs, castNodeIds: range.castNodeIds, prompt: range.prompt })),
+            },
+            doneRanges: pending.produced.map((part) => part.range),
+        };
+    }, [videoTimelineNode]);
+
     const handleOpenVideoTimeline = useCallback(
         (node: CanvasNodeData) => {
             setToolbarNodeId(null);
@@ -3388,10 +3591,27 @@ function InfiniteCanvasPage() {
                 message.warning(t("canvas.videoTimeline.toast.unsupported"));
                 return;
             }
+            // 上次这批没跑完就在弹窗里提示"可续跑"：已成功的段和参考片段都在画布上，
+            // 整批重来只会多出一批重复节点，用户还得自己收拾。
+            const pending = pendingVideoBatchRef.current.get(node.id);
+            if (pending) {
+                // 剩余段里有多少是配好角色、能直接续跑的：一个都没有时不该给"继续剩余段"，
+                // 那等于让模型照原片重画，得先把角色配上。
+                const runnableRemain = pending.plan.ranges.filter(
+                    (range) =>
+                        !pending.produced.some((part) => part.range.startMs === range.startMs && part.range.endMs === range.endMs) &&
+                        isSegmentRunnable(range, pending.plan.castNodeIds, pending.plan.mode !== "repaint"),
+                ).length;
+                setVideoTimelinePending(pending.produced.length < pending.plan.ranges.length ? { done: pending.produced.length, total: pending.plan.ranges.length, runnableRemain } : null);
+            } else {
+                setVideoTimelinePending(null);
+            }
             // 分段链路要把原片片段当参考视频送进去，只有 omni 工作流吃这个槽位；首尾帧工作流会直接拒绝。
             // 与其让用户等一轮生成再看到失败，不如在入口处就讲清楚。
-            const workflow = findWorkflow(effectiveConfig, effectiveConfig.channelId, effectiveConfig.workflowId);
-            const modelName = (effectiveConfig.videoModel || effectiveConfig.model || "").toLowerCase();
+            // 判的是**这个节点**选中的工作流/模型，不是全局默认值 —— 用户很可能在节点上换过。
+            const nodeConfig = buildSegmentConfig(node);
+            const workflow = findWorkflow(nodeConfig, nodeConfig.channelId, nodeConfig.workflowId);
+            const modelName = (nodeConfig.videoModel || nodeConfig.model || "").toLowerCase();
             const frameOnlyWorkflow = workflow?.category === "frameVideo" || modelName.includes("frame") || modelName.includes("首尾帧");
             if (frameOnlyWorkflow) {
                 Modal.confirm({
@@ -3406,7 +3626,7 @@ function InfiniteCanvasPage() {
             }
             setVideoTimelineNode(node);
         },
-        [effectiveConfig, message, t],
+        [buildSegmentConfig, message, t],
     );
 
     /** 就地更新节点，同时同步 ref，避免长流程里读到旧快照。 */
@@ -3446,10 +3666,18 @@ function InfiniteCanvasPage() {
             promptText: string;
             config: AiConfig;
             segmentId: string;
+            /**
+             * 这一段的处理方式。决定送不送原片首尾帧：
+             * 局部重绘保留原人物，两张原片帧能钉住接缝；角色替换正好相反 ——
+             * 那两帧里是要被换掉的旧人物，送进去就成了额外的人物参考。
+             */
+            mode: VideoEditPlan["mode"];
             /** 参考视频文件名，重试时保持与首次一致，便于对照。 */
             segmentLabel: string;
             /** 段序号（从 0 开始），用于标题与提示里的"第 N 段"。 */
             segmentIndex: number;
+            /** 本段提示词是段级覆盖还是沿用全局 —— 记进节点，面板上才说得清改了影响谁。 */
+            promptSource?: "segment" | "global";
             /**
              * 参考片段的落点。给了就把切出来的这一段落到画布上：模型到底吃了什么、
              * 这段里有几个人、时长多少，用户点开就能检查，不用等生成完再从结果反推。
@@ -3457,8 +3685,8 @@ function InfiniteCanvasPage() {
              */
             clipSpot?: { x: number; y: number; width: number; height: number };
             signal?: AbortSignal;
-        }): Promise<Blob> => {
-            const { source, sourceBlob, range, castIds, promptText, config, segmentId, segmentLabel, segmentIndex, clipSpot, signal } = params;
+        }): Promise<{ blob: Blob; clipNodeId?: string }> => {
+            const { source, sourceBlob, range, castIds, promptText, config, segmentId, mode, segmentLabel, segmentIndex, promptSource = "global", clipSpot, signal } = params;
             const sourceUrl = source.metadata?.content || "";
 
             // 1. 切出这一段：模型吃不了长片，也吃不了整片
@@ -3475,7 +3703,7 @@ function InfiniteCanvasPage() {
                         {
                             id: clipNodeId,
                             type: CanvasNodeType.Video,
-                            title: t("canvas.videoTimeline.node.clipTitle", { index: segmentIndex + 1 }),
+                            title: t("canvas.videoTimeline.node.clipTitle", { title: source.title || t("canvas.sidePanel.filter.video"), index: segmentIndex + 1 }),
                             position: { x: clipSpot.x, y: clipSpot.y },
                             width: clipSpot.width,
                             height: clipSpot.height,
@@ -3501,8 +3729,16 @@ function InfiniteCanvasPage() {
                 });
             }
 
-            // 2. 参考图：角色在前（模型对靠前的参考更敏感），首尾帧在后钉住接缝
-            const castImages = castIds.map((id) => nodesRef.current.find((item) => item.id === id)).filter((item): item is CanvasNodeData => Boolean(item?.metadata?.content));
+            // 2. 参考图：只有角色图。顺序就是模型看到的 ref_image_01..0N ——
+            //    提示词里说的"参考图 1"必须是用户勾的第一个，所以不排序、不筛选。
+            const castNodes = castIds.map((id) => nodesRef.current.find((item) => item.id === id));
+            const castImages = castNodes.filter((item): item is CanvasNodeData => Boolean(item?.metadata?.content));
+            // 静默丢参考图是"角色换得不对"最难查的一种：节点上明明勾了三个角色，
+            // 实际只喂了两个（某个节点被删或还没出图），模型凭空补一个，谁也说不清为什么。
+            const missingCastTitles = castNodes.filter((item) => !item?.metadata?.content).map((item) => item?.title || item?.id || "?");
+            if (missingCastTitles.length) {
+                message.warning({ content: t("canvas.videoTimeline.toast.castMissing", { index: segmentIndex + 1, titles: missingCastTitles.join("、") }), duration: 6 });
+            }
             const referenceImages: ReferenceImage[] = castImages.map((castNode) => ({
                 id: castNode.id,
                 name: `${castNode.title || "cast"}.png`,
@@ -3510,22 +3746,54 @@ function InfiniteCanvasPage() {
                 dataUrl: castNode.metadata?.content || "",
                 url: castNode.metadata?.content || "",
             }));
-            // 传 signal：不传的话点取消后抽帧还在跑，且元数据加载没有超时兜底。
-            const headFrame = await captureFrameDataUrl(sourceUrl, range.startMs, { width: 960, signal });
-            const tailFrame = await captureFrameDataUrl(sourceUrl, Math.max(range.startMs, range.endMs - 34), { width: 960, signal });
-            referenceImages.push(
-                { id: `head-${segmentId}`, name: "segment_start.jpg", type: "image/jpeg", dataUrl: headFrame, url: headFrame },
-                { id: `tail-${segmentId}`, name: "segment_end.jpg", type: "image/jpeg", dataUrl: tailFrame, url: tailFrame },
-            );
 
-            // 3. 生成：参考视频给内容与节奏，首尾帧给接缝，角色图给外观。
-            //    秒数按本段时长传 —— 各段 2–6 秒不等，只认全局固定值的话，
+            // 2.1 首尾帧：只在"需要"的时候抽，而且送法分两种。
+            //
+            //     角色替换**一律不送**。参考视频已经把镜头、构图、时序、接缝交代清楚了；
+            //     而抽出来的那两帧里是**要被换掉的旧人物**，作为 ref_image 排在角色图后面，
+            //     模型会把它当成额外的人物参考 —— 这正是"换不干净、原人物残留"的隐形来源。
+            //
+            //     局部重绘反过来：它本来就要保留原人物，两张原片帧只用来钉住接缝，是加分项。
+            //     但 omni 工作流没有 first_frame 槽位，只能继续当 ref_image 追加；
+            //     首尾帧类工作流才有 first_frame / last_frame，走槽位。
+            const frameWorkflow = findWorkflow(config, config.channelId, config.workflowId)?.category === "frameVideo";
+            const usesAnchorFrames = frameWorkflow || mode === "repaint";
+            let firstFrame: ReferenceImage | undefined;
+            let lastFrame: ReferenceImage | undefined;
+            let anchorTimes: { headMs: number; tailMs: number } | null = null;
+            if (usesAnchorFrames) {
+                // 实际抽帧点由 segmentAnchorTimes 统一产出：预铺时写进节点的那两个时间戳
+                // 必须是真正抽帧用的值，否则"节点上标的首尾帧"和模型吃进去的不是同一张。
+                anchorTimes = segmentAnchorTimes(range);
+                // 传 signal：不传的话点取消后抽帧还在跑，且元数据加载没有超时兜底。
+                const headFrame = await captureFrameDataUrl(sourceUrl, anchorTimes.headMs, { width: 960, signal });
+                const tailFrame = await captureFrameDataUrl(sourceUrl, anchorTimes.tailMs, { width: 960, signal });
+                if (frameWorkflow) {
+                    firstFrame = { id: `head-${segmentId}`, name: "segment_start.jpg", type: "image/jpeg", dataUrl: headFrame, url: headFrame };
+                    lastFrame = { id: `tail-${segmentId}`, name: "segment_end.jpg", type: "image/jpeg", dataUrl: tailFrame, url: tailFrame };
+                } else {
+                    referenceImages.push(
+                        { id: `head-${segmentId}`, name: "segment_start.jpg", type: "image/jpeg", dataUrl: headFrame, url: headFrame },
+                        { id: `tail-${segmentId}`, name: "segment_end.jpg", type: "image/jpeg", dataUrl: tailFrame, url: tailFrame },
+                    );
+                }
+            }
+
+            // 3. 生成：参考视频给内容、节奏与构图，角色图给外观；首尾帧（仅首尾帧工作流）给接缝。
+            //    秒数按本段时长传 —— 各段时长不等，只认全局固定值的话，
             //    4 秒的段会生成出 5 秒画面，拼回去节奏全错、音轨也漂。
+            //    同时夹到渠道能力区间：MiniMax 只接受 5–15 秒，传 2 秒会被直接拒绝。
+            //    区间按**本次配置**认（用户在节点上换过渠道/工作流），不是全局那份。
+            //    短于下限的段（整片本来就很短）按下限请求，合成层再按目标时长裁回去。
+            const limits = segmentLimitsFor(config);
             const targetMs = Math.max(1, range.endMs - range.startMs);
+            const requestSeconds = Math.max(Math.round(limits.minMs / 1000), Math.min(Math.round(limits.maxMs / 1000), Math.round(targetMs / 1000)));
             const result = await requestVideoGeneration(config, promptText, referenceImages, {
                 signal,
                 videoMode: "omni",
-                seconds: Math.max(1, Math.round(targetMs / 1000)),
+                seconds: requestSeconds,
+                firstFrame,
+                lastFrame,
                 referenceVideos: [{ id: segmentId, name: `${segmentLabel}.mp4`, type: "video/mp4", url: segmentUpload.url, storageKey: segmentUpload.storageKey, durationMs: segmentUpload.durationMs }],
                 seed: generateRandomSeed(),
                 onProgress: (status, detail) => {
@@ -3554,9 +3822,29 @@ function InfiniteCanvasPage() {
             const currentNode = nodesRef.current.find((item) => item.id === segmentId);
             const sizePatch: Partial<CanvasNodeData> = { width: videoSize.width, height: videoSize.height };
             if (currentNode) sizePatch.position = { x: currentNode.position.x + currentNode.width / 2 - videoSize.width / 2, y: currentNode.position.y };
-            // 时长偏差记进 videoSegment：合成时按目标归一化，节奏不会错，
-            // 但差得多说明这段内容没生成完整，用户有权利看见再决定要不要重做。
+            // 把"这一段实际吃了什么"完整落进节点：参考片段、角色图（按喂入顺序）、
+            // 真实抽帧点、提示词来源。用户点开段节点就能核对这一段的配方，
+            // 也能改完提示词后按同一套参考重跑 —— 少记任何一项，重跑出来的东西
+            // 就跟同批其他段不是同一套配方了。
             const segmentMeta = currentNode?.metadata?.videoSegment;
+            const segmentPatch = segmentMeta
+                ? {
+                      ...segmentMeta,
+                      castNodeIds: castIds.slice(),
+                      castSnapshot: castImages.map((castNode) => ({ nodeId: castNode.id, title: castNode.title, url: castNode.metadata?.content })),
+                      // 抽帧点只在真的抽了帧时才有意义。omni 链路不送首尾帧，这里显式清掉，
+                      // 否则面板会按上一次的值显示"首帧 00:10.0"，而实际一张都没喂。
+                      anchor: { ...segmentMeta.anchor, headFrameMs: anchorTimes?.headMs, tailFrameMs: anchorTimes?.tailMs },
+                      referenceClip: {
+                          nodeId: clipNodeId ?? segmentMeta.referenceClip?.nodeId,
+                          url: segmentUpload.url,
+                          storageKey: segmentUpload.storageKey,
+                          durationMs: segmentUpload.durationMs,
+                      },
+                      promptSource,
+                      ...(driftMs > 500 ? { durationDriftMs: Math.round(driftMs) } : {}),
+                  }
+                : undefined;
             patchCanvasNode(segmentId, {
                 ...sizePatch,
                 metadata: {
@@ -3565,16 +3853,33 @@ function InfiniteCanvasPage() {
                     status: NODE_STATUS_SUCCESS,
                     prompt: promptText,
                     effectivePrompt: promptText,
+                    // 排队/运行标记到此结束，否则这一段出画面了还挂着"生成中"的排队态。
+                    queueState: undefined,
                     errorDetails: undefined,
                     jobId: undefined,
                     isTimeout: undefined,
-                    ...(segmentMeta && driftMs > 500 ? { videoSegment: { ...segmentMeta, durationDriftMs: Math.round(driftMs) } } : {}),
+                    ...(segmentPatch ? { videoSegment: segmentPatch } : {}),
                 },
             });
-            return videoBlob;
+            // 模型经常吐竖屏（544×960），段节点生成后会比源片高一大截。参考片段还是按
+            // 旧行高居中的，这时候跟着段重新对一次，否则飘在段上方半截，对不上眼。
+            if (clipNodeId) {
+                const clip = nodesRef.current.find((item) => item.id === clipNodeId);
+                const finishedSegment = nodesRef.current.find((item) => item.id === segmentId);
+                if (clip && finishedSegment) {
+                    patchCanvasNode(clipNodeId, { position: { x: clip.position.x, y: finishedSegment.position.y + Math.round((finishedSegment.height - clip.height) / 2) } });
+                }
+            }
+            return { blob: videoBlob, clipNodeId };
         },
-        [appendCanvasNodes, message, patchCanvasNode, t],
+        [appendCanvasNodes, message, patchCanvasNode, segmentLimitsFor, t],
     );
+
+    /**
+     * 单段重跑完成后要重新拼成片，而重拼用的是在下面才定义的 composeVideoBatch。
+     * 用 ref 转一层，免得把两个大块函数按依赖顺序搬来搬去（搬错了就是 TDZ 崩溃）。
+     */
+    const recomposeVideoCutRef = useRef<((source: CanvasNodeData) => Promise<void>) | null>(null);
 
     /**
      * 单独重试某一个段。走 runVideoSegment，按该段 metadata 里记下的角色集合与
@@ -3586,27 +3891,54 @@ function InfiniteCanvasPage() {
             const segment = node.metadata?.videoSegment;
             const source = nodesRef.current.find((item) => item.id === segment?.sourceNodeId);
             if (!segment || !source?.metadata?.content) return;
+            // 角色替换段的重跑全靠这几张角色图。图没了还继续跑，出来的是"原人物原样回来"
+            // 的一段 —— 看着成功、拼进成片才发现白跑一轮，不如当场拦住。
+            // 注意只拦"声明了角色但一张都用不了"：显式空数组是有效语义（这段不换人，纯重绘）。
+            if (segment.mode === "character-swap") {
+                const declaredCast = segment.castNodeIds ?? [];
+                const usableCast = declaredCast.filter((castId) => Boolean(nodesRef.current.find((item) => item.id === castId)?.metadata?.content));
+                if (declaredCast.length && !usableCast.length) {
+                    message.error({ content: t("canvas.videoTimeline.toast.segmentCastGone", { index: segment.index + 1 }), duration: 6 });
+                    return;
+                }
+            }
             patchCanvasNode(node.id, { metadata: { ...node.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined, jobId: undefined, isTimeout: undefined } });
             try {
                 const sourceBlob = await loadNodeVideoBlob(source);
-                const config: AiConfig = {
-                    ...effectiveConfig,
-                    videoMode: "omni",
-                    channelId: node.metadata?.channelId || source.metadata?.channelId || effectiveConfig.channelId,
-                    workflowId: node.metadata?.workflowId || source.metadata?.workflowId || effectiveConfig.workflowId,
-                };
+                // 规格沿用这段当初生成时用的那套：段节点上记了 size/渠道/工作流，
+                // 缺哪项再回落到源节点。重试出来画幅一变，这一段就拼不回成片了。
+                const config = buildSegmentConfig(source, {
+                    channelId: node.metadata?.channelId || source.metadata?.channelId,
+                    workflowId: node.metadata?.workflowId || source.metadata?.workflowId,
+                    model: node.metadata?.model,
+                    size: node.metadata?.size || source.metadata?.size,
+                });
+                const castIds = segment.castNodeIds ?? [];
+                // 节点上的提示词就是这一段自己的要求。它被清空时不能发空字符串 ——
+                // 空 prompt 模型会自由发挥，人物数量、镜头都跟着漂。按人数套模板兜住。
+                const rerunPrompt =
+                    node.metadata?.prompt?.trim() ||
+                    node.metadata?.effectivePrompt ||
+                    (segment.mode === "repaint"
+                        ? t("canvas.videoTimeline.prompt.repaint")
+                        : t(`canvas.videoTimeline.promptTemplate.${promptTemplateKey(castIds.length) ?? "one"}`, { count: castIds.length }));
                 await runVideoSegment({
                     source,
                     sourceBlob,
                     range: { startMs: segment.startMs, endMs: segment.endMs, sceneStart: segment.sceneStart ?? false },
-                    castIds: segment.castNodeIds ?? [],
-                    promptText: node.metadata?.prompt || node.metadata?.effectivePrompt || "",
+                    castIds,
+                    promptText: rerunPrompt,
+                    // 节点上的提示词就是这一段自己的要求：单段重跑后它天然是段级覆盖。
+                    promptSource: "segment",
                     config,
                     segmentId: node.id,
+                    mode: segment.mode,
                     segmentLabel: `segment_${segment.index + 1}`,
                     segmentIndex: segment.index,
                 });
                 message.success({ content: t("canvas.videoTimeline.toast.segmentDone", { index: segment.index + 1, count: segment.index + 1 }), duration: 2 });
+                // 段换新画面了，成片必须跟着重拼，否则用户拿到仍是错的那一版。
+                void recomposeVideoCutRef.current?.(source);
             } catch (error) {
                 if (isGenerationCanceled(error)) {
                     patchCanvasNode(node.id, { metadata: { ...nodesRef.current.find((item) => item.id === node.id)?.metadata, status: NODE_STATUS_ERROR, errorDetails: t("canvas.videoTimeline.toast.cancelled") } });
@@ -3617,241 +3949,699 @@ function InfiniteCanvasPage() {
                 message.error({ content: t("canvas.videoTimeline.toast.segmentFailed", { index: segment.index + 1, error: errorDetails }) });
             }
         },
-        [effectiveConfig, isGenerationCanceled, message, patchCanvasNode, runVideoSegment, t],
+        [buildSegmentConfig, isGenerationCanceled, message, patchCanvasNode, runVideoSegment, t],
     );
 
-    const handleVideoEditSubmit = useCallback(
-        async (plan: VideoEditPlan) => {
-            const source = videoTimelineNode;
-            if (!source?.metadata?.content) return;
-            const sourceUrl = source.metadata.content;
-            const sourceTitle = source.title || t("canvas.sidePanel.filter.video");
-            const toastKey = `video-edit-${source.id}`;
+    /**
+     * 合成成片。局部重绘 = 保留的原画头 + 重绘段 + 保留的原画尾；角色替换 = 各生成段。
+     * 段全部跑完才调用，返回成片节点 id。
+     */
+    const composeVideoBatch = useCallback(
+        async (params: {
+            source: CanvasNodeData;
+            sourceBlob: Blob;
+            produced: ProducedVideoPart[];
+            plan: VideoEditPlan;
+            signal: AbortSignal;
+            sourceTitle: string;
+            segmentColumnX: number;
+            /**
+             * 已存在的成片节点 id。单段重跑后要就地更新那一版成片，
+             * 不给就在右侧新建一个 —— 否则重跑几次画布上会躺着几版成片，
+             * 谁是最新的全靠猜。
+             */
+            existingCompositeId?: string;
+        }): Promise<string> => {
+            const { source, sourceBlob, produced, plan, signal, sourceTitle, segmentColumnX, existingCompositeId } = params;
             const composeKey = `video-compose-${source.id}`;
-            const controller = new AbortController();
+            message.loading({ content: t("canvas.videoTimeline.toast.composing"), key: composeKey, duration: 0 });
 
-            // 同一个源片同时只跑一个任务：弹窗关掉后用户可能再点一次，那时
-            // 前一次任务的段节点还没跑完，两批段会互相穿插、成片也对不上。
-            if (runningVideoEditsRef.current.has(source.id)) {
-                message.warning({ content: t("canvas.videoTimeline.toast.alreadyRunning"), key: toastKey, duration: 4 });
+            const parts: ConcatPart[] = [];
+            const rangeStart = plan.ranges[0].startMs;
+            const rangeEnd = plan.ranges[plan.ranges.length - 1].endMs;
+            if (plan.mode === "repaint" && rangeStart > 60) {
+                // 保留段是原样搬运，时长天然精确，仍显式给目标时长保持口径一致。
+                parts.push({ blob: await cutVideoSegment(sourceBlob, 0, rangeStart), sceneStart: true, targetDurationMs: rangeStart });
+            }
+            // 生成段的时长由模型决定，按原片段落的目标时长归一化：
+            // 请求 4 秒可能给 3.8 或 4.3，不归一化的话成片总时长会偏离原片，
+            // 而音轨是整轨取自原片的 —— 音画漂移，越到后面口型越对不上。
+            produced.forEach((part) => parts.push({ blob: part.blob, sceneStart: part.range.sceneStart, targetDurationMs: part.range.endMs - part.range.startMs }));
+            if (plan.mode === "repaint" && plan.durationMs - rangeEnd > 60) {
+                // 尾段起点正好是原片的场景切点时不做淡化，那里本来就没有连续性。
+                parts.push({ blob: await cutVideoSegment(sourceBlob, rangeEnd, plan.durationMs), sceneStart: plan.endAtCut, targetDurationMs: plan.durationMs - rangeEnd });
+            }
+
+            const merged = await concatVideoParts(parts, {
+                crossfadeFrames: plan.crossfadeFrames,
+                audio: plan.keepAudio ? sourceBlob : null,
+                signal,
+                onProgress: (ratio) => {
+                    message.loading({ content: `${t("canvas.videoTimeline.toast.composing")} ${Math.round(ratio * 100)}%`, key: composeKey, duration: 0 });
+                },
+            });
+            const uploaded = await uploadMediaFile(merged, "video");
+            // 成片时长对不上原片，说明保留段或拼接算错了。静默产出一个短片
+            // 比直接报错更糟 —— 用户会拿去用，等导出时才发现少了几秒。
+            const mergedDurationMs = await probeVideo(merged)
+                .then((probe) => probe.durationMs)
+                .catch(() => null);
+            if (mergedDurationMs && plan.durationMs > 0 && Math.abs(mergedDurationMs - plan.durationMs) > 500) {
+                message.warning({
+                    content: t("canvas.videoTimeline.toast.durationMismatch", {
+                        expected: formatDuration(plan.durationMs),
+                        actual: formatDuration(mergedDurationMs),
+                    }),
+                    duration: 8,
+                });
+            }
+            const promptText = plan.prompt || (plan.mode === "repaint" ? t("canvas.videoTimeline.prompt.repaint") : t("canvas.videoTimeline.prompt.character"));
+            // 成片落在段列右侧。段经常是竖屏、比源片窄，列宽按实际最宽的段算，
+            // 否则竖屏批次的成片会离段老远，中间空一大片。
+            const segmentWidth = Math.max(source.width, ...produced.map((part) => nodesRef.current.find((item) => item.id === part.nodeId)?.width ?? 0));
+            const compositeId = existingCompositeId ?? nanoid();
+            // 合成参数一并记进成片：单段重跑后重建 plan 时只能从这里读，
+            // 否则音轨要不要、尾部要不要淡化、总时长多少，全都得猜。
+            const compositeMetadata: CanvasNodeData["metadata"] = {
+                ...videoMetadata(uploaded),
+                prompt: promptText,
+                effectivePrompt: promptText,
+                videoComposite: {
+                    partNodeIds: produced.map((part) => part.nodeId),
+                    crossfadeMs: Math.round((plan.crossfadeFrames / 30) * 1000),
+                    sourceNodeId: source.id,
+                    mode: plan.mode,
+                    keepAudio: plan.keepAudio,
+                    endAtCut: plan.endAtCut,
+                    durationMs: plan.durationMs,
+                },
+            };
+            if (existingCompositeId) {
+                // 就地更新：位置不动（用户可能已经把它挪到顺手的地方），只换内容与分段清单。
+                const existing = nodesRef.current.find((item) => item.id === compositeId);
+                patchCanvasNode(compositeId, { metadata: { ...existing?.metadata, ...compositeMetadata } });
+            } else {
+                appendCanvasNodes(
+                    [
+                        {
+                            id: compositeId,
+                            type: CanvasNodeType.Video,
+                            title: t("canvas.videoTimeline.node.compositeTitle", { title: sourceTitle }),
+                            position: { x: segmentColumnX + segmentWidth + 96, y: source.position.y },
+                            width: source.width,
+                            height: source.height,
+                            metadata: compositeMetadata,
+                        },
+                    ],
+                    produced.map((part) => ({ id: nanoid(), fromNodeId: part.nodeId, toNodeId: compositeId, kind: "lineage" as const })),
+                );
+            }
+            message.success({ content: t("canvas.videoTimeline.toast.composed"), key: composeKey });
+            return compositeId;
+        },
+        [appendCanvasNodes, message, patchCanvasNode, t],
+    );
+
+    /**
+     * 单段重跑之后，把成片重新拼一遍。
+     *
+     * 只重跑不改成片等于白跑：段节点上是新画面，成片还是旧的那一版，用户拿去用
+     * 才发现没换过来。这里按成片节点记下的分段清单把每一段取回来重拼，
+     * 就地更新同一个成片节点（不再多造一个）。
+     *
+     * 只处理"已经有成片"的情况 —— 没有成片说明这批根本还没拼过（或用户删了），
+     * 凭空造一个成片会让人以为自己跑完了整片。
+     */
+    const recomposeVideoCut = useCallback(
+        async (source: CanvasNodeData) => {
+            const composite = nodesRef.current.find((item) => item.metadata?.videoComposite?.sourceNodeId === source.id);
+            const compositeMeta = composite?.metadata?.videoComposite;
+            if (!composite || !compositeMeta) return;
+            const partIds = compositeMeta.partNodeIds;
+            const partNodes = partIds.map((id) => nodesRef.current.find((item) => item.id === id));
+            const usableParts = partNodes.filter((item): item is CanvasNodeData => Boolean(item?.metadata?.videoSegment && item.metadata?.content));
+            if (usableParts.length !== partIds.length) {
+                message.warning({ content: t("canvas.videoTimeline.toast.recomposeMissingParts"), duration: 6 });
                 return;
             }
+            const composeKey = `video-compose-${source.id}`;
+            const controller = new AbortController();
+            try {
+                const sourceBlob = await loadNodeVideoBlob(source);
+                const produced: ProducedVideoPart[] = [];
+                for (const part of usableParts) {
+                    const segment = part.metadata?.videoSegment;
+                    if (!segment) continue;
+                    produced.push({
+                        nodeId: part.id,
+                        blob: await loadNodeVideoBlob(part),
+                        range: { startMs: segment.startMs, endMs: segment.endMs, sceneStart: segment.sceneStart ?? false },
+                    });
+                }
+                // 时间顺序就是拼接顺序。段节点在画布上被拖动过也不影响，这里按区间重排。
+                produced.sort((a, b) => a.range.startMs - b.range.startMs);
+                const plan: VideoEditPlan = {
+                    mode: compositeMeta.mode ?? "character-swap",
+                    ranges: produced.map((part) => part.range),
+                    durationMs: compositeMeta.durationMs ?? source.metadata?.durationMs ?? produced[produced.length - 1].range.endMs,
+                    startAtCut: produced[0].range.sceneStart,
+                    endAtCut: compositeMeta.endAtCut ?? true,
+                    castNodeIds: [],
+                    prompt: composite.metadata?.prompt || "",
+                    crossfadeFrames: Math.round(((compositeMeta.crossfadeMs || 0) / 1000) * 30),
+                    keepAudio: compositeMeta.keepAudio ?? true,
+                    maxMs: 0,
+                };
+                await composeVideoBatch({ source, sourceBlob, produced, plan, signal: controller.signal, sourceTitle: source.title || "", segmentColumnX: composite.position.x, existingCompositeId: composite.id });
+                message.success({ content: t("canvas.videoTimeline.toast.recomposed"), key: composeKey });
+            } catch (error) {
+                const errorDetails = error instanceof Error ? error.message : String(error);
+                message.warning({ content: t("canvas.videoTimeline.toast.recomposeFailed", { error: errorDetails }), duration: 8 });
+            }
+        },
+        [composeVideoBatch, message, t],
+    );
+    useEffect(() => {
+        recomposeVideoCutRef.current = recomposeVideoCut;
+    }, [recomposeVideoCut]);
+
+    /**
+     * 逐段跑一个分批：首次提交与断点续跑共用。
+     *
+     * 行光标由调用方给初值，每跑完一段按这段的**实际高度**推进 —— 模型经常吐竖屏
+     * （544×960），段节点会比源片高近一倍，按源片高度码行会让相邻两段互压一百多
+     * 像素，用户只能手动去拖。
+     * produced 由调用方持有：段一成功就 push 进去，中途取消也已记录，
+     * 续跑据此跳过已成功的段——节点和参考片段都在画布上，重跑只会多出重复节点。
+     */
+    const runVideoBatchLoop = useCallback(
+        async (params: {
+            source: CanvasNodeData;
+            sourceBlob: Blob;
+            config: AiConfig;
+            promptText: string;
+            /** 这一批是角色替换还是局部重绘 —— 决定要不要抽原片首尾帧，见 runVideoSegment。 */
+            mode: VideoEditPlan["mode"];
+            /** 完整分批的所有段；续跑时从中挑没跑过的。 */
+            ranges: SegmentPlan[];
+            produced: ProducedVideoPart[];
+            /** 全局角色集合，段级覆盖为空时跟随它。 */
+            globalCastNodeIds: string[];
+            controller: AbortController;
+            toastKey: string;
+            clipColumnX: number;
+            clipWidth: number;
+            clipHeight: number;
+            /**
+             * 段序号 → 已铺到画布上的段节点 id。
+             *
+             * 节点由调用方在提交瞬间一次性铺好（排队态），这里只负责按顺序把
+             * 每一段"激活 → 跑 → 收尾"。这样用户点完提交立刻看到整列段位，
+             * 而不是盯着空画布等第一段切完才冒出第一个节点。
+             */
+            spots: Map<number, string>;
+            /** 本批新建的全部节点 id 往里 push：行光标、收尾聚焦、pending 都靠它。 */
+            createdNodeIds: string[];
+            /** 这次只跑这些下标（配好的那几段）；不给就是按 spots 里的来。 */
+            onlyIndices?: number[];
+        }): Promise<{ failed: boolean }> => {
+            const { source, sourceBlob, config, promptText, mode, ranges, produced, globalCastNodeIds, controller, toastKey, clipColumnX, clipWidth, clipHeight, spots, createdNodeIds, onlyIndices } = params;
+            // 逐段串行生成，长片要跑十几分钟。没有进度估算用户只能干等，
+            // 只能来问"跑完了吗"，所以从第二段起就给出已用时与预计剩余。
+            const startedAt = Date.now();
+            const segmentCosts: number[] = [];
+            // 这一拨要跑的段：进度条按它算（"第 2/3 段"），节点标题与 metadata 仍用全片段号，
+            // 否则分批跑出来的节点全叫"第 1 段"，画布上分不清谁是谁。
+            const onlySet = onlyIndices ? new Set(onlyIndices) : null;
+            // 顺序按段序号升序。spots 的插入顺序只在"一次性整批提交"时才等于段序，
+            // 续批时后补的段是 append 进去的（先跑到第 3 段，再补第 2 段就会拿到 [0,2,1]），
+            // 照 Map 顺序跑会让进度条和下推顺序都跟着乱。
+            const order = Array.from(spots.keys()).sort((a, b) => a - b);
+            const queue = order.filter((index) => (!onlySet || onlySet.has(index)) && ranges[index]).map((index) => ({ range: ranges[index], index }));
+            /**
+             * 把还没轮到的段标成"未生成"。
+             *
+             * 一段失败后剩下的段不会再跑，留在"排队中"会一直转圈 —— 那是最容易让人
+             * 以为卡死的观感。标清楚"未生成"，这批跑到第几段就一目了然。
+             */
+            const skipQueued = (restIndices: number[]) => {
+                restIndices.forEach((restIndex) => {
+                    const restId = spots.get(restIndex);
+                    if (!restId) return;
+                    const restNode = nodesRef.current.find((item) => item.id === restId);
+                    if (restNode?.metadata?.queueState !== "waiting") return;
+                    patchCanvasNode(restId, { metadata: { ...restNode.metadata, status: NODE_STATUS_ERROR, queueState: undefined, errorDetails: t("canvas.videoTimeline.node.notStarted") } });
+                });
+            };
+
+            for (let qi = 0; qi < queue.length; qi += 1) {
+                const { range, index } = queue[qi];
+                // 续跑：这一段已经成功过就跳过，节点和参考片段都在画布上。
+                if (produced.some((part) => part.range.startMs === range.startMs && part.range.endMs === range.endMs)) continue;
+                if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+                // 段级角色覆盖：这一段勾了谁就只喂谁。全都喂同一个模型，
+                // 它会把画面里并不存在的人也一起"换"出来。
+                // 空数组是有效语义（这段没有要换的人），所以只判 undefined 不判长度 ——
+                // 否则"这段不挂角色"会意外回退成全局角色。
+                const castIds = range.castNodeIds !== undefined ? range.castNodeIds : globalCastNodeIds;
+                // 段级提示词：某些段要单独交代（比如"这一段只有女主，别加第二个人"）。
+                const segmentPromptText = range.prompt?.trim() || promptText;
+                const segmentStartedAt = Date.now();
+                if (qi > 0 && segmentCosts.length) {
+                    const average = segmentCosts.reduce((sum, cost) => sum + cost, 0) / segmentCosts.length;
+                    const estimate = t("canvas.videoTimeline.toast.segmentEta", {
+                        elapsed: formatDuration(Date.now() - startedAt),
+                        remain: formatDuration(Math.round(average * (queue.length - qi))),
+                    });
+                    message.loading({
+                        content: `${t("canvas.videoTimeline.toast.segmentRunning", { index: qi + 1, count: queue.length })} · ${estimate}`,
+                        key: toastKey,
+                        duration: 0,
+                    });
+                } else {
+                    message.loading({ content: t("canvas.videoTimeline.toast.segmentRunning", { index: qi + 1, count: queue.length }), key: toastKey, duration: 0 });
+                }
+
+                // 节点已经在提交时铺好了：这里只把它从"排队中"点亮成"生成中"。
+                const segmentId = spots.get(index);
+                if (!segmentId) continue;
+                const queuedNode = nodesRef.current.find((item) => item.id === segmentId);
+                if (queuedNode) {
+                    patchCanvasNode(segmentId, { metadata: { ...queuedNode.metadata, status: NODE_STATUS_LOADING, queueState: "running", errorDetails: undefined } });
+                }
+                // 参考片段跟着这一段的当前行位置居中：预铺时按源片高度排的，
+                // 前面的段要是变成竖屏并被下推过，这里必须读实际位置，不能读旧行号。
+                const segmentNodeY = queuedNode?.position.y ?? source.position.y;
+
+                try {
+                    // 批量与单段重试共用同一条链路：切段、上传、按模式决定抽不抽首尾帧、生成、回填。
+                    const { blob, clipNodeId } = await runVideoSegment({
+                        source,
+                        sourceBlob,
+                        range,
+                        castIds,
+                        promptText: segmentPromptText,
+                        promptSource: range.prompt?.trim() ? "segment" : "global",
+                        config,
+                        segmentId,
+                        mode,
+                        segmentLabel: `segment_${index + 1}`,
+                        segmentIndex: index,
+                        // 参考片段落在本行左侧，与段节点垂直居中对齐
+                        clipSpot: { x: clipColumnX, y: segmentNodeY + Math.round(((queuedNode?.height ?? source.height) - clipHeight) / 2), width: clipWidth, height: clipHeight },
+                        signal: controller.signal,
+                    });
+                    produced.push({ nodeId: segmentId, blob, range });
+                    if (clipNodeId) createdNodeIds.push(clipNodeId);
+                    segmentCosts.push(Date.now() - segmentStartedAt);
+                    message.loading({ content: t("canvas.videoTimeline.toast.segmentDone", { index: qi + 1, count: queue.length }), key: toastKey, duration: 1.2 });
+                } catch (error) {
+                    if (isGenerationCanceled(error)) throw error;
+                    const errorDetails = error instanceof Error ? error.message : t("canvas.videoTimeline.toast.cutFailed", { error: "" });
+                    const currentNode = nodesRef.current.find((item) => item.id === segmentId);
+                    patchCanvasNode(segmentId, { metadata: { ...currentNode?.metadata, status: NODE_STATUS_ERROR, queueState: undefined, errorDetails } });
+                    // 后面还在排队的段不会跑了。留着转圈会让人以为还在等（最容易让人以为"卡死"），
+                    // 标成未生成：一眼看出这批跑到第几段就停了。
+                    skipQueued(order.slice(order.indexOf(index) + 1));
+                    message.error({ content: t("canvas.videoTimeline.toast.segmentFailed", { index: index + 1, error: errorDetails }), key: toastKey });
+                    // 一段失败就停：继续只会产出一堆接不上的碎片。
+                    // 但必须说清楚"到哪为止、成片有没有"，否则用户只看到一条红色报错，
+                    // 不知道那些已经出画面的段还算不算数。
+                    message.warning({
+                        content: t("canvas.videoTimeline.toast.stoppedAfterFailure", { done: produced.length, count: ranges.length }),
+                        key: `video-compose-${source.id}`,
+                        duration: 8,
+                    });
+                    return { failed: true };
+                }
+                // 这一段可能吐了竖屏（544×960），比预铺时按源片高度留的位置高近一倍 ——
+                // 按它的实际底边把后面还在排队的段整体往下推，否则下一段直接压在它身上。
+                const finished = nodesRef.current.find((item) => item.id === segmentId);
+                let cursorY = (finished?.position.y ?? source.position.y) + (finished?.height ?? source.height) + 32;
+                const at = order.indexOf(index);
+                for (let k = at + 1; k < order.length; k += 1) {
+                    const nextId = spots.get(order[k]);
+                    if (!nextId) continue;
+                    const nextNode = nodesRef.current.find((item) => item.id === nextId);
+                    // 只动还在排队的：已经出画面的段用户可能手动拖过，不能替他搬。
+                    if (!nextNode || nextNode.metadata?.queueState !== "waiting") continue;
+                    if (Math.round(nextNode.position.y) !== Math.round(cursorY)) {
+                        patchCanvasNode(nextId, { position: { x: nextNode.position.x, y: cursorY } });
+                    }
+                    cursorY += nextNode.height + 32;
+                }
+            }
+            return { failed: false };
+        },
+        [isGenerationCanceled, message, patchCanvasNode, runVideoSegment, t],
+    );
+
+    /**
+     * 预铺一批分段任务：算好下发规格与列坐标，并把这一批的段节点先落到画布上（排队态）。
+     *
+     * 正式提交与"上一批还在跑时又提交"共用它。后者原来只把 plan 塞进队列就 return，
+     * 画布上什么都不出现 —— 用户看不出第二段有没有进来、也没有任何进度，只有一句
+     * 一闪而过的 toast，很容易读成"没触发"。现在两种都是点完立刻一列段位：
+     * 排队的停在"排队中"，前一批收尾自动点亮。
+     */
+    const prepareVideoBatch = useCallback(
+        (plan: VideoEditPlan, source: CanvasNodeData, sourceTitle: string): PreparedVideoBatch => {
+            // 兜底也按人数分档。弹窗选完角色就会自动填模板，只有"被清空"才会走到这里；
+            // 此时若退回那句"把画面中的人物替换成参考图中的角色"，等于没交代人数 ——
+            // 模型爱画几个画几个，而双人段少一个人是最难在成片里一眼看出来的错。
+            const fallbackKey = promptTemplateKey(plan.castNodeIds.length);
+            const promptText =
+                plan.prompt ||
+                (plan.mode === "repaint"
+                    ? t("canvas.videoTimeline.prompt.repaint")
+                    : fallbackKey
+                      ? t(`canvas.videoTimeline.promptTemplate.${fallbackKey}`, { count: plan.castNodeIds.length })
+                      : t("canvas.videoTimeline.prompt.character"));
+            // 渠道 / 工作流 / 模型 / 画面比例全部取自源节点：用户是在节点上选的这些。
+            const config = buildSegmentConfig(source);
+
+            // 接着上一批跑：分段边界必须完全一致，否则按序号存的段级角色会套到另一段时间上。
+            const existing = pendingVideoBatchRef.current.get(source.id);
+            const resumed = existing && existing.plan.mode === plan.mode && sameRangeBoundaries(existing.plan.ranges, plan.ranges) ? existing : null;
+            // 续批时把计划换成这次的：已跑过的段不受影响，新配的段带上这次的角色与提示词。
+            if (resumed) resumed.plan = plan;
+
+            const produced: ProducedVideoPart[] = resumed ? resumed.produced : [];
+            const createdNodeIds: string[] = resumed ? resumed.nodeIds : [];
+            const onlyIndices = plan.onlyRangeIndices?.filter((index) => index >= 0 && index < plan.ranges.length);
+            // 续跑时接着用上次那张「段序号 → 节点」表：同一个 Map，复活旧节点就不会多铺一份。
+            const spots: Map<number, string> = resumed ? resumed.spots : new Map();
+
+            let clipColumnX: number;
+            let segmentColumnX: number;
+            let clipWidth: number;
+            let clipHeight: number;
+            if (resumed) {
+                ({ clipColumnX, segmentColumnX, clipWidth, clipHeight } = resumed);
+            } else {
+                // 两列布局：参考片段（模型输入）紧贴源片，生成段（模型输出）再往右。
+                // 数据流方向就是阅读方向：源片 → 参考段 → 生成段 → 成片。
+                // 参考片段刻意小一号：它是中间产物，不该跟结果抢注意力。
+                clipWidth = Math.max(160, Math.min(source.width, 360));
+                clipHeight = Math.round((clipWidth * source.height) / Math.max(1, source.width));
+                // 同一个源片跑第二批时整列右移：不移的话新段直接压在上一次的节点上，
+                // 画布上出现两个"第 1 段"，谁对谁错只能靠猜。
+                const previousNodes = nodesRef.current.filter((item) => item.metadata?.videoSegment?.sourceNodeId === source.id || item.metadata?.referenceClip?.sourceNodeId === source.id);
+                const previousRight = previousNodes.length ? Math.max(...previousNodes.map((item) => item.position.x + item.width)) : 0;
+                clipColumnX = Math.max(source.position.x + source.width + 96, previousRight + 96);
+                segmentColumnX = clipColumnX + clipWidth + 96;
+            }
+
+            // 未跑完的分批记下来：剩下的段随时能接上，不用整批重来。
+            const batch: PendingVideoBatch = resumed ?? {
+                plan,
+                sourceId: source.id,
+                clipColumnX,
+                segmentColumnX,
+                clipWidth,
+                clipHeight,
+                nodeIds: createdNodeIds,
+                spots,
+                produced,
+            };
+            pendingVideoBatchRef.current.set(source.id, batch);
+
+            // 续批时新段接在本批已有节点的底部：用户可能手动拖过节点，按行号算是错的。
+            const batchBottoms = createdNodeIds
+                .map((id) => nodesRef.current.find((item) => item.id === id))
+                .filter((item): item is CanvasNodeData => Boolean(item))
+                .map((item) => item.position.y + item.height);
+            let cursorY = batchBottoms.length ? Math.max(...batchBottoms) + 32 : source.position.y;
+
+            // ① 提交即铺开：这一拨要跑的段先把节点全部落到画布上（排队态），再逐段生成。
+            //    之前是"轮到哪一段才建哪个节点"，用户点完提交只看到空画布，等第一段
+            //    切完才冒出第一个节点 —— 完全不知道有没有生效、这一批到底有多少段。
+            //    现在点完立刻就是一整列"第 N 段 · 排队中"，轮到谁谁转起来。
+            const onlySet = onlyIndices ? new Set(onlyIndices) : null;
+            const spotNodes: CanvasNodeData[] = [];
+            const spotConnections: CanvasConnection[] = [];
+            const reactivatedIds: string[] = [];
+            plan.ranges.forEach((range, index) => {
+                if (onlySet && !onlySet.has(index)) return;
+                if (produced.some((part) => part.range.startMs === range.startMs && part.range.endMs === range.endMs)) return;
+                // 续跑：上次铺过、节点还在，就原地复活成"排队中"，不再多铺一个。
+                const previousSpotId = resumed?.spots.get(index);
+                const previousNode = previousSpotId ? nodesRef.current.find((item) => item.id === previousSpotId) : undefined;
+                if (previousNode) {
+                    spots.set(index, previousNode.id);
+                    // 上一批正在跑这一段：状态归运行中的那一批管，这里只登记，
+                    // 顺手把它改回"排队中"会让正在转的段在画布上退回未开始。
+                    if (previousNode.metadata?.queueState !== "running") reactivatedIds.push(previousNode.id);
+                    return;
+                }
+                const segmentId = nanoid();
+                spots.set(index, segmentId);
+                const castIds = range.castNodeIds !== undefined ? range.castNodeIds : plan.castNodeIds;
+                const segmentPrompt = range.prompt?.trim() || promptText;
+                spotNodes.push({
+                    id: segmentId,
+                    type: CanvasNodeType.Video,
+                    title: t("canvas.videoTimeline.node.segmentTitle", { title: sourceTitle, index: index + 1 }),
+                    position: { x: segmentColumnX, y: cursorY },
+                    width: source.width,
+                    height: source.height,
+                    metadata: {
+                        status: NODE_STATUS_LOADING,
+                        queueState: "waiting",
+                        generationMode: "video",
+                        videoMode: "omni",
+                        prompt: segmentPrompt,
+                        effectivePrompt: segmentPrompt,
+                        channelId: config.channelId,
+                        workflowId: config.workflowId,
+                        // 记下这批实际下发的规格：单段重试用它复原同一画幅，
+                        // 不然重试出来的段尺寸一变，拼进去就是花屏或黑边。
+                        model: config.videoModel || config.model,
+                        size: config.size,
+                        vquality: config.vquality,
+                        seconds: ((range.endMs - range.startMs) / 1000).toFixed(1),
+                        videoSegment: {
+                            sourceNodeId: source.id,
+                            sourceDurationMs: source.metadata?.durationMs || undefined,
+                            startMs: range.startMs,
+                            endMs: range.endMs,
+                            index,
+                            sceneStart: range.sceneStart,
+                            mode: plan.mode,
+                            // 记下这一段实际用了哪些角色：单段重试时要按同一套参考重来，
+                            // 否则重试出来的角色跟同批其他段对不上。
+                            castNodeIds: castIds,
+                            // 顺便记快照：角色节点之后被删掉，也能说清这段当初喂的是哪几张图。
+                            castSnapshot: castIds
+                                .map((castId) => nodesRef.current.find((item) => item.id === castId))
+                                .filter((item): item is CanvasNodeData => Boolean(item))
+                                .map((item) => ({ nodeId: item.id, title: item.title, url: item.metadata?.content })),
+                            // anchor 只记区间边界。首尾帧只在首尾帧类工作流上才抽，
+                            // omni 链路（分段默认走这条）不送任何原片帧 —— 预铺阶段
+                            // 就先写"抽帧点"，等于给一个不会发生的动作留了记录。
+                            anchor: { firstFrameMs: range.startMs, lastFrameMs: range.endMs },
+                            // 提示词来源：面板上要说得清"改这条是只影响这一段，还是整批"。
+                            promptSource: range.prompt?.trim() ? "segment" : "global",
+                        },
+                    },
+                });
+                spotConnections.push({ id: nanoid(), fromNodeId: source.id, toNodeId: segmentId, kind: "lineage" });
+                cursorY += source.height + 32;
+            });
+            // 复活的旧节点要清掉上次的报错与"未生成"：它们马上要重新跑。
+            reactivatedIds.forEach((nodeId) => {
+                const node = nodesRef.current.find((item) => item.id === nodeId);
+                if (!node) return;
+                patchCanvasNode(nodeId, { metadata: { ...node.metadata, status: NODE_STATUS_LOADING, queueState: "waiting", errorDetails: undefined } });
+            });
+            if (spotNodes.length) appendCanvasNodes(spotNodes, spotConnections);
+            spots.forEach((nodeId) => {
+                if (!createdNodeIds.includes(nodeId)) createdNodeIds.push(nodeId);
+            });
+            // 铺完立刻把整列带进视野：用户刚点的提交，这一下必须让他看见东西在长出来。
+            // 排队批同样 —— "排在后面"也得看得见排在哪儿。
+            if (spots.size) fitToNodes([source.id, ...spots.values()]);
+
+            return { plan, source, sourceTitle, promptText, config, batch, clipColumnX, segmentColumnX, clipWidth, clipHeight, onlyIndices };
+        },
+        [appendCanvasNodes, buildSegmentConfig, fitToNodes, patchCanvasNode, t],
+    );
+
+    /**
+     * 真正跑一批：整理排队节点的位置 → 下载源片 → 逐段生成 → 合成 → 收尾聚焦。
+     *
+     * 与预铺分开，是因为排队批的节点早就铺好了，轮到它时只差执行 —— 再铺一遍会在
+     * 同一列里多出一批重复节点。
+     */
+    const executeVideoBatch = useCallback(
+        async (prepared: PreparedVideoBatch, controller: AbortController, toastKey: string) => {
+            const { plan, source, sourceTitle, promptText, config, batch, clipColumnX, segmentColumnX, clipWidth, clipHeight, onlyIndices } = prepared;
+            const { spots, produced, nodeIds: createdNodeIds } = batch;
+
+            // 排队期间画布动过：前一批的段生成后变高被下推过，用户也可能手动拖过节点。
+            // 轮到这一批时先按同批"已经定下来"的段（已完成 / 正在跑）的底边，把还在排队的
+            // 段重新摆一遍 —— 预铺时算的行号这时候早就对不上了，不重排就会两段叠在一起。
+            const batchNodeIds = new Set(spots.values());
+            const settledBottoms = nodesRef.current.filter((item) => batchNodeIds.has(item.id) && item.metadata?.queueState !== "waiting").map((item) => item.position.y + item.height);
+            let reflowY = settledBottoms.length ? Math.max(...settledBottoms) + 32 : source.position.y;
+            Array.from(spots.entries())
+                .sort((a, b) => a[0] - b[0])
+                .forEach(([, nodeId]) => {
+                    const item = nodesRef.current.find((candidate) => candidate.id === nodeId);
+                    if (!item || item.metadata?.queueState !== "waiting") return;
+                    if (Math.round(item.position.y) !== Math.round(reflowY)) patchCanvasNode(nodeId, { position: { x: item.position.x, y: reflowY } });
+                    reflowY += item.height + 32;
+                });
+
+            // 这一批要跑的段：按序号升序。续批时 spots 的插入顺序不一定还等于段序，
+            // 按 Map 顺序跑会把第 3 段排在第 2 段前面，进度条与成片顺序都会乱。
+            const onlySet = onlyIndices ? new Set(onlyIndices) : null;
+            const runIndices = Array.from(spots.keys())
+                .sort((a, b) => a - b)
+                .filter((index) => {
+                    const range = plan.ranges[index];
+                    if (!range) return false;
+                    if (onlySet && !onlySet.has(index)) return false;
+                    return !produced.some((part) => part.range.startMs === range.startMs && part.range.endMs === range.endMs);
+                });
+            if (!runIndices.length) {
+                // 这一段都跑完了还点了提交：说清楚，别去下载整条源片白等一轮。
+                message.info({ content: t("canvas.videoTimeline.reason.allGenerated"), key: toastKey });
+                return;
+            }
+            // 切段要先下载整条源片（十几 MB 的片要几十秒）。这期间必须有个说法，
+            // 否则弹窗已关、画布上全是"排队中"，看起来就像什么都没开始。
+            message.loading({ content: t("canvas.videoTimeline.toast.preparing", { count: runIndices.length }), key: toastKey, duration: 0 });
+
+            const sourceBlob = await loadNodeVideoBlob(source);
+
+            const outcome = await runVideoBatchLoop({
+                source,
+                sourceBlob,
+                config,
+                promptText,
+                mode: plan.mode,
+                ranges: plan.ranges,
+                produced,
+                globalCastNodeIds: plan.castNodeIds,
+                controller,
+                toastKey,
+                clipColumnX,
+                clipWidth,
+                clipHeight,
+                spots,
+                createdNodeIds,
+                onlyIndices,
+            });
+
+            let compositeId: string | null = null;
+            if (produced.length === plan.ranges.length && produced.length > 0) {
+                compositeId = await composeVideoBatch({ source, sourceBlob, produced, plan, signal: controller.signal, sourceTitle, segmentColumnX });
+                // 跑完了就没有"剩余"可续：pending 清掉，弹窗里也不再出现"继续剩余段"。
+                // 只清自己这一份 —— 队列里的下一批可能已经把 pending 换成它的了。
+                if (pendingVideoBatchRef.current.get(source.id) === batch) pendingVideoBatchRef.current.delete(source.id);
+            } else if (!outcome.failed) {
+                // 没失败却没跑完 = 这次只提交了配好的段。说清楚"还差几段、怎么接上"，
+                // 否则用户看到一半的成片会以为这批就这样了。
+                message.warning({
+                    content: t("canvas.videoTimeline.toast.partialWaiting", { done: produced.length, total: plan.ranges.length, remain: plan.ranges.length - produced.length }),
+                    key: `video-compose-${source.id}`,
+                    duration: 8,
+                });
+            }
+            // 收尾聚焦：按节点的实际大小把整批（含成片）带入视野。
+            // 用户可能已滑去看别处——整批都在屏幕外才拉回来，不抢视角。
+            focusVideoBatch([source.id, ...createdNodeIds, ...(compositeId ? [compositeId] : [])]);
+        },
+        [composeVideoBatch, focusVideoBatch, message, patchCanvasNode, runVideoBatchLoop, t],
+    );
+
+    /**
+     * 跑完一批（含失败收尾与队列串联）。
+     *
+     * 每批一个 AbortController：取消当前批不该顺手把队列里的下一批也停掉 —— 那是用户
+     * 另外配的东西。
+     */
+    const runPreparedBatch = useCallback(
+        async (prepared: PreparedVideoBatch) => {
+            const { source, batch } = prepared;
+            const toastKey = `video-edit-${source.id}`;
+            const controller = new AbortController();
             runningVideoEditsRef.current.add(source.id);
+            try {
+                await executeVideoBatch(prepared, controller, toastKey);
+            } catch (error) {
+                const details = error instanceof Error ? error.message : String(error);
+                // 预铺的段还停在"排队中"的收个尾：留着转圈就是最常见的"以为卡死"。
+                batch.spots.forEach((nodeId) => {
+                    const node = nodesRef.current.find((item) => item.id === nodeId);
+                    if (node?.metadata?.queueState !== "waiting") return;
+                    patchCanvasNode(nodeId, { metadata: { ...node.metadata, status: NODE_STATUS_ERROR, queueState: undefined, errorDetails: t("canvas.videoTimeline.node.notStarted") } });
+                });
+                if (isGenerationCanceled(error)) {
+                    message.info({ content: t("canvas.videoTimeline.toast.cancelled"), key: toastKey });
+                } else {
+                    // 先把两条常驻 loading 顶掉：合成阶段的进度条用的是另一个 key，
+                    // 不给它收尾就会一直挂在屏幕上转。
+                    message.destroy(`video-compose-${source.id}`);
+                    message.error({ content: t("canvas.videoTimeline.toast.composeFailed", { error: details }), key: toastKey });
+                }
+            } finally {
+                runningVideoEditsRef.current.delete(source.id);
+                // 队列里还压着批：立刻接着跑（先删运行锁再起，否则会被自己的锁挡住）。
+                const queue = queuedVideoPlansRef.current.get(source.id);
+                const next = queue?.shift();
+                if (queue && !queue.length) queuedVideoPlansRef.current.delete(source.id);
+                if (next) void runPreparedBatchRef.current?.(next);
+            }
+        },
+        [executeVideoBatch, isGenerationCanceled, message, patchCanvasNode, t],
+    );
+    runPreparedBatchRef.current = runPreparedBatch;
+
+    /**
+     * 提交一批分段任务。
+     *
+     * 三件事同时成立：① 节点先铺到画布上，用户点完提交立刻看到这一批的段位；
+     * ② 只跑配好的段（`onlyRangeIndices`），没配的段留在 pending 里；
+     * ③ 同一个源片已有任务在跑时，这批进队列而不是被丢掉 —— 排队也有节点，能看见排在哪。
+     *
+     * 为什么要这样：逐段配角色是慢活（一段段看画面、点人头），生成更慢。原来必须整片配完
+     * 才能提交，人的判断力和机器的等待被强行串起来。现在配好一段就能先跑一段。
+     */
+    const handleVideoEditSubmit = useCallback(
+        async (plan: VideoEditPlan, sourceOverride?: CanvasNodeData) => {
+            const source = sourceOverride ?? videoTimelineNode;
+            if (!source?.metadata?.content) return;
+            const sourceTitle = source.title || t("canvas.sidePanel.filter.video");
+
+            // ① 先铺节点：不管马上跑还是排队，画布上都该立刻出现这一批的段位。
+            const prepared = prepareVideoBatch(plan, source, sourceTitle);
+
+            // ② 同一个源片同时只跑一个任务，否则两批段会互相穿插、成片也对不上。
+            //    但后来的提交不能直接丢掉 —— 用户配完第二批点生成时第一批往往还没跑完，
+            //    那是他刚花时间配的东西。排进队列，节点已经在画布上排好了（排队中），
+            //    前一批收尾就自动接着跑。
+            if (runningVideoEditsRef.current.has(source.id)) {
+                const queue = queuedVideoPlansRef.current.get(source.id) ?? [];
+                queue.push(prepared);
+                queuedVideoPlansRef.current.set(source.id, queue);
+                setVideoTimelineSubmitting(false);
+                setVideoTimelineNode(null);
+                setVideoTimelinePending(null);
+                message.info({ content: t("canvas.videoTimeline.toast.queued", { count: queue.length }), key: `video-edit-${source.id}`, duration: 5 });
+                return;
+            }
 
             // 提交即放手：弹窗立刻关掉，任务在后台逐段跑。
             // 串行 await 并不阻塞 UI 线程，真正挡住用户的一直是这个模态弹窗——
             // 他要的是"先去干别的，回来看到段节点一个个出画面"。
-            // 进度改由画布上的段节点承载（loading → 成功/失败），toast 只做旁证。
             setVideoTimelineSubmitting(false);
             setVideoTimelineNode(null);
-
-            const produced: { nodeId: string; blob: Blob; range: VideoRange }[] = [];
-
-            try {
-                const sourceBlob = await loadNodeVideoBlob(source);
-                const promptText = plan.prompt || (plan.mode === "repaint" ? t("canvas.videoTimeline.prompt.repaint") : t("canvas.videoTimeline.prompt.character"));
-                const config: AiConfig = {
-                    ...effectiveConfig,
-                    videoMode: "omni",
-                    channelId: source.metadata.channelId || effectiveConfig.channelId,
-                    workflowId: source.metadata.workflowId || effectiveConfig.workflowId,
-                };
-                // 两列布局：参考片段（模型输入）紧贴源片，生成段（模型输出）再往右。
-                // 数据流方向就是阅读方向：源片 → 参考段 → 生成段 → 成片。
-                // 参考片段刻意小一号：它是中间产物，不该跟结果抢注意力。
-                const clipWidth = Math.max(160, Math.min(source.width, 360));
-                const clipHeight = Math.round((clipWidth * source.height) / Math.max(1, source.width));
-                const clipColumnX = source.position.x + source.width + 96;
-                const segmentColumnX = clipColumnX + clipWidth + 96;
-                // 逐段串行生成，长片要跑十几分钟。没有进度估算用户只能干等，
-                // 只能来问"跑完了吗"，所以从第二段起就给出已用时与预计剩余。
-                const startedAt = Date.now();
-                const segmentCosts: number[] = [];
-
-                for (let index = 0; index < plan.ranges.length; index += 1) {
-                    if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
-                    const range = plan.ranges[index];
-                    // 段级角色覆盖：这一段勾了谁就只喂谁。全都喂同一个模型，
-                    // 它会把画面里并不存在的人也一起"换"出来。
-                    const castIds = range.castNodeIds?.length ? range.castNodeIds : plan.castNodeIds;
-                    const castImages = castIds
-                        .map((id) => nodesRef.current.find((item) => item.id === id))
-                        .filter((item): item is CanvasNodeData => Boolean(item?.metadata?.content));
-                    const segmentStartedAt = Date.now();
-                    if (index > 0 && segmentCosts.length) {
-                        const average = segmentCosts.reduce((sum, cost) => sum + cost, 0) / segmentCosts.length;
-                        const estimate = t("canvas.videoTimeline.toast.segmentEta", {
-                            elapsed: formatDuration(Date.now() - startedAt),
-                            remain: formatDuration(Math.round(average * (plan.ranges.length - index))),
-                        });
-                        message.loading({
-                            content: `${t("canvas.videoTimeline.toast.segmentRunning", { index: index + 1, count: plan.ranges.length })} · ${estimate}`,
-                            key: toastKey,
-                            duration: 0,
-                        });
-                    } else {
-                        message.loading({ content: t("canvas.videoTimeline.toast.segmentRunning", { index: index + 1, count: plan.ranges.length }), key: toastKey, duration: 0 });
-                    }
-
-                    const segmentId = nanoid();
-                    appendCanvasNodes(
-                        [
-                            {
-                                id: segmentId,
-                                type: CanvasNodeType.Video,
-                                title: t("canvas.videoTimeline.node.segmentTitle", { title: sourceTitle, index: index + 1 }),
-                                position: { x: segmentColumnX, y: source.position.y + index * (source.height + 32) },
-                                width: source.width,
-                                height: source.height,
-                                metadata: {
-                                    status: NODE_STATUS_LOADING,
-                                    generationMode: "video",
-                                    videoMode: "omni",
-                                    prompt: promptText,
-                                    effectivePrompt: promptText,
-                                    channelId: config.channelId,
-                                    workflowId: config.workflowId,
-                                    seconds: ((range.endMs - range.startMs) / 1000).toFixed(1),
-                            videoSegment: {
-                                sourceNodeId: source.id,
-                                sourceDurationMs: source.metadata.durationMs || undefined,
-                                startMs: range.startMs,
-                                endMs: range.endMs,
-                                index,
-                                sceneStart: range.sceneStart,
-                                mode: plan.mode,
-                                // 记下这一段实际用了哪些角色：单段重试时要按同一套参考重来，
-                                // 否则重试出来的角色跟同批其他段对不上。
-                                castNodeIds: castIds,
-                                anchor: { firstFrameMs: range.startMs, lastFrameMs: range.endMs },
-                            },
-                                },
-                            },
-                        ],
-                        [{ id: nanoid(), fromNodeId: source.id, toNodeId: segmentId, kind: "lineage" }],
-                    );
-
-                    try {
-                        // 批量与单段重试共用同一条链路：切段、上传、抽首尾帧、生成、回填。
-                        const segmentBlob = await runVideoSegment({
-                            source,
-                            sourceBlob,
-                            range,
-                            castIds,
-                            promptText,
-                            config,
-                            segmentId,
-                            segmentLabel: `segment_${index + 1}`,
-                            segmentIndex: index,
-                            // 参考片段落在本行左侧，与段节点垂直居中对齐
-                            clipSpot: { x: clipColumnX, y: source.position.y + index * (source.height + 32) + Math.round((source.height - clipHeight) / 2), width: clipWidth, height: clipHeight },
-                            signal: controller.signal,
-                        });
-                        produced.push({ nodeId: segmentId, blob: segmentBlob, range });
-                        segmentCosts.push(Date.now() - segmentStartedAt);
-                        message.loading({ content: t("canvas.videoTimeline.toast.segmentDone", { index: index + 1, count: plan.ranges.length }), key: toastKey, duration: 1.2 });
-                    } catch (error) {
-                        if (isGenerationCanceled(error)) throw error;
-                        const errorDetails = error instanceof Error ? error.message : t("canvas.videoTimeline.toast.cutFailed", { error: "" });
-                        const currentNode = nodesRef.current.find((item) => item.id === segmentId);
-                        patchCanvasNode(segmentId, { metadata: { ...currentNode?.metadata, status: NODE_STATUS_ERROR, errorDetails } });
-                        message.error({ content: t("canvas.videoTimeline.toast.segmentFailed", { index: index + 1, error: errorDetails }), key: toastKey });
-                        // 一段失败就停：继续只会产出一堆接不上的碎片。
-                        // 但必须说清楚"到哪为止、成片有没有"，否则用户只看到一条红色报错，
-                        // 不知道那些已经出画面的段还算不算数。
-                        message.warning({
-                            content: t("canvas.videoTimeline.toast.stoppedAfterFailure", { done: produced.length, count: plan.ranges.length }),
-                            key: composeKey,
-                            duration: 8,
-                        });
-                        break;
-                    }
-                }
-
-                if (produced.length === plan.ranges.length && produced.length > 0) {
-                    message.loading({ content: t("canvas.videoTimeline.toast.composing"), key: composeKey, duration: 0 });
-
-                    // 局部重绘的成片 = 保留的原画头 + 重绘段 + 保留的原画尾。
-                    // 只拼重绘段的话，用户拿到的是"10–15 秒那 5 秒"，不是他要的整条片子。
-                    const parts: ConcatPart[] = [];
-                    const rangeStart = plan.ranges[0].startMs;
-                    const rangeEnd = plan.ranges[plan.ranges.length - 1].endMs;
-                    if (plan.mode === "repaint" && rangeStart > 60) {
-                        // 保留段是原样搬运，时长天然精确，仍显式给目标时长保持口径一致。
-                        parts.push({ blob: await cutVideoSegment(sourceBlob, 0, rangeStart), sceneStart: true, targetDurationMs: rangeStart });
-                    }
-                    // 生成段的时长由模型决定，按原片段落的目标时长归一化：
-                    // 请求 4 秒可能给 3.8 或 4.3，不归一化的话成片总时长会偏离原片，
-                    // 而音轨是整轨取自原片的 —— 音画漂移，越到后面口型越对不上。
-                    produced.forEach((part) => parts.push({ blob: part.blob, sceneStart: part.range.sceneStart, targetDurationMs: part.range.endMs - part.range.startMs }));
-                    if (plan.mode === "repaint" && plan.durationMs - rangeEnd > 60) {
-                        // 尾段起点正好是原片的场景切点时不做淡化，那里本来就没有连续性。
-                        parts.push({ blob: await cutVideoSegment(sourceBlob, rangeEnd, plan.durationMs), sceneStart: plan.endAtCut, targetDurationMs: plan.durationMs - rangeEnd });
-                    }
-
-                    const merged = await concatVideoParts(parts, {
-                        crossfadeFrames: plan.crossfadeFrames,
-                        audio: plan.keepAudio ? sourceBlob : null,
-                        signal: controller.signal,
-                        onProgress: (ratio) => {
-                            message.loading({ content: `${t("canvas.videoTimeline.toast.composing")} ${Math.round(ratio * 100)}%`, key: composeKey, duration: 0 });
-                        },
-                    });
-                    const uploaded = await uploadMediaFile(merged, "video");
-                    // 成片时长对不上原片，说明保留段或拼接算错了。静默产出一个短片
-                    // 比直接报错更糟 —— 用户会拿去用，等导出时才发现少了几秒。
-                    const mergedDurationMs = await probeVideo(merged)
-                        .then((probe) => probe.durationMs)
-                        .catch(() => null);
-                    if (mergedDurationMs && plan.durationMs > 0 && Math.abs(mergedDurationMs - plan.durationMs) > 500) {
-                        message.warning({
-                            content: t("canvas.videoTimeline.toast.durationMismatch", {
-                                expected: formatDuration(plan.durationMs),
-                                actual: formatDuration(mergedDurationMs),
-                            }),
-                            duration: 8,
-                        });
-                    }
-                    const compositeId = nanoid();
-                    appendCanvasNodes(
-                        [
-                            {
-                                id: compositeId,
-                                type: CanvasNodeType.Video,
-                                title: t("canvas.videoTimeline.node.compositeTitle", { title: sourceTitle }),
-                                position: { x: segmentColumnX + source.width + 96, y: source.position.y },
-                                width: source.width,
-                                height: source.height,
-                                metadata: {
-                                    ...videoMetadata(uploaded),
-                                    prompt: promptText,
-                                    effectivePrompt: promptText,
-                                    videoComposite: {
-                                        partNodeIds: produced.map((part) => part.nodeId),
-                                        crossfadeMs: Math.round((plan.crossfadeFrames / 30) * 1000),
-                                        sourceNodeId: source.id,
-                                    },
-                                },
-                            },
-                        ],
-                        produced.map((part) => ({ id: nanoid(), fromNodeId: part.nodeId, toNodeId: compositeId, kind: "lineage" as const })),
-                    );
-                    message.success({ content: t("canvas.videoTimeline.toast.composed"), key: composeKey });
-                }
-                setVideoTimelineNode(null);
-            } catch (error) {
-                if (isGenerationCanceled(error)) {
-                    message.info({ content: t("canvas.videoTimeline.toast.cancelled"), key: toastKey });
-                } else {
-                    const errorDetails = error instanceof Error ? error.message : String(error);
-                    message.error({ content: t("canvas.videoTimeline.toast.composeFailed", { error: errorDetails }), key: composeKey });
-                }
-            } finally {
-                setVideoTimelineSubmitting(false);
-                runningVideoEditsRef.current.delete(source.id);
-            }
+            setVideoTimelinePending(null);
+            void runPreparedBatchRef.current?.(prepared);
         },
-        [appendCanvasNodes, effectiveConfig, isGenerationCanceled, message, patchCanvasNode, t, videoTimelineNode],
+        [message, prepareVideoBatch, t, videoTimelineNode],
     );
 
     const handleExecuteFaceRefine = useCallback(
@@ -4667,6 +5457,18 @@ function InfiniteCanvasPage() {
             }
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const prompt = intent === "repeat" ? (submittedPrompt.trim() || sourceNode?.metadata?.prompt || "") : submittedPrompt;
+            // 段节点的"生成"只有一个含义：按同一套参考重跑这一段。
+            //
+            // 它的参考图集（角色图 + 从原片抽的首尾帧）和段区间都是运行时构造的，不体现为
+            // 画布连线。走通用视频生成会把这些全丢掉 —— 出来的是另一条独立视频：没有参考
+            // 视频、没有角色图、画幅按全局猜。用户改完提示词点生成，拿到的东西跟这一段无关，
+            // 还以为重跑成功了。所以这里必须接到分段链路上去。
+            if (mode === "video" && sourceNode?.metadata?.videoSegment) {
+                const nextPrompt = prompt.trim() || sourceNode.metadata?.prompt || "";
+                const target = nextPrompt === (sourceNode.metadata?.prompt || "") ? sourceNode : { ...sourceNode, metadata: { ...sourceNode.metadata, prompt: nextPrompt } };
+                void handleRetryVideoSegment(target);
+                return;
+            }
             const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
@@ -5509,7 +6311,7 @@ function InfiniteCanvasPage() {
                 finishGenerationRequest(nodeId, runController);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest, t],
+        [effectiveConfig, finishGenerationRequest, handleRetryVideoSegment, isAiConfigReady, message, openConfigDialog, startGenerationRequest, t],
     );
     useEffect(() => {
         generateNodeRef.current = handleGenerateNode;
@@ -6431,7 +7233,12 @@ function InfiniteCanvasPage() {
                     open={Boolean(videoTimelineNode)}
                     node={videoTimelineNode}
                     imageNodes={videoTimelineCastImages}
+                    limits={videoSegmentLimits}
+                    spec={videoTimelineSpec}
                     submitting={videoTimelineSubmitting}
+                    pendingBatch={videoTimelinePending}
+                    doneRanges={videoTimelineBatchView.doneRanges}
+                    restore={videoTimelineBatchView.restore}
                     onClose={() => {
                         if (!videoTimelineSubmitting) setVideoTimelineNode(null);
                     }}

@@ -61,6 +61,19 @@ export type CanvasNodeText = {
     isTimeout?: boolean;
 };
 
+/**
+ * 角色参考图快照。
+ *
+ * 段节点上的参考图片集是运行时构造的（勾选的角色图 + 从原片抽的首尾帧），
+ * 它不体现为画布连线。要把它们"记在节点上"，否则用户点开一段只能看到结果与
+ * 一句提示词，没法核对"当时到底喂了谁"。同理，节点被删后仍能说清用过哪几张图。
+ */
+export type CanvasVideoSegmentCast = {
+    nodeId: string;
+    title?: string;
+    url?: string;
+};
+
 /** 长视频分段处理：本节点是源视频中某个时间区间的一段。 */
 export type CanvasVideoSegment = {
     /** 源视频节点 id。 */
@@ -78,8 +91,20 @@ export type CanvasVideoSegment = {
     mode: "repaint" | "character-swap";
     /** 本段实际参与生成的角色参考图节点 id。单段重试时按同一套参考重来，角色才跟同批其他段一致。 */
     castNodeIds?: string[];
-    /** 生成本段时吃的首帧/尾帧约束（解释「为什么无缝」，也便于复现）。 */
-    anchor?: { firstFrameMs?: number; lastFrameMs?: number };
+    /** 角色参考图的快照（节点 id / 标题 / 图片地址），勾选顺序即模型看到的 ref_image_01..0N 顺序。 */
+    castSnapshot?: CanvasVideoSegmentCast[];
+    /**
+     * 生成本段时吃的首帧/尾帧约束（解释「为什么无缝」，也便于复现）。
+     *
+     * firstFrameMs/lastFrameMs 是区间边界；headFrameMs/tailFrameMs 是**实际抽帧**的时间点
+     * ——尾帧为了避免抽到区间外的那一帧，会往回收几十毫秒。两个值都要记，
+     * 否则重跑时抽到的帧跟首次不是同一张，接缝就对不上。
+     */
+    anchor?: { firstFrameMs?: number; lastFrameMs?: number; headFrameMs?: number; tailFrameMs?: number };
+    /** 这一段实际吃进去的参考片段（切出来的那一段）。 */
+    referenceClip?: { nodeId?: string; url?: string; storageKey?: string; durationMs?: number };
+    /** 本段提示词的来源：段级覆盖 / 沿用全局。面板上要能说清"我改的是这一段还是所有段"。 */
+    promptSource?: "segment" | "global";
     /**
      * 生成结果与原片段的目标时长之差（毫秒）。超过 500ms 才记录。
      *
@@ -111,6 +136,14 @@ export type CanvasVideoComposite = {
     crossfadeMs: number;
     /** 源视频节点，便于追溯。 */
     sourceNodeId?: string;
+    /**
+     * 合成参数快照。单段重跑后要重新拼一遍成片，而这几个参数只存在于当时的提交里 ——
+     * 不记下来就只能猜（猜错的表现是音画不同步、或接缝突然发虚）。
+     */
+    mode?: "repaint" | "character-swap";
+    keepAudio?: boolean;
+    endAtCut?: boolean;
+    durationMs?: number;
 };
 
 export type CanvasNodeMetadata = {
@@ -123,6 +156,13 @@ export type CanvasNodeMetadata = {
     jobId?: string;
     isTimeout?: boolean;
     status?: CanvasNodeStatus;
+    /**
+     * 分段任务的排队位置（仅段节点用）。
+     *
+     * 一提交就把这一拨的段节点全部铺到画布上，轮到谁谁从 waiting 变 running ——
+     * 否则用户点完"重绘"只能盯着空画布，等第一段切完才看见第一个节点。
+     */
+    queueState?: "waiting" | "running";
     errorDetails?: string;
     fontSize?: number;
     generationMode?: CanvasGenerationMode;

@@ -511,7 +511,7 @@ function NodeContent(props: NodeContentRendererProps) {
     if (props.node.type === CanvasNodeType.Config && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot && props.node.type === CanvasNodeType.Image) return <ImageNodeContent {...props} />;
     if (props.node.type === CanvasNodeType.Text && props.node.metadata?.texts?.length && (props.node.metadata.status !== "error" || props.node.metadata.texts.some((text) => text.content))) return <TextContent {...props} />;
-    if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} />;
+    if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} node={props.node} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
 
     const Renderer = nodeContentRenderers[props.node.type as CanvasNodeType];
@@ -609,12 +609,22 @@ function GroupNodeContent({ node, theme, groupSummary, onToggleGroupCollapse }: 
     );
 }
 
-function LoadingContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
+function LoadingContent({ theme, node }: Pick<NodeContentRendererProps, "theme" | "node">) {
     const { t } = useTranslation();
+    // 分段任务的段节点一提交就全铺在画布上，轮到谁才真正开始跑。
+    // 都画成转圈的话，十个节点长得一样，看不出"哪个在跑、哪些在等" ——
+    // 排队用静止的虚线圈，跑起来的才转。
+    const segment = node.metadata?.videoSegment;
+    const waiting = node.metadata?.queueState === "waiting";
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.activeStroke }}>
-            <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
-            <span className="text-[10px] tracking-[0.2em]">{t("canvas.node.generating")}</span>
+            {waiting ? (
+                <div className="size-9 rounded-full border-2 border-dashed opacity-50" style={{ borderColor: theme.node.activeStroke }} />
+            ) : (
+                <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
+            )}
+            {segment ? <span className="rounded-full bg-indigo-600/80 px-2 py-0.5 text-[10px] font-medium text-white">{t("canvas.videoTimeline.node.segmentBadge", { index: segment.index + 1 })}</span> : null}
+            <span className="text-[10px] tracking-[0.2em]">{waiting ? t("canvas.videoTimeline.node.queued") : t("canvas.node.generating")}</span>
         </div>
     );
 }
@@ -854,6 +864,17 @@ function VideoNodeContent({ node, theme, onViewMedia }: NodeContentRendererProps
                 >
                     {composite ? <Layers className="size-2.5" /> : null}
                     {badge}
+                </span>
+            ) : null}
+            {/* 这一段吃的参考：只有角色图（首尾帧类工作流才多两张原片帧）。
+                徽章只报数，明细在节点右侧面板里。有它才能一眼看出"这段到底挂没挂角色"，
+                而不是等到角色没换对才发现。 */}
+            {segment ? (
+                <span
+                    className="pointer-events-none absolute right-2 top-2 z-20 rounded-full bg-indigo-600/70 px-2 py-0.5 text-[10px] font-medium text-white shadow backdrop-blur"
+                    title={t("canvas.videoTimeline.node.referenceBadgeTip", { cast: segment.castSnapshot?.length ?? segment.castNodeIds?.length ?? 0 })}
+                >
+                    {t("canvas.videoTimeline.node.referenceBadge", { count: (segment.castSnapshot?.length ?? segment.castNodeIds?.length ?? 0) + (segment.anchor?.headFrameMs !== undefined ? 2 : 0) })}
                 </span>
             ) : null}
             {/* 时长偏差提示：合成时已按目标归一化，节奏不会错，但差得多说明内容没生成完整。 */}
