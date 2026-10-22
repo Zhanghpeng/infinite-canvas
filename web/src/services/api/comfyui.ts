@@ -3078,6 +3078,23 @@ export async function requestComfyuiVoice(req: ComfyuiVoiceRequest): Promise<Com
  * 或者换了台 ComfyUI。标记还在、文件没了，生成时才会 FileNotFoundError，而那个报错
  * 指向的是工作流文件名，看起来完全不像"少传一个文件"。
  */
+/**
+ * 从 `/object_info` 的 COMBO 定义里取出可选项。
+ *
+ * 这个字段的形态换过一次版本，两种都要认：
+ * - 新版本：`["COMBO", { options: ["a.mp3", ...] }]`
+ * - 旧版本：`[["a.mp3", ...], {...}]`
+ * 只认一种的后果是静默拿到 undefined —— 表现出来就是"音色文件明明传过，却每次都重传"，
+ * 或者更糟：判不出文件已丢，生成时才 FileNotFoundError。
+ */
+function readComboOptions(definition: unknown): string[] | undefined {
+    if (!Array.isArray(definition)) return undefined;
+    const meta = definition[1] as { options?: unknown } | undefined;
+    const list = Array.isArray(meta?.options) ? meta.options : Array.isArray(definition[0]) ? definition[0] : undefined;
+    if (!Array.isArray(list)) return undefined;
+    return list.filter((item): item is string => typeof item === "string");
+}
+
 export async function listComfyuiInputAudio(baseUrl: string, token?: string): Promise<string[] | undefined> {
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -3085,10 +3102,7 @@ export async function listComfyuiInputAudio(baseUrl: string, token?: string): Pr
         const res = await comfyuiFetch(`${normalizeBaseUrl(baseUrl)}/object_info/LoadAudio`, { headers }, baseUrl);
         if (!res.ok) return undefined;
         const data = (await res.json()) as { LoadAudio?: { input?: { required?: { audio?: unknown } } } };
-        const options = data?.LoadAudio?.input?.required?.audio;
-        const list = Array.isArray(options) ? options[0] : undefined;
-        if (!Array.isArray(list)) return undefined;
-        return list.filter((item): item is string => typeof item === "string");
+        return readComboOptions(data?.LoadAudio?.input?.required?.audio);
     } catch {
         // 拿不到列表不等于不能生成，交给上传流程去撞真实错误。
         return undefined;
