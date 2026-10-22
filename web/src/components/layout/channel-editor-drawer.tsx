@@ -20,6 +20,11 @@ const CORE_WORKFLOW_CATEGORIES: Array<{ key: WorkflowCategory; title: string; de
     { key: "omniVideo", title: "全能参考视频工作流", desc: "多模态参考生视频（必标 prompt、output_video）" },
     { key: "frameVideo", title: "首尾帧视频工作流", desc: "首尾关键帧生视频（必标 first_frame、last_frame、output_video）" },
     { key: "audio", title: "音乐与音频工作流", desc: "音乐与音频生成（必标 caption/lyrics 或 prompt、output_audio）" },
+    {
+        key: "voice",
+        title: "配音工作流",
+        desc: "台词转人声（必标 prompt 台词、ref_audio_01 音色、output_audio；可选 emotion / strength）",
+    },
 ];
 
 const TOOL_WORKFLOW_CATEGORIES: Array<{ key: WorkflowCategory; title: string; desc: string }> = [
@@ -117,6 +122,11 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
 
             setWorkflows([...currentWorkflows, newWorkflow]);
             message.success(`成功添加工作流 "${newWorkflow.name}"！`);
+            // 槽位没编号这类问题不挡导入（按 01 处理仍能跑），但必须说出来 ——
+            // 不说的话，用户改完音色发现产物还是同一个声音，只会怀疑模型不行。
+            for (const warning of validation.warnings || []) {
+                message.warning(warning);
+            }
         } catch {
             message.error("解析文件失败，请确保上传的是有效的 JSON 格式工作流");
         }

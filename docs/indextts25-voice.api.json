@@ -18,7 +18,7 @@
     },
     "class_type": "T8_IndexTTS25_ModelLoader",
     "_meta": {
-      "title": "IndexTTS 2.5 模型加载器 · T8star-Aix"
+      "title": "IndexTTS 2.5 模型加载器"
     }
   },
   "2": {
@@ -33,23 +33,17 @@
   "3": {
     "inputs": {
       "mode": "text",
-      "mode.emotion_text": [
-        "9",
-        0
-      ],
-      "mode.strength": 0.85
+      "mode.emotion_text": ["9", 0],
+      "mode.strength": ["10", 0]
     },
     "class_type": "T8_IndexTTS25_EmotionControl",
     "_meta": {
-      "title": "IndexTTS 2.5 情感控制 · T8star-Aix"
+      "title": "IndexTTS 2.5 情感控制"
     }
   },
   "4": {
     "inputs": {
-      "text": [
-        "8",
-        0
-      ],
+      "text": ["8", 0],
       "language": "ZH",
       "duration_factor": 1.05,
       "target_duration_mode": "off",
@@ -62,31 +56,19 @@
       "quality_asr_model": "base",
       "quality_asr_device": "auto",
       "quality_threshold": 0.82,
-      "model": [
-        "1",
-        0
-      ],
-      "speaker_audio": [
-        "2",
-        0
-      ],
-      "emotion": [
-        "3",
-        0
-      ]
+      "model": ["1", 0],
+      "speaker_audio": ["2", 0],
+      "emotion": ["3", 0]
     },
     "class_type": "T8_IndexTTS25_Generate",
     "_meta": {
-      "title": "IndexTTS 2.5 语音生成 · T8star-Aix"
+      "title": "IndexTTS 2.5 语音生成"
     }
   },
   "5": {
     "inputs": {
-      "filename_prefix": "IndexTTS25_T8/emotion_text",
-      "audio": [
-        "4",
-        0
-      ]
+      "filename_prefix": "IndexTTS25/voice",
+      "audio": ["4", 0]
     },
     "class_type": "SaveAudio",
     "_meta": {
@@ -109,6 +91,15 @@
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
       "title": "emotion"
+    }
+  },
+  "10": {
+    "inputs": {
+      "value": 0.85
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "strength"
     }
   }
 }

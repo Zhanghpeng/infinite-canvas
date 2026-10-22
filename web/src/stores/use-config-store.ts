@@ -26,6 +26,7 @@ import {
     DEFAULT_LOCAL_COMFYUI_TEXT_WORKFLOW,
     DEFAULT_LOCAL_COMFYUI_VIDEO_WORKFLOW,
     DEFAULT_BUILTIN_COMFYUI_AUDIO_WORKFLOW,
+    DEFAULT_BUILTIN_COMFYUI_VOICE_WORKFLOW,
     DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW,
     getDefaultComfyuiWorkflows,
     getDefaultComfyWorkflowItems,
@@ -36,7 +37,7 @@ export type ApiCallFormat = "openai" | "gemini" | "comfyui";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 
-export type WorkflowCategory = "t2i" | "i2i" | "inpaint" | "text" | "omniVideo" | "frameVideo" | "audio" | "faceRefine" | "depthVideo" | "superResolve" | "angle" | "upscale";
+export type WorkflowCategory = "t2i" | "i2i" | "inpaint" | "text" | "omniVideo" | "frameVideo" | "audio" | "voice" | "faceRefine" | "depthVideo" | "superResolve" | "angle" | "upscale";
 
 export const WORKFLOW_CATEGORY_TO_CHANNEL_FIELD: Record<WorkflowCategory, keyof ModelChannel> = {
     t2i: "comfyuiT2iWorkflow",
@@ -46,6 +47,9 @@ export const WORKFLOW_CATEGORY_TO_CHANNEL_FIELD: Record<WorkflowCategory, keyof 
     omniVideo: "comfyuiVideoWorkflow",
     frameVideo: "comfyuiFrameVideoWorkflow",
     audio: "comfyuiAudioWorkflow",
+    // 配音必须与配乐分开：`getDefaultWorkflow` 每个分类只有一个默认值，混用会让
+    // 配音作业静默产出配乐、配乐作业产出一段人声 —— 产物类型都对，只是内容荒谬。
+    voice: "comfyuiVoiceWorkflow",
     faceRefine: "comfyuiFaceRefineWorkflow",
     depthVideo: "comfyuiDepthVideoWorkflow",
     superResolve: "comfyuiSuperResolveWorkflow",
@@ -103,6 +107,7 @@ export type ModelChannel = {
     comfyuiAngleWorkflow?: ComfyuiWorkflow;
     comfyuiUpscaleWorkflow?: ComfyuiWorkflow;
     comfyuiAudioWorkflow?: ComfyuiWorkflow;
+    comfyuiVoiceWorkflow?: ComfyuiWorkflow;
     comfyuiFaceRefineWorkflow?: ComfyuiWorkflow;
     comfyuiDepthVideoWorkflow?: ComfyuiWorkflow;
 };
@@ -199,6 +204,7 @@ export const defaultConfig: AiConfig = {
             comfyuiVideoWorkflow: DEFAULT_BUILTIN_COMFYUI_VIDEO_WORKFLOW,
             comfyuiFrameVideoWorkflow: DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_WORKFLOW,
             comfyuiAudioWorkflow: DEFAULT_BUILTIN_COMFYUI_AUDIO_WORKFLOW,
+            comfyuiVoiceWorkflow: DEFAULT_BUILTIN_COMFYUI_VOICE_WORKFLOW,
             comfyuiFaceRefineWorkflow: DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW,
             models: COMFYUI_BUILTIN_DEFAULT_MODELS,
         },
@@ -741,6 +747,7 @@ export function createModelChannel(channel?: Partial<ModelChannel>, options?: { 
         comfyuiVideoWorkflow: channel?.comfyuiVideoWorkflow !== undefined ? channel.comfyuiVideoWorkflow : workflows.video,
         comfyuiFrameVideoWorkflow: channel?.comfyuiFrameVideoWorkflow !== undefined ? channel.comfyuiFrameVideoWorkflow : workflows.frameVideo,
         comfyuiAudioWorkflow: channel?.comfyuiAudioWorkflow !== undefined ? channel.comfyuiAudioWorkflow : workflows.audio,
+        comfyuiVoiceWorkflow: channel?.comfyuiVoiceWorkflow !== undefined ? channel.comfyuiVoiceWorkflow : workflows.voice,
         comfyuiFaceRefineWorkflow: channel?.comfyuiFaceRefineWorkflow !== undefined ? channel.comfyuiFaceRefineWorkflow : workflows.faceRefine,
         comfyuiDepthVideoWorkflow: channel?.comfyuiDepthVideoWorkflow !== undefined ? channel.comfyuiDepthVideoWorkflow : workflows.depthVideo,
     };

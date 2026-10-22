@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
-import { adaptWorkflowModelPaths, applyBindings, cancelJob, collectVideoAssetIds, ComfyuiAbortedError, ComfyuiApiError, ComfyuiJobError, ComfyuiNoWorkflowError, ComfyuiTimeoutError, downloadAsset, generateRandomSeed, parseSize, pollComfyuiVideoJob, pollJob, requestComfyuiImage, submitComfyuiVideoJob, submitJob, validateComfyuiWorkflow } from "@/services/api/comfyui";
+import { adaptWorkflowModelPaths, applyAudioBindings, applyBindings, cancelJob, collectVideoAssetIds, ComfyuiAbortedError, ComfyuiApiError, ComfyuiJobError, ComfyuiNoWorkflowError, ComfyuiTimeoutError, downloadAsset, generateRandomSeed, parseSize, pollComfyuiVideoJob, pollJob, requestComfyuiImage, resolveSlotInputKey, submitComfyuiVideoJob, submitJob, validateComfyuiWorkflow, writeSlot } from "@/services/api/comfyui";
 import type { ComfyuiWorkflowJson } from "@/services/api/comfyui";
 import { defaultConfig, findWorkflow, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
-import { DEFAULT_BUILTIN_COMFYUI_DEPTH_VIDEO_WORKFLOW, DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW, DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW } from "@/services/api/comfyui-default-workflows";
+import { DEFAULT_BUILTIN_COMFYUI_DEPTH_VIDEO_WORKFLOW, DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW, DEFAULT_BUILTIN_COMFYUI_VOICE_WORKFLOW, DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW } from "@/services/api/comfyui-default-workflows";
 
 // The generation log store the service writes to (same localforage structure as image-storage).
 const { comfyuiLogStore } = vi.hoisted(() => ({
@@ -999,5 +999,105 @@ describe("Qwen-Image-2.1 and submitJob validation", () => {
     });
 });
 
+describe("槽位写入与配音绑定", () => {
+    const voiceWorkflow = DEFAULT_BUILTIN_COMFYUI_VOICE_WORKFLOW.json as ComfyuiWorkflowJson;
+    const inputsOf = (wf: ComfyuiWorkflowJson, id: string) => (wf[id] as { inputs: Record<string, unknown> }).inputs;
 
+    it("validates the built-in voice workflow", () => {
+        const result = validateComfyuiWorkflow(voiceWorkflow, "voice");
+        expect(result.ok).toBe(true);
+    });
 
+    it("rejects a voice workflow without a reference voice slot", () => {
+        const withoutVoice = { ...voiceWorkflow };
+        delete withoutVoice["2"];
+        const result = validateComfyuiWorkflow(withoutVoice, "voice");
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("ref_audio_01");
+    });
+
+    it("rejects a voice workflow without a script slot", () => {
+        const withoutScript = { ...voiceWorkflow };
+        delete withoutScript["8"];
+        const result = validateComfyuiWorkflow(withoutScript, "voice");
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("台词");
+    });
+
+    it("reports a slot marked on the consuming node instead of the source", () => {
+        // 情绪槽位错标在生成节点上——那里的 mode.emotion_text 是一条连线。
+        const misMarked = structuredClone(voiceWorkflow) as Record<string, unknown>;
+        (misMarked["4"] as { _meta: { title: string } })._meta.title = "emotion";
+        delete (misMarked["9"] as { _meta?: unknown })._meta;
+        const result = validateComfyuiWorkflow(misMarked, "voice");
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain("连线");
+    });
+
+    it("warns when a reference slot has no index", () => {
+        const unnamed = structuredClone(voiceWorkflow) as Record<string, unknown>;
+        (unnamed["2"] as { _meta: { title: string } })._meta.title = "ref_audio";
+        const result = validateComfyuiWorkflow(unnamed, "voice");
+        expect(result.ok).toBe(true);
+        expect(result.warnings?.join()).toContain("ref_audio_01");
+    });
+
+    it("cannot overwrite an input that is a link", () => {
+        const record = { class_type: "T8_IndexTTS25_Generate", inputs: { text: ["8", 0] as unknown } };
+        expect(() => writeSlot(record, "text", "台词", "prompt")).toThrow(/连线/);
+        // 抛错不代表改了东西：连线还在
+        expect(record.inputs.text).toEqual(["8", 0]);
+    });
+
+    it("follows the original value type so ComfyUI type checks pass", () => {
+        const record = { class_type: "PrimitiveFloat", inputs: { value: 0.8 as unknown } };
+        writeSlot(record, "value", "0.55", "strength");
+        expect(record.inputs.value).toBe(0.55);
+        expect(typeof record.inputs.value).toBe("number");
+    });
+
+    it("writes the script, emotion, strength and voice into their own slot nodes", () => {
+        const bound = applyAudioBindings(voiceWorkflow, {
+            prompt: "等了这么久，我们终于可以一起出发了。",
+            emotion: "克制但难掩喜悦",
+            strength: 0.62,
+            refAudio: "voice_ab12.wav",
+            seed: 7,
+        });
+
+        expect(inputsOf(bound, "8").value).toBe("等了这么久，我们终于可以一起出发了。");
+        expect(inputsOf(bound, "9").value).toBe("克制但难掩喜悦");
+        expect(inputsOf(bound, "10").value).toBe(0.62);
+        expect(inputsOf(bound, "2").audio).toBe("voice_ab12.wav");
+        expect(inputsOf(bound, "4").seed).toBe(7);
+
+        // 消费方的连线必须原样保留，否则工作流断链、台词静默不生效
+        expect(inputsOf(bound, "4").text).toEqual(["8", 0]);
+        expect(inputsOf(bound, "3")["mode.emotion_text"]).toEqual(["9", 0]);
+    });
+
+    it("keeps the original workflow untouched", () => {
+        applyAudioBindings(voiceWorkflow, { prompt: "改了", emotion: "笑了", refAudio: "a.wav" });
+        expect(inputsOf(voiceWorkflow, "8").value).toBe("");
+    });
+
+    it("clears the leftover sub-inputs when switching to speaker mode", () => {
+        const bound = applyAudioBindings(voiceWorkflow, {
+            prompt: "跟随音色就好",
+            emotionMode: "speaker",
+            refAudio: "a.wav",
+        });
+        const emotionNode = inputsOf(bound, "3");
+        expect(emotionNode.mode).toBe("speaker");
+        // 留着 mode.* 子键会被 ComfyUI 当成未定义输入直接 400
+        expect(emotionNode["mode.emotion_text"]).toBeUndefined();
+        expect(emotionNode["mode.strength"]).toBeUndefined();
+    });
+
+    it("resolves the emotion and strength slot keys from the source nodes", () => {
+        const emotionNode = voiceWorkflow["9"] as Parameters<typeof resolveSlotInputKey>[1];
+        expect(resolveSlotInputKey("emotion", emotionNode)).toBe("value");
+        const strengthNode = voiceWorkflow["10"] as Parameters<typeof resolveSlotInputKey>[1];
+        expect(resolveSlotInputKey("strength", strengthNode)).toBe("value");
+    });
+});
