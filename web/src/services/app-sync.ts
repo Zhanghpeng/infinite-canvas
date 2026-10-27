@@ -9,6 +9,7 @@ import { useAssetStore } from "@/stores/use-asset-store";
 import type { WebdavSyncConfig } from "@/stores/use-config-store";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import { ensureProjectGraphs } from "@/lib/storage/local-canvas-storage";
 
 type StoredLog = Record<string, unknown> & { id?: string };
 export type AppSyncDomainKey = "canvas" | "assets" | "image-workbench" | "video-workbench";
@@ -90,7 +91,7 @@ export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?:
             key: "canvas",
             label: "画布",
             emptyData: { projects: [] },
-            localData: async () => ({ projects: useCanvasStore.getState().projects }),
+            localData: async () => ({ projects: await ensureProjectGraphs(useCanvasStore.getState().projects) }),
             mergeData: (local, remote) => ({ projects: mergeById(local.projects, remote.projects, "updatedAt") }),
             applyData: async (data) => useCanvasStore.getState().replaceProjects(data.projects),
         }),

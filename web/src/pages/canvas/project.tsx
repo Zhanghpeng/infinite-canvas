@@ -58,6 +58,7 @@ import { CanvasSelectionToolbar } from "@/components/canvas/canvas-selection-too
 import { alignSelectedNodes, boundsOfNodes, distributeSelectedNodes, type NodeAlignMode, type NodeDistributeMode } from "@/lib/canvas/canvas-layout-actions";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useCanvasStore, type CanvasProject } from "@/stores/canvas/use-canvas-store";
+import { readProjectGraph } from "@/lib/storage/local-canvas-storage";
 import { useCollabStore } from "@/stores/use-collab-store";
 import { useCanvasCollab } from "@/pages/canvas/hooks/use-canvas-collab";
 import { CanvasCollabCursors, CanvasCollabSelectionOutlines } from "@/components/canvas/canvas-collab-cursors";
@@ -341,6 +342,7 @@ function InfiniteCanvasPage() {
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
     const openProject = useCanvasStore((state) => state.openProject);
+    const setProjectGraph = useCanvasStore((state) => state.setProjectGraph);
     const updateProject = useCanvasStore((state) => state.updateProject);
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
@@ -683,15 +685,23 @@ function InfiniteCanvasPage() {
         }
 
         const restore = async () => {
-            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
-            const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
+            // 本地存储 v2 启动时只读索引，图还没加载。打开的这个项目在这里补读自己的 graph.json，
+            // 其它没打开的项目继续保持 lazy，保存时不会被空图覆盖。
+            let current = project as CanvasProject;
+            if (current.lazy) {
+                const graph = (await readProjectGraph(projectId)) ?? { nodes: [], connections: [], chatSessions: [] };
+                setProjectGraph(projectId, graph);
+                current = { ...current, ...graph, lazy: false, nodeCount: graph.nodes.length, connectionCount: graph.connections.length };
+            }
+            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(current.nodes));
+            const restoredSessions = await hydrateAssistantImages(current.chatSessions || []);
             setNodes(restoredNodes);
-            setConnections(project.connections);
+            setConnections(current.connections);
             setChatSessions(restoredSessions);
-            setActiveChatId(project.activeChatId || null);
-            setBackgroundMode(project.backgroundMode);
-            setShowImageInfo(project.showImageInfo || false);
-            setViewport(project.viewport);
+            setActiveChatId(current.activeChatId || null);
+            setBackgroundMode(current.backgroundMode);
+            setShowImageInfo(current.showImageInfo || false);
+            setViewport(current.viewport);
             historyRef.current = { past: [], future: [] };
             if (historyCommitTimerRef.current) {
                 clearTimeout(historyCommitTimerRef.current);
@@ -699,11 +709,11 @@ function InfiniteCanvasPage() {
             }
             lastHistoryRef.current = {
                 nodes: restoredNodes,
-                connections: project.connections,
+                connections: current.connections,
                 chatSessions: restoredSessions,
-                activeChatId: project.activeChatId || null,
-                backgroundMode: project.backgroundMode,
-                showImageInfo: project.showImageInfo || false,
+                activeChatId: current.activeChatId || null,
+                backgroundMode: current.backgroundMode,
+                showImageInfo: current.showImageInfo || false,
             };
             setHistoryState({ canUndo: false, canRedo: false });
             setInterruptedBannerDismissed(false);

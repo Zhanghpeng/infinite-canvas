@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { getStorage, setStorageBackend } from "@/lib/storage";
 import { LocalFsBackend } from "@/lib/storage/local-fs-backend";
-import { createLocalCanvasStorage, projectFile, readWorkspaceIndex } from "@/lib/storage/local-canvas-storage";
+import { createLocalCanvasStorage, graphFile, projectFile, readWorkspaceIndex } from "@/lib/storage/local-canvas-storage";
 
 // 本地服务（local-workspace）的集成测试。
 //
@@ -77,7 +77,7 @@ describe.skipIf(!enabled)("LocalFsBackend（需要本地服务）", () => {
         await backend.removeBlob("image_files", key);
     });
 
-    it("画布持久化写成一项目一文件 + 工作区索引", async () => {
+    it("画布持久化成「索引 + 项目图文件」两层", async () => {
         setStorageBackend(backend);
         const storage = createLocalCanvasStorage();
         const project = { id: `proj-${RUN}`, title: "集成测试", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), nodes: [], connections: [], viewport: { x: 0, y: 0, scale: 1 } };
@@ -86,9 +86,13 @@ describe.skipIf(!enabled)("LocalFsBackend（需要本地服务）", () => {
         // setItem 有 400ms 去抖，等它落盘。
         await new Promise((resolve) => setTimeout(resolve, 900));
 
-        const raw = await readText(projectFile(project.id));
-        expect(raw).toContain("集成测试");
-        expect((await readWorkspaceIndex())?.projects.some((item) => item.id === project.id)).toBe(true);
+        // v2：图落在 graph.json，元数据落在索引里；不再写 v1 的 project.json。
+        const raw = await readText(graphFile(project.id));
+        expect(raw).not.toBeNull();
+        expect(await readText(projectFile(project.id))).toBeNull();
+        const index = await readWorkspaceIndex();
+        expect(index?.version).toBe(2);
+        expect(index?.projects.find((item) => item.id === project.id)?.title).toBe("集成测试");
 
         const hydrated = await storage.getItem("canvas");
         expect(hydrated?.state.projects.map((item) => item.id)).toContain(project.id);
