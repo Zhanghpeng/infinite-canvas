@@ -453,6 +453,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
     const { t } = useTranslation();
     const assets = useAssetStore((state) => state.assets);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const addAssetDetailed = useAssetStore((state) => state.addAssetDetailed);
     const removeAsset = useAssetStore((state) => state.removeAsset);
     const assetsById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
     const [keyword, setKeyword] = useState("");
@@ -476,23 +477,28 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
         setUploading(true);
         const hide = message.loading(t("canvas.sidePanel.addingAssets"), 0);
         let added = 0;
+        let skipped = 0;
+        // 上传的文件按内容命名，同一份素材再传一次只会命中已有条目 —— 这里把"跳过了几个"如实报出来，
+        // 否则用户会觉得点了没反应。
+        const push = (asset: Parameters<typeof addAsset>[0]) => {
+            if (addAssetDetailed(asset).duplicate) skipped += 1;
+            else added += 1;
+        };
         try {
             for (const file of files) {
                 if (file.type.startsWith("image/")) {
                     const image = await uploadImage(file);
-                    addAsset({ kind: "image", title: file.name || t("assets.kinds.image"), coverUrl: image.url, tags: [], data: { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType } });
-                    added += 1;
+                    push({ kind: "image", title: file.name || t("assets.kinds.image"), coverUrl: image.url, tags: [], data: { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType } });
                 } else if (file.type.startsWith("video/")) {
                     const media = await uploadMediaFile(file, "video");
-                    addAsset({ kind: "video", title: file.name || t("assets.kinds.video"), coverUrl: "", tags: [], data: { url: media.url, storageKey: media.storageKey, width: media.width || 0, height: media.height || 0, bytes: media.bytes, mimeType: media.mimeType } });
-                    added += 1;
+                    push({ kind: "video", title: file.name || t("assets.kinds.video"), coverUrl: "", tags: [], data: { url: media.url, storageKey: media.storageKey, width: media.width || 0, height: media.height || 0, bytes: media.bytes, mimeType: media.mimeType } });
                 } else if (isAudioFile(file)) {
                     const media = await uploadMediaFile(file, "audio");
-                    addAsset({ kind: "audio", title: file.name || t("assets.kinds.audio"), coverUrl: "", tags: [], data: { url: media.url, storageKey: media.storageKey, durationMs: media.durationMs, bytes: media.bytes, mimeType: media.mimeType || "audio/mpeg" } });
-                    added += 1;
+                    push({ kind: "audio", title: file.name || t("assets.kinds.audio"), coverUrl: "", tags: [], data: { url: media.url, storageKey: media.storageKey, durationMs: media.durationMs, bytes: media.bytes, mimeType: media.mimeType || "audio/mpeg" } });
                 }
             }
-            if (added) message.success(t("canvas.sidePanel.addedAssets", { count: added }));
+            if (skipped) message.info(t("assets.uploadedWithDuplicates", { added, skipped }));
+            else if (added) message.success(t("canvas.sidePanel.addedAssets", { count: added }));
             else message.warning(t("canvas.sidePanel.mediaOnly"));
         } catch (error) {
             console.error(error);

@@ -3,6 +3,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import type { CanvasConnectionKind, CanvasFrameSlot } from "@/types/canvas";
 import { nanoid } from "nanoid";
+import { findDuplicateAsset, mergeIntoExisting } from "@/lib/canvas/asset-dedupe";
 import { localForageStorage } from "@/lib/localforage-storage";
 import { cleanupUnusedImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
@@ -55,10 +56,13 @@ type AssetBase<T extends AssetKind> = {
     metadata?: Record<string, unknown>;
 };
 
-type AssetStore = {
+export type AddAssetResult = { id: string; duplicate: boolean };
+export type AssetStore = {
     hydrated: boolean;
     assets: Asset[];
     addAsset: (asset: Omit<Asset, "id" | "createdAt" | "updatedAt">) => string;
+    /** 与 addAsset 相同，但会告诉调用方"是不是本来就有"——UI 靠它提示"已在资产库里"。 */
+    addAssetDetailed: (asset: Omit<Asset, "id" | "createdAt" | "updatedAt">) => AddAssetResult;
     updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => void;
     removeAsset: (id: string) => void;
     removeAssets: (ids: string[]) => void;
@@ -97,41 +101,59 @@ const assetStorage: PersistStorage<AssetStore> = {
 
 export const useAssetStore = create<AssetStore>()(
     persist(
-        (set, get) => ({
-            hydrated: false,
-            assets: [],
-            addAsset: (asset) => {
+        (set, get) => {
+            // 收同一条资产两次不该变成两张卡片：命中就用原条目，把新标签并进去。
+            const insertAsset = (incoming: Parameters<AssetStore["addAsset"]>[0]): AddAssetResult => {
+                const existing = findDuplicateAsset(get().assets, incoming as Asset);
+                if (existing) {
+                    const merged = mergeIntoExisting(existing, incoming);
+                    set((state) => ({ assets: state.assets.map((asset) => (asset.id === existing.id ? (merged as Asset) : asset)) }));
+                    return { id: existing.id, duplicate: true };
+                }
                 const now = new Date().toISOString();
                 const id = nanoid();
-                set((state) => ({ assets: [{ ...asset, id, createdAt: now, updatedAt: now } as Asset, ...state.assets] }));
-                return id;
-            },
-            updateAsset: (id, patch) =>
-                set((state) => ({
-                    assets: state.assets.map((asset) => (asset.id === id ? ({ ...asset, ...patch, updatedAt: new Date().toISOString() } as Asset) : asset)),
-                })),
-            removeAsset: (id) =>
-                set((state) => {
-                    const assets = state.assets.filter((asset) => asset.id !== id);
-                    get().cleanupImages({ assets });
-                    return { assets };
-                }),
-            removeAssets: (ids) =>
-                set((state) => {
-                    const removing = new Set(ids);
-                    const assets = state.assets.filter((asset) => !removing.has(asset.id));
-                    get().cleanupImages({ assets });
-                    return { assets };
-                }),
-            replaceAssets: (assets) => set({ assets }),
-            cleanupImages: (extra) => {
-                window.setTimeout(async () => {
-                    const { useCanvasStore } = await import("@/stores/canvas/use-canvas-store");
-                    await cleanupUnusedImages({ assets: get().assets, projects: useCanvasStore.getState().projects, extra });
-                    await cleanupUnusedMedia({ assets: get().assets, projects: useCanvasStore.getState().projects, extra });
-                }, 0);
-            },
-        }),
+                set((state) => ({ assets: [{ ...incoming, id, createdAt: now, updatedAt: now } as Asset, ...state.assets] }));
+                return { id, duplicate: false };
+            };
+
+            return {
+                hydrated: false,
+                assets: [],
+                addAsset: (asset) => insertAsset(asset).id,
+                addAssetDetailed: insertAsset,
+                updateAsset: (id, patch) =>
+                    set((state) => ({
+                        assets: state.assets.map((asset) => (asset.id === id ? ({ ...asset, ...patch, updatedAt: new Date().toISOString() } as Asset) : asset)),
+                    })),
+                removeAsset: (id) =>
+                    set((state) => {
+                        const assets = state.assets.filter((asset) => asset.id !== id);
+                        get().cleanupImages({ assets });
+                        return { assets };
+                    }),
+                removeAssets: (ids) =>
+                    set((state) => {
+                        const removing = new Set(ids);
+                        const assets = state.assets.filter((asset) => !removing.has(asset.id));
+                        get().cleanupImages({ assets });
+                        return { assets };
+                    }),
+                replaceAssets: (assets) => set({ assets }),
+                cleanupImages: (extra) => {
+                    window.setTimeout(async () => {
+                        const { ensureProjectGraphs } = await import("@/lib/storage/local-canvas-storage");
+                        const { useCanvasStore } = await import("@/stores/canvas/use-canvas-store");
+                        // 必须先把懒加载项目的图补全再扫引用：未打开的项目在内存里节点是空数组，
+                        // 直接扫会把它们的媒体全判成"未引用"删掉（去重后共享文件尤其经不起这种误删）。
+                        const projects = await ensureProjectGraphs(useCanvasStore.getState().projects).catch(() => useCanvasStore.getState().projects);
+                        // 还有项目没读到图：这一轮直接放弃清理。少删几个孤儿文件可以接受，误删用户的素材不行。
+                        if (projects.some((project) => project.lazy)) return;
+                        await cleanupUnusedImages({ assets: get().assets, projects, extra });
+                        await cleanupUnusedMedia({ assets: get().assets, projects, extra });
+                    }, 0);
+                },
+            };
+        },
         {
             name: ASSET_STORE_KEY,
             storage: assetStorage,

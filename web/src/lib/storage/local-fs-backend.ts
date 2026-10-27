@@ -116,6 +116,11 @@ export class LocalFsBackend implements StorageBackend {
         await this.writeBlob(scope, key, blob);
     }
 
+    async hasBlob(scope: StorageScope, key: string): Promise<boolean> {
+        if (isJsonScope(scope)) return (await this.io.read(scopeFilePath(scope, key))) !== null;
+        return await this.blobs.has(scope, key);
+    }
+
     async removeBlob(scope: StorageScope, key: string): Promise<void> {
         await this.removeEntry(scope, key);
     }

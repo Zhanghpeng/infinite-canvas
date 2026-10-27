@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 
 import { getStorage } from "@/lib/storage";
+import { fingerprintBlob } from "@/lib/storage/content-fingerprint";
 
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number };
 
@@ -10,10 +11,17 @@ const objectUrls = new Map<string, string>();
 /** projectId 传入时，素材会落在该项目目录下（projects/<id>/assets/media/…）；不传则落工作区全局。 */
 export async function uploadMediaFile(input: string | Blob, prefix = "file", projectId?: string): Promise<UploadedFile> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
-    const storageKey = projectId ? `${prefix}:${projectId}:${nanoid()}` : `${prefix}:${nanoid()}`;
-    await getStorage().setBlob(SCOPE, storageKey, blob);
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(storageKey, url);
+    // 键 = 内容指纹（见 content-fingerprint）：同一段音频/视频重复入库只留一份。
+    const fingerprint = await fingerprintBlob(blob);
+    const storageKey = projectId ? `${prefix}:${projectId}:${fingerprint}` : `${prefix}:${fingerprint}`;
+    const backend = getStorage();
+    // 已经在盘上就不再写一遍 —— 几百 MB 的成片重写一次是实打实的浪费。
+    if (!backend.hasBlob || !(await backend.hasBlob(SCOPE, storageKey))) await backend.setBlob(SCOPE, storageKey, blob);
+    let url = objectUrls.get(storageKey);
+    if (!url) {
+        url = URL.createObjectURL(blob);
+        objectUrls.set(storageKey, url);
+    }
     const meta = blob.type.startsWith("video/") ? await readVideoMeta(url) : blob.type.startsWith("audio/") ? await readAudioMeta(url) : {};
     return { url, storageKey, bytes: blob.size, mimeType: blob.type || "application/octet-stream", ...meta };
 }

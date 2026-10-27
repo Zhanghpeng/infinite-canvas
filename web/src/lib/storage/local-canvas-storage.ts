@@ -139,7 +139,9 @@ export async function ensureProjectGraphs<T extends { id: string; lazy?: boolean
         projects.map(async (project) => {
             if (!project.lazy) return project;
             const graph = await readProjectGraph(project.id);
-            if (!graph) return { ...project, lazy: false };
+            // 读不出来就维持 lazy：把空图标成"已加载"，下游（例如媒体清理）会当成该项目真的没有节点，
+            // 从而把它的图片全判为未引用 —— 宁可让调用方知道"这份数据还没到手"。
+            if (!graph) return project;
             return { ...project, ...graph, lazy: false };
         }),
     );

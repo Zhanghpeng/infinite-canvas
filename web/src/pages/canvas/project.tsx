@@ -338,6 +338,7 @@ function InfiniteCanvasPage() {
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const addAssetDetailed = useAssetStore((state) => state.addAssetDetailed);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
@@ -3248,18 +3249,28 @@ function InfiniteCanvasPage() {
         [effectiveConfig, focusNode, message, startGenerationRequest, finishGenerationRequest, t],
     );
 
+    // 收藏到资产库的统一出口：同一条内容已经在库里就只提示一句，不再叠一张重复卡片。
+    const pushAsset = useCallback(
+        (asset: Parameters<typeof addAsset>[0]) => {
+            const result = addAssetDetailed(asset);
+            if (result.duplicate) message.info(t("assets.alreadyInLibrary"));
+            else message.success(t("common.addedToAssets"));
+            return result.id;
+        },
+        [addAssetDetailed, message, t],
+    );
+
     const saveNodeAsset = useCallback(
         async (node: CanvasNodeData) => {
             if (node.type === CanvasNodeType.Text) {
                 const content = node.metadata?.content?.trim();
                 if (!content) return message.error(t("canvas.projectPage.noTextToSave"));
-                addAsset({ kind: "text", title: node.metadata?.prompt?.slice(0, 24) || t("canvas.projectPage.canvasText"), coverUrl: "", tags: [], source: "Canvas", data: { content }, metadata: { source: "canvas", nodeId: node.id } });
-                message.success(t("common.addedToAssets"));
+                pushAsset({ kind: "text", title: node.metadata?.prompt?.slice(0, 24) || t("canvas.projectPage.canvasText"), coverUrl: "", tags: [], source: "Canvas", data: { content }, metadata: { source: "canvas", nodeId: node.id } });
                 return;
             }
             if (node.type === CanvasNodeType.Video) {
                 if (!node.metadata?.content) return message.error(t("canvas.projectPage.noVideoToSave"));
-                addAsset({
+                pushAsset({
                     kind: "video",
                     title: node.metadata?.prompt?.slice(0, 24) || t("canvas.projectPage.canvasVideo"),
                     coverUrl: "",
@@ -3268,12 +3279,11 @@ function InfiniteCanvasPage() {
                     data: { url: node.metadata.content, storageKey: node.metadata.storageKey, width: node.width, height: node.height, bytes: node.metadata.bytes || 0, mimeType: node.metadata.mimeType || "video/mp4" },
                     metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt },
                 });
-                message.success(t("common.addedToAssets"));
                 return;
             }
             if (node.type === CanvasNodeType.Audio) {
                 if (!node.metadata?.content) return message.error(t("canvas.projectPage.noAudioToSave", "没有可保存的音频"));
-                addAsset({
+                pushAsset({
                     kind: "audio",
                     title: node.metadata?.prompt?.slice(0, 24) || t("canvas.projectPage.canvasAudio", "画布音频"),
                     coverUrl: "",
@@ -3288,12 +3298,11 @@ function InfiniteCanvasPage() {
                     },
                     metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt },
                 });
-                message.success(t("common.addedToAssets"));
                 return;
             }
             if (!node.metadata?.content) return message.error(t("canvas.projectPage.noImageToSave"));
             const dataUrl = node.metadata.storageKey ? "" : node.metadata.content;
-            addAsset({
+            pushAsset({
                 kind: "image",
                 title: node.metadata?.prompt?.slice(0, 24) || t("canvas.projectPage.canvasImage"),
                 coverUrl: node.metadata.content,
@@ -3309,9 +3318,8 @@ function InfiniteCanvasPage() {
                 },
                 metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt },
             });
-            message.success(t("common.addedToAssets"));
         },
-        [addAsset, message, t],
+        [message, pushAsset, t],
     );
 
     // 把画布分组里的素材整体收藏成一个「组合资产」：原子素材引用原 storageKey 入库（不复制文件），
@@ -3392,7 +3400,7 @@ function InfiniteCanvasPage() {
                     return mapped;
                 })
                 .filter((conn): conn is BundleConnection => Boolean(conn));
-            addAsset({
+            pushAsset({
                 kind: "bundle",
                 title: (group.title || t("canvas.node.group")).slice(0, 24),
                 coverUrl: "",
@@ -3401,9 +3409,8 @@ function InfiniteCanvasPage() {
                 data: { items, coverAssetId: items[0].assetId, connections: connections.length ? connections : undefined },
                 metadata: { source: "canvas", nodeId: group.id },
             });
-            message.success(t("common.addedToAssets"));
         },
-        [addAsset, message, t],
+        [addAsset, message, pushAsset, t],
     );
 
     const createImageReversePromptNodes = useCallback(

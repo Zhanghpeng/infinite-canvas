@@ -33,6 +33,10 @@ export interface StorageBackend {
     setBlob(scope: StorageScope, key: string, blob: Blob): Promise<void>;
     removeBlob(scope: StorageScope, key: string): Promise<void>;
 
+    // 这个键是否已经有文件。媒体键按内容指纹命名后，写入前先问一句就能跳过整份重写
+    // （200MB 的成片重复入库不该再压一次盘）。不实现就用"直接覆盖写"兜底 —— 同键覆盖本身也不会膨胀。
+    hasBlob?(scope: StorageScope, key: string): Promise<boolean>;
+
     // 媒体直链：给 <img>/<video>/<audio> 用的可流式 URL。
     // 返回 null 表示该后端拿不到直链（IndexedDB / 目录句柄），只能读成 Blob 再转 objectURL。
     // 存在的意义：视频动辄上百 MB，读成 Blob 会把整份字节搬进 JS 堆，且无法 Range 播放。

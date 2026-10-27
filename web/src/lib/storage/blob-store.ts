@@ -95,6 +95,11 @@ export function createBlobStore(io: PathIo) {
             return await locate(scope, key);
         },
 
+        // 只查目录、不读字节：用来判断"这个内容是不是已经在盘上了"。
+        async has(scope: StorageScope, key: string): Promise<boolean> {
+            return (await locate(scope, key)) !== null;
+        },
+
         async getBlob(scope: StorageScope, key: string): Promise<Blob | null> {
             const path = await locate(scope, key);
             if (!path) return null;

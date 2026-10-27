@@ -16,7 +16,7 @@ export function PromptSourceContentModal({ source, onClose }: { source: PromptSo
     const [loading, setLoading] = useState(false);
     const [detail, setDetail] = useState<Prompt | null>(null);
     const copyText = useCopyText();
-    const addAsset = useAssetStore((state) => state.addAsset);
+    const addAssetDetailed = useAssetStore((state) => state.addAssetDetailed);
 
     const load = useCallback(
         async (force: boolean) => {
@@ -39,8 +39,10 @@ export function PromptSourceContentModal({ source, onClose }: { source: PromptSo
     }, [source, load]);
 
     const saveAsset = (item: Prompt) => {
-        addAsset({ kind: "text", title: item.title, coverUrl: item.coverUrl, tags: item.tags, source: item.category, data: { content: item.prompt }, metadata: { source: "prompt-library", promptId: item.id, githubUrl: item.githubUrl } });
-        message.success(t("common.addedToAssets"));
+        // 同一条提示词收藏两次没有意义：正文一致就算同一条，命中只提示不新增。
+        const result = addAssetDetailed({ kind: "text", title: item.title, coverUrl: item.coverUrl, tags: item.tags, source: item.category, data: { content: item.prompt }, metadata: { source: "prompt-library", promptId: item.id, githubUrl: item.githubUrl } });
+        if (result.duplicate) message.info(t("assets.alreadyInLibrary"));
+        else message.success(t("common.addedToAssets"));
     };
 
     return (
