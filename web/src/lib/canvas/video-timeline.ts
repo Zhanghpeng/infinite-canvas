@@ -41,10 +41,15 @@ export type SegmentPlan = VideoRange & {
 };
 
 export type SegmentPlanOptions = {
-    /** 单段上限。主流视频模型给不了长片，默认 6 秒。 */
+    /** 单段上限，模型硬约束。 */
     maxMs?: number;
     /** 单段下限，太碎的段既费额度又难衔接。 */
     minMs?: number;
+    /**
+     * 目标段长。不传就按镜头长度推荐（`recommendSegmentTarget`），也就是"一段一镜头"。
+     * 传了就是用户的偏好，规划时选离它最近的镜头边界。
+     */
+    targetMs?: number;
     /** 相邻切点去重窗口，默认 400ms。 */
     dedupeMs?: number;
 };
@@ -197,41 +202,94 @@ export function dedupeCuts(cuts: SceneCut[], windowMs: number): SceneCut[] {
 }
 
 /**
- * 全片分段：边界优先落在场景切点上，单段不超上限；没有切点可用时按上限硬切。
+ * 按画面内容推荐目标段长：一个镜头一段。
+ *
+ * 镜头长度取相邻切点的中位数（首尾两个镜头也算在内）。中位数落在模型区间内就直接
+ * 用它——切出来一段正好一个镜头，接缝落在硬切上，而硬切两侧的内容本来就不连续，
+ * 重绘时不需要靠淡化去藏。这正是"按画面切"和"按秒切"的区别：差一秒的误差落在镜头
+ * 中间，模型要在同一段里同时照顾两个场景，接缝处必然将就。
+ *
+ * 中位数短于下限（快切片）只能合并，此时取下限——跨最少的镜头；
+ * 长于上限（长镜头）取上限，由 `fitRangesToLimits` 均分。
+ */
+export function recommendSegmentTarget(fromMs: number, toMs: number, cuts: SceneCut[], minMs: number, maxMs: number): number {
+    const floor = Math.max(500, minMs);
+    const ceiling = Math.max(floor + 1, maxMs);
+    const start = Math.max(0, Math.min(fromMs, toMs));
+    const end = Math.max(start, Math.max(fromMs, toMs));
+    const inner = uniqueSorted(cuts.map((cut) => cut.timeMs).filter((time) => time > start + 1 && time < end - 1));
+    const shots: number[] = [];
+    let cursor = start;
+    for (const time of inner) {
+        if (time - cursor > 1) shots.push(time - cursor);
+        cursor = time;
+    }
+    if (end - cursor > 1) shots.push(end - cursor);
+    // 一个切点都没有（整片一个长镜头，或检测不出）：退回区间中点，后面按目标均分。
+    if (!shots.length) return Math.round(floor + (ceiling - floor) / 2);
+    shots.sort((a, b) => a - b);
+    return clamp(Math.round(shots[Math.floor(shots.length / 2)]), floor, ceiling);
+}
+
+/**
+ * 这一段的结尾落在哪。
+ *
+ * 三档，按优先级：
+ * 1. `[起点+下限, 起点+上限]` 里有镜头边界——选离目标段长最近的那个。窗口下沿是下限，
+ *    所以选出来的每一段都合法；上沿是上限，所以永远不会超模型能力。
+ * 2. 没有镜头边界、剩余又放得下——直接收尾。硬切只会把一段完整画面从中间劈开。
+ * 3. 没有镜头边界、剩余放不下——按目标段长落刀，夹在窗口内。
+ *
+ * 旧实现在第 1 档取窗口内**最远**的切点，等于把每段都塞到逼近上限：
+ * 单段上限 15 秒时，一段常常横跨三四个镜头，接缝落在镜头中间，重绘出来两头都对不上。
+ */
+function planBoundary(cursor: number, limit: number, inner: number[], minMs: number, maxMs: number, targetMs: number): number {
+    const lower = Math.min(cursor + Math.max(500, minMs), limit);
+    const upper = Math.min(cursor + maxMs, limit);
+    if (upper <= cursor) return limit;
+    const ideal = cursor + targetMs;
+    const candidates = inner.filter((time) => time >= lower && time <= upper && time < limit - 1);
+    if (candidates.length) {
+        return candidates.reduce((best, time) => (Math.abs(time - ideal) < Math.abs(best - ideal) ? time : best));
+    }
+    if (limit - cursor <= maxMs) return limit;
+    return clamp(ideal, lower, upper);
+}
+
+/** 目标段长归一：用户给的值夹进能力区间，没给就按镜头推荐。 */
+function resolveTargetMs(wanted: number | undefined, fromMs: number, toMs: number, cuts: SceneCut[], minMs: number, maxMs: number): number {
+    const floor = Math.max(500, minMs);
+    const ceiling = Math.max(floor + 1, maxMs);
+    if (wanted !== undefined && Number.isFinite(wanted)) return clamp(Math.round(wanted), floor, ceiling);
+    return recommendSegmentTarget(fromMs, toMs, cuts, minMs, maxMs);
+}
+
+/**
+ * 全片分段：边界落在镜头切点上，段长围绕目标浮动，单段不超上限。
  * 硬切出来的边界会被标成非切点，合成时据此决定要不要交叉淡化。
  */
 export function planSegments(durationMs: number, cuts: SceneCut[], options: SegmentPlanOptions = {}): VideoRange[] {
     const maxMs = Math.max(500, options.maxMs ?? DEFAULT_MAX_SEGMENT_MS);
     const minMs = Math.max(0, options.minMs ?? DEFAULT_MIN_SEGMENT_MS);
     if (!Number.isFinite(durationMs) || durationMs <= 0) return [];
+    const targetMs = resolveTargetMs(options.targetMs, 0, durationMs, cuts, minMs, maxMs);
     const inner = uniqueSorted(cuts.map((cut) => clamp(cut.timeMs, 0, durationMs)).filter((time) => time > 0 && time < durationMs));
 
     const ranges: VideoRange[] = [];
     let cursor = 0;
-    let sceneStart = true;
     // 上限切分次数兜底，避免浮点/异常数据导致死循环。
     for (let guard = 0; guard < 1000 && cursor < durationMs - 1; guard += 1) {
-        let end = durationMs;
-        const withinMax = inner.filter((time) => time > cursor + 1 && time <= cursor + maxMs);
-        if (withinMax.length) {
-            end = withinMax[withinMax.length - 1];
-            const rest = durationMs - end;
-            // 留一个尾巴太短会很难看，往前退一个切点把尾巴吃掉。
-            if (rest > 0 && rest < minMs && withinMax.length > 1) end = withinMax[withinMax.length - 2];
-        } else if (durationMs - cursor > maxMs) {
-            end = cursor + maxMs;
-        }
-        if (end <= cursor) end = Math.min(durationMs, cursor + maxMs);
-        ranges.push({ startMs: cursor, endMs: end, sceneStart });
-        sceneStart = inner.includes(end);
+        const end = planBoundary(cursor, durationMs, inner, minMs, maxMs, targetMs);
+        ranges.push({ startMs: cursor, endMs: end, sceneStart: cursor === 0 || inner.includes(cursor) });
         cursor = end;
     }
     return fitRangesToLimits(ranges, minMs, maxMs);
 }
 
 /**
- * 只处理用户选中的区间：在选区内部按切点或上限切分。
- * 选区起点通常落在保留段中间，所以 sceneStart 一律为 false —— 这一段的首帧要靠锚定帧接上前文。
+ * 只处理用户选中的区间：在选区内部按镜头边界或目标段长切分。
+ * 选区起点通常落在保留段中间，所以首段 sceneStart 一律为 false —— 这一段的首帧
+ * 要靠锚定帧接上前文。
  */
 export function planSelectionRanges(startMs: number, endMs: number, cuts: SceneCut[], options: SegmentPlanOptions = {}): VideoRange[] {
     const maxMs = Math.max(500, options.maxMs ?? DEFAULT_MAX_SEGMENT_MS);
@@ -239,17 +297,14 @@ export function planSelectionRanges(startMs: number, endMs: number, cuts: SceneC
     const start = Math.max(0, Math.min(startMs, endMs));
     const end = Math.max(start, Math.max(startMs, endMs));
     if (end - start <= 1) return [];
+    const targetMs = resolveTargetMs(options.targetMs, start, end, cuts, minMs, maxMs);
     const inner = uniqueSorted(cuts.map((cut) => cut.timeMs).filter((time) => time > start + 1 && time < end - 1));
 
     const ranges: VideoRange[] = [];
     let cursor = start;
     for (let guard = 0; guard < 1000 && cursor < end - 1; guard += 1) {
-        let next = end;
-        const withinMax = inner.filter((time) => time > cursor + 1 && time <= cursor + maxMs);
-        if (withinMax.length) next = withinMax[withinMax.length - 1];
-        else if (end - cursor > maxMs) next = cursor + maxMs;
-        if (next <= cursor) next = Math.min(end, cursor + maxMs);
-        ranges.push({ startMs: cursor, endMs: next, sceneStart: cursor === start ? false : inner.includes(cursor) });
+        const next = planBoundary(cursor, end, inner, minMs, maxMs, targetMs);
+        ranges.push({ startMs: cursor, endMs: next, sceneStart: cursor !== start && inner.includes(cursor) });
         cursor = next;
     }
     return fitRangesToLimits(ranges, minMs, maxMs);

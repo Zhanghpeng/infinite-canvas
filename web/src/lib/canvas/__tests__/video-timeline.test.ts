@@ -14,6 +14,7 @@ import {
     planSegments,
     planSelectionRanges,
     promptTemplateKey,
+    recommendSegmentTarget,
     resolveSegmentLimits,
     sameRangeBoundaries,
     segmentAnchorTimes,
@@ -131,9 +132,64 @@ describe("planSegments", () => {
         expect(ranges.some((range) => range.endMs - range.startMs < 1000)).toBe(false);
     });
 
+    it("镜头边界优先于把段塞满上限", () => {
+        // 每 3 秒一个镜头，MiniMax 区间 5–15 秒。塞满 15 秒一段会横跨 5 个镜头。
+        const cuts = Array.from({ length: 59 }, (_, index) => ({ timeMs: (index + 1) * 3000, score: 0.5 }));
+        const ranges = planSegments(180_000, cuts, { maxMs: 15_000, minMs: 5000 });
+        const cutTimes = new Set(cuts.map((cut) => cut.timeMs));
+        // 目标被下限抬到 5 秒，窗口里最近的镜头边界是 6 秒
+        expect(ranges.every((range) => range.endMs - range.startMs <= 6000)).toBe(true);
+        ranges.slice(0, -1).forEach((range) => expect(cutTimes.has(range.endMs)).toBe(true));
+    });
+
+    it("镜头正好落在能力区间内时一段一镜头", () => {
+        const cuts = [6000, 12_000, 18_000].map((timeMs) => ({ timeMs, score: 0.5 }));
+        const ranges = planSegments(24_000, cuts, { maxMs: 15_000, minMs: 5000 });
+        expect(ranges.map((range) => [range.startMs, range.endMs])).toEqual([
+            [0, 6000],
+            [6000, 12_000],
+            [12_000, 18_000],
+            [18_000, 24_000],
+        ]);
+        // 每段都起于硬切，合成时不需要淡化
+        expect(ranges.every((range) => range.sceneStart)).toBe(true);
+    });
+
+    it("给了目标段长就按它挑边界", () => {
+        const cuts = [3000, 6000, 9000, 12_000, 15_000].map((timeMs) => ({ timeMs, score: 0.5 }));
+        const wide = planSegments(18_000, cuts, { minMs: 5000, maxMs: 15_000, targetMs: 13_000 });
+        expect(wide[0].endMs).toBe(12_000);
+        const narrow = planSegments(18_000, cuts, { minMs: 5000, maxMs: 15_000, targetMs: 6000 });
+        expect(narrow[0].endMs).toBe(6000);
+    });
+
+    it("镜头比下限还短时并到刚好够，不跨更多镜头", () => {
+        // 每 2 秒一个镜头，下限 5 秒：一段至少吃 3 个镜头，但不会一路吃到 15 秒
+        const cuts = Array.from({ length: 9 }, (_, index) => ({ timeMs: (index + 1) * 2000, score: 0.5 }));
+        const ranges = planSegments(20_000, cuts, { minMs: 5000, maxMs: 15_000 });
+        expect(ranges[0].endMs - ranges[0].startMs).toBe(6000);
+    });
+
+    it("整片检测不出切点时按上限均分，不留尾巴碎片", () => {
+        const ranges = planSegments(18_000, [], { minMs: 5000, maxMs: 15_000 });
+        expect(ranges.map((range) => range.endMs - range.startMs)).toEqual([9000, 9000]);
+        expect(ranges[1].sceneStart).toBe(false);
+    });
+
     it("零时长返回空", () => {
         expect(planSegments(0, [])).toEqual([]);
         expect(planSegments(Number.NaN, [])).toEqual([]);
+    });
+});
+
+describe("recommendSegmentTarget", () => {
+    it("取镜头长度的中位数，并夹进能力区间", () => {
+        // 三个镜头 4 / 6 / 8 秒，中位数 6 秒正好在 5–15 秒内
+        expect(recommendSegmentTarget(0, 18_000, [{ timeMs: 4000, score: 0.5 }, { timeMs: 10_000, score: 0.5 }], 5000, 15_000)).toBe(6000);
+        // 全是 2 秒快切：中位数被下限抬到 5 秒
+        expect(recommendSegmentTarget(0, 20_000, Array.from({ length: 9 }, (_, index) => ({ timeMs: (index + 1) * 2000, score: 0.5 })), 5000, 15_000)).toBe(5000);
+        // 长镜头被上限压到 15 秒
+        expect(recommendSegmentTarget(0, 30_000, [], 5000, 15_000)).toBe(15_000);
     });
 });
 

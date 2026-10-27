@@ -15,6 +15,7 @@ import {
     planSegments,
     planSelectionRanges,
     promptTemplateKey,
+    recommendSegmentTarget,
     type SceneCut,
     type SegmentLimits,
     type SegmentPlan,
@@ -57,8 +58,8 @@ export type VideoEditPlan = {
     crossfadeFrames: number;
     /** 是否沿用原片音轨。 */
     keepAudio: boolean;
-    /** 本次切段用的单段上限：重开弹窗时要按它复原同一套边界，否则接不上上一批。 */
-    maxMs: number;
+    /** 本次切段用的目标段长：重开弹窗时要按它复原同一套边界，否则接不上上一批。 */
+    targetMs: number;
     /**
      * 这次只跑这些段（下标）。undefined = 全跑。
      * 逐段配角色是件慢活，配好一段就该能先跑一段，不必等整片配完。
@@ -91,7 +92,7 @@ type CanvasVideoTimelineModalProps = {
      */
     restore?: {
         mode: VideoEditMode;
-        maxMs: number;
+        targetMs: number;
         prompt: string;
         crossfadeFrames: number;
         keepAudio: boolean;
@@ -130,7 +131,7 @@ export function CanvasVideoTimelineModal({
     const [mode, setMode] = useState<VideoEditMode>("character");
     const [selection, setSelection] = useState<TimelineSelection | null>(null);
     const [currentTimeMs, setCurrentTimeMs] = useState(0);
-    const [maxSeconds, setMaxSeconds] = useState(limits.maxMs / 1000);
+    const [targetSeconds, setTargetSeconds] = useState(limits.maxMs / 1000);
     const [prompt, setPrompt] = useState("");
     /**
      * 上一次自动填入的模板。
@@ -278,7 +279,7 @@ export function CanvasVideoTimelineModal({
         setMode(revived?.mode ?? "character");
         setCrossfadeFrames(revived?.crossfadeFrames ?? 3);
         setKeepAudio(revived?.keepAudio ?? true);
-        setMaxSeconds((revived?.maxMs ?? limits.maxMs) / 1000);
+        setTargetSeconds((revived?.targetMs ?? limits.maxMs) / 1000);
 
         void (async () => {
             try {
@@ -290,13 +291,18 @@ export function CanvasVideoTimelineModal({
                 if (cancelled) return;
                 setDurationMs(scene.durationMs);
                 setCuts(scene.cuts);
+                // 默认按镜头长度定目标段长（一段一镜头）。续跑上一批时不动：
+                // 边界必须与上一批完全一致，否则按序号的段级配置会套到别的时间上。
+                if (!revived?.targetMs) {
+                    setTargetSeconds(recommendSegmentTarget(0, scene.durationMs, scene.cuts, limits.minMs, limits.maxMs) / 1000);
+                }
                 const strip = await buildFilmstrip(src, Math.min(24, Math.max(8, Math.round(scene.durationMs / 1000))), { width: 128 });
                 if (cancelled) return;
                 setFrames(strip.frames);
                 // 默认选区：落在最长的一段里，省得用户自己去猜哪里有内容。
                 // 续跑上一批时不改选区 —— 那是他当初拖好的范围，动了就接不上。
                 if (!revived?.selection) {
-                    const initialPlan = planSegments(scene.durationMs, scene.cuts, { maxMs: revived?.maxMs ?? limits.maxMs, minMs: limits.minMs });
+                    const initialPlan = planSegments(scene.durationMs, scene.cuts, { maxMs: limits.maxMs, minMs: limits.minMs, targetMs: revived?.targetMs });
                     const longest = initialPlan.reduce<VideoRange | null>((best, range) => (!best || range.endMs - range.startMs > best.endMs - best.startMs ? range : best), null);
                     if (longest) setSelection({ startMs: longest.startMs, endMs: longest.endMs });
                 }
@@ -357,14 +363,14 @@ export function CanvasVideoTimelineModal({
         };
     }, [open, selection, src]);
 
-    const effectiveMaxMs = useMemo(
-        () => Math.max(limits.minMs, Math.min(limits.maxMs, Math.round(maxSeconds * 1000))),
-        [limits.maxMs, limits.minMs, maxSeconds],
+    const effectiveTargetMs = useMemo(
+        () => Math.max(limits.minMs, Math.min(limits.maxMs, Math.round(targetSeconds * 1000))),
+        [limits.maxMs, limits.minMs, targetSeconds],
     );
 
     const ranges = useMemo<SegmentPlan[]>(() => {
         if (!durationMs) return [];
-        const options = { maxMs: effectiveMaxMs, minMs: limits.minMs };
+        const options = { maxMs: limits.maxMs, minMs: limits.minMs, targetMs: effectiveTargetMs };
         const base: VideoRange[] = mode === "character" ? planSegments(durationMs, cuts, options) : selection ? planSelectionRanges(selection.startMs, selection.endMs, cuts, options) : [];
         // 段级覆盖：切点只按画面变化算，算不出"这段里有几个人"。不覆盖的段跟随全局，
         // 避免每段都要重选一遍；覆盖成空数组是有效语义（这段没有要换的人）。
@@ -381,7 +387,7 @@ export function CanvasVideoTimelineModal({
             }
             return plan;
         });
-    }, [castNodeIds, cuts, durationMs, effectiveMaxMs, limits.minMs, mode, promptDirty, segmentCasts, segmentPrompts, selection, templateFor]);
+    }, [castNodeIds, cuts, durationMs, effectiveTargetMs, limits.maxMs, limits.minMs, mode, promptDirty, segmentCasts, segmentPrompts, selection, templateFor]);
 
     /** 段长签名：只有段边界变了才重新抽帧，改角色不该触发一轮解码。 */
     const stripKey = useMemo(() => ranges.map((range) => `${range.startMs}-${range.endMs}`).join("|"), [ranges]);
@@ -598,11 +604,11 @@ export function CanvasVideoTimelineModal({
                 prompt: prompt.trim(),
                 crossfadeFrames,
                 keepAudio,
-                maxMs: effectiveMaxMs,
+                targetMs: effectiveTargetMs,
                 onlyRangeIndices,
             };
         },
-        [castNodeIds, crossfadeFrames, cuts, durationMs, effectiveMaxMs, keepAudio, mode, prompt, ranges],
+        [castNodeIds, crossfadeFrames, cuts, durationMs, effectiveTargetMs, keepAudio, mode, prompt, ranges],
     );
 
     const handleSubmit = useCallback(() => {
@@ -800,19 +806,22 @@ export function CanvasVideoTimelineModal({
                             {t("canvas.videoTimeline.legend.selection")}
                         </span>
                         <label className="ml-auto flex items-center gap-1.5">
-                            {t("canvas.videoTimeline.maxSeconds")}
+                            {t("canvas.videoTimeline.targetSeconds")}
                             <Input
                                 type="number"
                                 size="small"
                                 min={minSeconds}
                                 max={maxLimitSeconds}
-                                value={maxSeconds}
-                                onChange={(event) => setMaxSeconds(Math.max(minSeconds, Math.min(maxLimitSeconds, Number(event.target.value) || minSeconds)))}
+                                value={targetSeconds}
+                                onChange={(event) => setTargetSeconds(Math.max(minSeconds, Math.min(maxLimitSeconds, Number(event.target.value) || minSeconds)))}
                                 className="!w-14"
                             />
                             <span className="text-stone-400">
                                 s / {minSeconds}–{maxLimitSeconds}s
                             </span>
+                            <Tooltip title={t("canvas.videoTimeline.targetSecondsHint")}>
+                                <span className="cursor-help text-stone-400 underline decoration-dotted">?</span>
+                            </Tooltip>
                         </label>
                     </div>
 

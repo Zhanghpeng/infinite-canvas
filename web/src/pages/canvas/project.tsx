@@ -3565,7 +3565,7 @@ function InfiniteCanvasPage() {
         return {
             restore: {
                 mode: pending.plan.mode === "repaint" ? ("repaint" as const) : ("character" as const),
-                maxMs: pending.plan.maxMs,
+                targetMs: pending.plan.targetMs,
                 prompt: pending.plan.prompt,
                 crossfadeFrames: pending.plan.crossfadeFrames,
                 keepAudio: pending.plan.keepAudio,
@@ -4112,7 +4112,7 @@ function InfiniteCanvasPage() {
                     prompt: composite.metadata?.prompt || "",
                     crossfadeFrames: Math.round(((compositeMeta.crossfadeMs || 0) / 1000) * 30),
                     keepAudio: compositeMeta.keepAudio ?? true,
-                    maxMs: 0,
+                    targetMs: 0,
                 };
                 await composeVideoBatch({ source, sourceBlob, produced, plan, signal: controller.signal, sourceTitle: source.title || "", segmentColumnX: composite.position.x, existingCompositeId: composite.id });
                 message.success({ content: t("canvas.videoTimeline.toast.recomposed"), key: composeKey });
