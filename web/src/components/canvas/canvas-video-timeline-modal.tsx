@@ -20,8 +20,10 @@ import {
     remapSegmentConfig,
     insertManualCut,
     MIN_MANUAL_GAP_MS,
+    manualCutBlockReason,
     removeManualCut,
     moveManualCut,
+    type ManualCutBlockReason,
     type SceneCut,
     type SegmentLimits,
     type SegmentPlan,
@@ -669,14 +671,19 @@ export function CanvasVideoTimelineModal({
 
     /** 拖第 index 道边界。位置由 clampManualCut 夹住：不许越过邻居，也不许把任一侧顶过上限。 */
     const handleBoundaryMove = useCallback(
-        (index: number, timeMs: number) => {
-            if (!boundRange) return;
+        (index: number, timeMs: number): ManualCutBlockReason | null => {
+            if (!boundRange) return null;
             const cuts = currentCuts();
+            // 先算原因再移动：原因描述的是「这次拖动想去的点为什么到不了」，
+            // 必须在 cuts 还是旧值的时候判断。
+            const reason = manualCutBlockReason(cuts, index, timeMs, boundRange.startMs, boundRange.endMs, limits.maxMs);
             const next = moveManualCut(cuts, index, timeMs, boundRange.startMs, boundRange.endMs, limits.maxMs);
             // 夹完没动（拖到尽头、或本来就在这个位置）：不触发重算，省掉一轮抽帧。
-            if (next === cuts) return;
-            setManualCuts(next);
-            scrubToBoundary(next[index] ?? timeMs);
+            if (next !== cuts) {
+                setManualCuts(next);
+                scrubToBoundary(next[index] ?? timeMs);
+            }
+            return reason;
         },
         [boundRange, currentCuts, limits.maxMs, scrubToBoundary],
     );

@@ -648,6 +648,8 @@ export default {
                 "splitRejected": "Cannot split here: too close to an edge, or one side would still exceed the {{max}}s limit.",
                 "dragHint": "You can also drag the white boundary lines on the timeline; double-click one to merge its two sides",
                 "dragOnly": "Drag to adjust the boundary",
+                "blockedMax": "Hit the per-segment cap",
+                "blockedNeighbor": "Too close to the next segment",
                 "handle": "Segment boundary {{time}}",
                 "manualBadge": "Manual · {{count}} cuts",
                 "manualHint": "Boundaries are set manually, so the target length no longer applies. Click Reset to go back to shot-based splitting.",

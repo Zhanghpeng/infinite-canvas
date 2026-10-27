@@ -648,6 +648,8 @@ export default {
                 "splitRejected": "这里切不开：太贴近边界，或切开后仍有一段超过上限 {{max}}s。",
                 "dragHint": "也可以拖动时间轴上的白色竖线调整边界，双击竖线合并左右两段",
                 "dragOnly": "拖动调整边界",
+                "blockedMax": "到单段上限了",
+                "blockedNeighbor": "再近就挤到相邻段",
                 "handle": "段边界 {{time}}",
                 "manualBadge": "手动 · {{count}} 刀",
                 "manualHint": "当前边界是手动定的，目标段长不再生效。点「恢复自动」回到按镜头切分。",

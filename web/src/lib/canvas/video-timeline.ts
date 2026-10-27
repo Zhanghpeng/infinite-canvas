@@ -376,6 +376,31 @@ export function moveManualCut(cuts: number[], index: number, timeMs: number, sta
     return result;
 }
 
+/** 手动切点被挡住的原因。用来在拖动时告诉用户"为什么不跟手"，而不是让它看起来像卡顿。 */
+export type ManualCutBlockReason = "max" | "neighbor";
+
+/**
+ * 判断这次拖动是被什么挡住的：单段上限，还是相邻的那一刀。
+ *
+ * 规则与 clampManualCut 完全一致（同一个区间），区别只在于它不返回位置、只解释原因。
+ * 没被挡住返回 null。
+ */
+export function manualCutBlockReason(cuts: number[], index: number, timeMs: number, startMs: number, endMs: number, maxMs: number): ManualCutBlockReason | null {
+    const current = cuts[index];
+    if (current === undefined) return null;
+    const left = index > 0 ? cuts[index - 1] : startMs;
+    const right = index < cuts.length - 1 ? cuts[index + 1] : endMs;
+    const ceiling = Math.max(MIN_MANUAL_GAP_MS, maxMs);
+    const lower = Math.max(left + MIN_MANUAL_GAP_MS, right - ceiling);
+    const upper = Math.min(right - MIN_MANUAL_GAP_MS, left + ceiling);
+    // 邻居之间已经放不下一段了（合并超上限那种情况），先归因到上限。
+    if (lower > upper) return "max";
+    if (timeMs >= lower && timeMs <= upper) return null;
+    // 被夹住的这一侧正好是"左边界 + 上限"或"右边界 - 上限"，说明是上限在卡着。
+    const limitedByMax = (timeMs > upper && upper === left + ceiling) || (timeMs < lower && lower === right - ceiling);
+    return limitedByMax ? "max" : "neighbor";
+}
+
 /**
  * 在 timeMs 处补一刀。
  *

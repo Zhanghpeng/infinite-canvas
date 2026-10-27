@@ -17,6 +17,7 @@ import {
     recommendSegmentTarget,
     clampManualCut,
     insertManualCut,
+    manualCutBlockReason,
     MIN_MANUAL_GAP_MS,
     moveManualCut,
     rangesFromCuts,
@@ -520,6 +521,20 @@ describe("手动切点", () => {
         expect(moveManualCut(cuts, 0, 10_000, 0, 20_000, 15_000)).toEqual([10_000, 12_000]);
         // 夹完之后与原来一致：不制造新数组，省得下游 memo 白跑
         expect(moveManualCut(cuts, 0, 6000, 0, 20_000, 15_000)).toBe(cuts);
+    });
+
+    it("拖不动时说得清是被上限还是被邻段挡住", () => {
+        const cuts = [6000, 12_000];
+        // 在允许区间内：没有阻碍
+        expect(manualCutBlockReason(cuts, 0, 8000, 0, 20_000, 15_000)).toBeNull();
+        // 想往前撞到起始点：归因于邻段（左边是片头）
+        expect(manualCutBlockReason(cuts, 0, -5000, 0, 20_000, 15_000)).toBe("neighbor");
+        // 想往后撞到下一刀：也是邻段
+        expect(manualCutBlockReason(cuts, 0, 100_000, 0, 20_000, 15_000)).toBe("neighbor");
+        // 上限约束：这一段 0–12000 配 9000 上限，切点挪到 3000 之前右边那段就超限
+        expect(manualCutBlockReason([12_000], 0, 1000, 0, 12_000, 9000)).toBe("max");
+        // 三刀挤在 600ms 内，邻居之间已经放不下一段：归因到上限
+        expect(manualCutBlockReason([5000, 5200, 5300], 1, 5150, 0, 20_000, 15_000)).toBe("max");
     });
 
     it("补一刀：太贴边或切完仍超上限就拒绝", () => {
