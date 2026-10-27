@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ChevronLeft, Clock3, Film, LoaderCircle, Play, Scissors, Sparkles, UserRound, Users, Wand2 } from "lucide-react";
-import { Button, Input, Modal, Segmented, Tooltip } from "antd";
+import { AlertTriangle, ChevronLeft, Clock3, Film, LoaderCircle, Merge, Play, RotateCcw, Scissors, SlidersHorizontal, Sparkles, UserRound, Users, Wand2 } from "lucide-react";
+import { Button, Input, Modal, Segmented, Tooltip, message } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { CanvasVideoSegmentTrack } from "./canvas-video-segment-track";
@@ -15,7 +15,13 @@ import {
     planSegments,
     planSelectionRanges,
     promptTemplateKey,
+    rangesFromCuts,
     recommendSegmentTarget,
+    remapSegmentConfig,
+    insertManualCut,
+    MIN_MANUAL_GAP_MS,
+    removeManualCut,
+    moveManualCut,
     type SceneCut,
     type SegmentLimits,
     type SegmentPlan,
@@ -23,6 +29,9 @@ import {
 } from "@/lib/canvas/video-timeline";
 import type { CanvasNodeData } from "@/types/canvas";
 import i18n from "@/i18n";
+
+/** 段边界停下多久之后才重抽缩略图。拖动过程中只更新边界线，不去碰解码器。 */
+const STRIP_REFRESH_DELAY_MS = 260;
 
 /** 把内部错误码翻译成人能看懂的话：库抛的英文原始错误直接展示等于没提示。 */
 function describeMediaError(error: unknown): string {
@@ -61,6 +70,11 @@ export type VideoEditPlan = {
     /** 本次切段用的目标段长：重开弹窗时要按它复原同一套边界，否则接不上上一批。 */
     targetMs: number;
     /**
+     * 用户手动钉住的内部切点（不含首尾）。有值就说明这套边界不是算出来的，
+     * 重开弹窗时必须原样复原 —— 用户拖了十几刀才排好的节奏，不能被自动规划覆盖。
+     */
+    manualCuts?: number[];
+    /**
      * 这次只跑这些段（下标）。undefined = 全跑。
      * 逐段配角色是件慢活，配好一段就该能先跑一段，不必等整片配完。
      */
@@ -93,6 +107,7 @@ type CanvasVideoTimelineModalProps = {
     restore?: {
         mode: VideoEditMode;
         targetMs: number;
+        manualCuts?: number[];
         prompt: string;
         crossfadeFrames: number;
         keepAudio: boolean;
@@ -140,6 +155,14 @@ export function CanvasVideoTimelineModal({
      * 是什么值了，所以偏离时在标签旁标一下。
      */
     const [recommendedSeconds, setRecommendedSeconds] = useState<number | null>(null);
+    /**
+     * 用户手动钉住的内部切点；null = 跟随自动规划。
+     *
+     * 自动规划回答的是"怎么切最合理"，但这段戏该在哪句话之间断开、这个动作该不该
+     * 跨到下一段，只有看过片子的人知道。所以一旦动过任何一刀，就完全按钉住的点切：
+     * 再掺自动逻辑进去，会出现"拖了一刀却多出两段"这种事。
+     */
+    const [manualCuts, setManualCuts] = useState<number[] | null>(null);
     const [prompt, setPrompt] = useState("");
     /**
      * 上一次自动填入的模板。
@@ -288,6 +311,8 @@ export function CanvasVideoTimelineModal({
         setCrossfadeFrames(revived?.crossfadeFrames ?? 3);
         setKeepAudio(revived?.keepAudio ?? true);
         setTargetSeconds((revived?.targetMs ?? limits.maxMs) / 1000);
+        // 上一批是手动排过的边界就原样复原：这些点是人一帧一帧拖出来的。
+        setManualCuts(revived?.manualCuts?.length ? [...revived.manualCuts] : null);
 
         void (async () => {
             try {
@@ -371,15 +396,61 @@ export function CanvasVideoTimelineModal({
         };
     }, [open, selection, src]);
 
+    /**
+     * 渠道换了，单段能力区间跟着变，目标段长要跟着夹回去。
+     *
+     * 只在区间真的变了时夹：挂载时不夹，否则用户刚填的 30 会被悄悄改回 15，
+     * 反而看不出"已经超上限"。区间变小时他填的 12 就该按 6 走 —— 留着一个
+     * 必然超限的值，点生成才发现被静默截断，是最难查的一种。
+     */
+    const lastLimitsRef = useRef(limits);
+    useEffect(() => {
+        const previous = lastLimitsRef.current;
+        lastLimitsRef.current = limits;
+        if (previous.maxMs === limits.maxMs && previous.minMs === limits.minMs) return;
+        setTargetSeconds((current) => Math.min(Math.max(current, limits.minMs / 1000), limits.maxMs / 1000));
+    }, [limits]);
+
     const effectiveTargetMs = useMemo(
         () => Math.max(limits.minMs, Math.min(limits.maxMs, Math.round(targetSeconds * 1000))),
         [limits.maxMs, limits.minMs, targetSeconds],
     );
 
+    /**
+     * 这套分段覆盖哪一段时间：角色替换是全片，局部重绘是选区。
+     *
+     * 单拎出来是因为手动切点只记"内部点"，首尾由这个范围补齐 —— 用户拖选区时
+     * 首尾跟着自动变，不需要他再拖两刀。
+     */
+    const boundRange = useMemo(() => {
+        if (!durationMs) return null;
+        if (mode === "character") return { startMs: 0, endMs: durationMs };
+        return selection ? { startMs: selection.startMs, endMs: selection.endMs } : null;
+    }, [durationMs, mode, selection]);
+
+    /**
+     * 分段范围变了（切模式、拖选区）就等于重新规划，手动的点不再适用。
+     * 不清的话，repaint 模式把选区拖到别处，旧切点会有一部分落在新选区外被过滤掉，
+     * 剩下的点会把新选区分成几段极不均匀的块 —— 看着像"切歪了"。
+     */
+    const boundKey = boundRange ? `${boundRange.startMs}-${boundRange.endMs}` : "";
+    const lastBoundKeyRef = useRef(boundKey);
+    useEffect(() => {
+        if (lastBoundKeyRef.current === boundKey) return;
+        lastBoundKeyRef.current = boundKey;
+        setManualCuts(null);
+    }, [boundKey]);
+
     const ranges = useMemo<SegmentPlan[]>(() => {
-        if (!durationMs) return [];
+        if (!boundRange) return [];
         const options = { maxMs: limits.maxMs, minMs: limits.minMs, targetMs: effectiveTargetMs };
-        const base: VideoRange[] = mode === "character" ? planSegments(durationMs, cuts, options) : selection ? planSelectionRanges(selection.startMs, selection.endMs, cuts, options) : [];
+        // 手动模式直接由钉住的点还原，不再走 planSegments：自动规划那套优先级
+        // （镜头优先、夹进能力区间）在用户已经明确表态的地方不再适用。
+        const base: VideoRange[] = manualCuts
+            ? rangesFromCuts(manualCuts, boundRange.startMs, boundRange.endMs, cuts)
+            : mode === "character"
+              ? planSegments(durationMs, cuts, options)
+              : planSelectionRanges(boundRange.startMs, boundRange.endMs, cuts, options);
         // 段级覆盖：切点只按画面变化算，算不出"这段里有几个人"。不覆盖的段跟随全局，
         // 避免每段都要重选一遍；覆盖成空数组是有效语义（这段没有要换的人）。
         return base.map((range, index) => {
@@ -395,7 +466,7 @@ export function CanvasVideoTimelineModal({
             }
             return plan;
         });
-    }, [castNodeIds, cuts, durationMs, effectiveTargetMs, limits.maxMs, limits.minMs, mode, promptDirty, segmentCasts, segmentPrompts, selection, templateFor]);
+    }, [boundRange, castNodeIds, cuts, durationMs, effectiveTargetMs, limits.maxMs, limits.minMs, manualCuts, mode, promptDirty, segmentCasts, segmentPrompts, templateFor]);
 
     /** 段长签名：只有段边界变了才重新抽帧，改角色不该触发一轮解码。 */
     const stripKey = useMemo(() => ranges.map((range) => `${range.startMs}-${range.endMs}`).join("|"), [ranges]);
@@ -409,15 +480,32 @@ export function CanvasVideoTimelineModal({
      * 挑角色花的是人的判断力，宁可他重配，也不能静默换成别人。
      */
     const lastStripKeyRef = useRef("");
+    /** 上一次的段边界：边界一变就要用它把段级配置搬到新序号上。 */
+    const lastBoundariesRef = useRef<Array<{ startMs: number; endMs: number }>>([]);
     useEffect(() => {
         if (!stripKey) return;
-        if (lastStripKeyRef.current && lastStripKeyRef.current !== stripKey) {
-            setSegmentCasts({});
-            setSegmentPrompts({});
-            setSelectedIndex(null);
-            setPreviewIndex(null);
+        const previousKey = lastStripKeyRef.current;
+        const previous = lastBoundariesRef.current;
+        const next = rangesRef.current.map(({ startMs, endMs }) => ({ startMs, endMs }));
+        if (previousKey && previousKey !== stripKey) {
+            // 段级配置是按序号存的，边界一变序号就指向另一段时间。以前这里是一把清空：
+            // 安全，但用户一帧一帧拖好边界、逐段点完人头，动一刀就全白配。
+            // 改成按时间重叠搬过去，配置跟着它本来覆盖的那段时间走。
+            setSegmentCasts((current) => remapSegmentConfig(current, previous, next));
+            setSegmentPrompts((current) => remapSegmentConfig(current, previous, next));
+            // 选中的段也跟着时间走：原来选的是 12–18s，边界挪了之后还选那段时间。
+            const followIndex = (current: number | null) => {
+                if (current === null) return null;
+                const anchor = previous[current]?.startMs;
+                if (anchor === undefined) return null;
+                const hit = next.findIndex((range) => anchor >= range.startMs && anchor < range.endMs);
+                return hit >= 0 ? hit : null;
+            };
+            setSelectedIndex(followIndex);
+            setPreviewIndex(followIndex);
         }
         lastStripKeyRef.current = stripKey;
+        lastBoundariesRef.current = next;
     }, [stripKey]);
 
     /**
@@ -462,22 +550,36 @@ export function CanvasVideoTimelineModal({
         }
         let cancelled = false;
         const controller = new AbortController();
+        const keyOf = (range: { startMs: number; endMs: number }) => `${range.startMs}-${range.endMs}`;
         setStripsLoading(true);
-        void (async () => {
-            try {
-                const built = await buildSegmentStrips(src, plan, { width: 200, signal: controller.signal });
-                if (cancelled) return;
-                plan.forEach((range, index) => stripCacheRef.current.set(`${range.startMs}-${range.endMs}`, built[index] ?? []));
-                setStrips(built);
-            } catch {
-                if (!cancelled) setStrips([]);
-            } finally {
-                if (!cancelled) setStripsLoading(false);
-            }
-        })();
+        // 只补没缓存的那几段，且等手停下来再补。
+        //
+        // 拖边界时边界每动一下就变，全量重抽等于每拖一下就把整条片子重新解一遍：
+        // 段数一多，拖动本身就被解码器拖住了。真正会变的通常只有相邻一两段。
+        const timer = window.setTimeout(() => {
+            const missing = plan.map((range, index) => (cached[index] ? -1 : index)).filter((index) => index >= 0);
+            void (async () => {
+                try {
+                    const built = await buildSegmentStrips(
+                        src,
+                        missing.map((index) => plan[index]),
+                        { width: 200, signal: controller.signal },
+                    );
+                    if (cancelled) return;
+                    missing.forEach((index, position) => stripCacheRef.current.set(keyOf(plan[index]), built[position] ?? []));
+                    setStrips(plan.map((range) => stripCacheRef.current.get(keyOf(range)) ?? []));
+                } catch {
+                    // 抽帧失败不把已经抽到的清空：残缺的缩略图仍然比一片空白有用。
+                    if (!cancelled) setStrips(plan.map((range) => stripCacheRef.current.get(keyOf(range)) ?? []));
+                } finally {
+                    if (!cancelled) setStripsLoading(false);
+                }
+            })();
+        }, STRIP_REFRESH_DELAY_MS);
         return () => {
             cancelled = true;
             controller.abort();
+            window.clearTimeout(timer);
         };
     }, [open, src, stripKey]);
 
@@ -538,6 +640,91 @@ export function CanvasVideoTimelineModal({
         },
         [durationMs],
     );
+
+    /**
+     * 当前这套边界（内部切点）。手动模式用用户钉的那份，自动模式现取规划结果。
+     *
+     * 第一次拖动时把自动边界原样接过来：用户想调的是"这一刀"，不是"从这一刀开始重算"。
+     */
+    const currentCuts = useCallback((): number[] => {
+        if (manualCuts) return manualCuts;
+        return rangesRef.current.slice(1).map((range) => range.startMs);
+    }, [manualCuts]);
+
+    /**
+     * 拖边界时顺手把画面刷到切点。
+     *
+     * 微调的本质是"这一刀该切在动作结束之后那一帧"，光看时间码根本判断不了。
+     * 但不能每一帧都 seek：解码器跟不上，拖动手感会烂掉。停手 160ms 再刷。
+     */
+    const boundarySeekTimerRef = useRef(0);
+    const scrubToBoundary = useCallback(
+        (timeMs: number) => {
+            window.clearTimeout(boundarySeekTimerRef.current);
+            boundarySeekTimerRef.current = window.setTimeout(() => seek(timeMs), 160);
+        },
+        [seek],
+    );
+    useEffect(() => () => window.clearTimeout(boundarySeekTimerRef.current), []);
+
+    /** 拖第 index 道边界。位置由 clampManualCut 夹住：不许越过邻居，也不许把任一侧顶过上限。 */
+    const handleBoundaryMove = useCallback(
+        (index: number, timeMs: number) => {
+            if (!boundRange) return;
+            const cuts = currentCuts();
+            const next = moveManualCut(cuts, index, timeMs, boundRange.startMs, boundRange.endMs, limits.maxMs);
+            // 夹完没动（拖到尽头、或本来就在这个位置）：不触发重算，省掉一轮抽帧。
+            if (next === cuts) return;
+            setManualCuts(next);
+            scrubToBoundary(next[index] ?? timeMs);
+        },
+        [boundRange, currentCuts, limits.maxMs, scrubToBoundary],
+    );
+
+    /** 删第 index 道边界 = 合并左右两段。合并后超上限就不许并，说清楚为什么。 */
+    const handleBoundaryRemove = useCallback(
+        (index: number) => {
+            if (!boundRange) return;
+            const cuts = currentCuts();
+            const next = removeManualCut(cuts, index, boundRange.startMs, boundRange.endMs, limits.maxMs);
+            if (!next) {
+                message.warning({ content: t("canvas.videoTimeline.boundary.mergeTooLong", { max: Math.round(limits.maxMs / 1000) }), duration: 5 });
+                return;
+            }
+            setManualCuts(next);
+        },
+        [boundRange, currentCuts, limits.maxMs, t],
+    );
+
+    /** 把选中的段在播放头处切开。播放头不在段内（或太贴边）时不给按钮。 */
+    const canSplitAtPlayhead = selectedIndex !== null && (() => {
+        const range = ranges[selectedIndex];
+        if (!range) return false;
+        return currentTimeMs - range.startMs >= MIN_MANUAL_GAP_MS && range.endMs - currentTimeMs >= MIN_MANUAL_GAP_MS;
+    })();
+
+    const handleSplitAtPlayhead = useCallback(() => {
+        if (!boundRange || selectedIndex === null) return;
+        const cuts = currentCuts();
+        const next = insertManualCut(cuts, currentTimeMs, boundRange.startMs, boundRange.endMs, limits.maxMs);
+        if (!next) {
+            message.warning({ content: t("canvas.videoTimeline.boundary.splitRejected", { max: Math.round(limits.maxMs / 1000) }), duration: 5 });
+            return;
+        }
+        setManualCuts(next);
+    }, [boundRange, currentCuts, currentTimeMs, limits.maxMs, selectedIndex, t]);
+
+    /** 把选中的段和下一段合并 —— 与删掉它们之间那道边界是同一件事，走同一条路径。 */
+    const handleMergeWithNext = useCallback(() => {
+        if (selectedIndex === null) return;
+        handleBoundaryRemove(selectedIndex);
+    }, [handleBoundaryRemove, selectedIndex]);
+
+    /** 回到自动切分。手动的点全清掉，段级配置按时间重叠保留（不是全丢）。 */
+    const handleResetManualCuts = useCallback(() => {
+        setManualCuts(null);
+    }, []);
+
 
     /** 点段卡：选中它、主预览循环播它 —— 这就是"看见这一段到底发生了什么"。 */
     const handleSelectSegment = useCallback(
@@ -613,10 +800,11 @@ export function CanvasVideoTimelineModal({
                 crossfadeFrames,
                 keepAudio,
                 targetMs: effectiveTargetMs,
+                manualCuts: manualCuts ?? undefined,
                 onlyRangeIndices,
             };
         },
-        [castNodeIds, crossfadeFrames, cuts, durationMs, effectiveTargetMs, keepAudio, mode, prompt, ranges],
+        [castNodeIds, crossfadeFrames, cuts, durationMs, effectiveTargetMs, keepAudio, manualCuts, mode, prompt, ranges],
     );
 
     const handleSubmit = useCallback(() => {
@@ -664,6 +852,7 @@ export function CanvasVideoTimelineModal({
     const selectedRange = selectedIndex !== null ? ranges[selectedIndex] : undefined;
     const minSeconds = Math.round(limits.minMs / 1000);
     const maxLimitSeconds = Math.round(limits.maxMs / 1000);
+    const isManual = manualCuts !== null;
 
     /**
      * 「只生成这一段」为什么不能用。
@@ -801,6 +990,8 @@ export function CanvasVideoTimelineModal({
                                 seek(timeMs);
                             }}
                             onSelectionChange={setSelection}
+                            onBoundaryMove={phase === "ready" ? handleBoundaryMove : undefined}
+                            onBoundaryRemove={phase === "ready" ? handleBoundaryRemove : undefined}
                         />
                     )}
 
@@ -813,27 +1004,53 @@ export function CanvasVideoTimelineModal({
                             <span className="inline-block h-2 w-2 rounded-sm border border-blue-400" />
                             {t("canvas.videoTimeline.legend.selection")}
                         </span>
-                        <label className="ml-auto flex items-center gap-1.5">
-                            {t("canvas.videoTimeline.targetSeconds")}
-                            {recommendedSeconds !== null && Math.round(recommendedSeconds) !== Math.round(targetSeconds) ? (
-                                <span className="text-stone-400">· {t("canvas.videoTimeline.targetRecommended", { value: recommendedSeconds })}</span>
-                            ) : null}
-                            <Input
-                                type="number"
-                                size="small"
-                                min={minSeconds}
-                                max={maxLimitSeconds}
-                                value={targetSeconds}
-                                onChange={(event) => setTargetSeconds(Math.max(minSeconds, Math.min(maxLimitSeconds, Number(event.target.value) || minSeconds)))}
-                                className="!w-14"
-                            />
-                            <span className="text-stone-400">
-                                s / {minSeconds}–{maxLimitSeconds}s
-                            </span>
-                            <Tooltip title={t("canvas.videoTimeline.targetSecondsHint")}>
-                                <span className="cursor-help text-stone-400 underline decoration-dotted">?</span>
-                            </Tooltip>
-                        </label>
+                        {isManual ? (
+                            // 手动模式下段边界已经是人定的，目标段长不再参与计算 —— 与其放一个
+                            // 改了没反应的输入框，不如明说当前是手动，并给一条回去的路。
+                            <div className="ml-auto flex items-center gap-1.5">
+                                <span className="flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
+                                    <SlidersHorizontal className="size-3" />
+                                    {t("canvas.videoTimeline.boundary.manualBadge", { count: manualCuts.length })}
+                                </span>
+                                <Button size="small" type="text" icon={<RotateCcw className="size-3" />} onClick={handleResetManualCuts} className="!px-1.5 !text-[11px]">
+                                    {t("canvas.videoTimeline.boundary.resetAuto")}
+                                </Button>
+                                <Tooltip title={t("canvas.videoTimeline.boundary.manualHint")}>
+                                    <span className="cursor-help text-stone-400 underline decoration-dotted">?</span>
+                                </Tooltip>
+                            </div>
+                        ) : (
+                            <label className="ml-auto flex items-center gap-1.5">
+                                {t("canvas.videoTimeline.targetSeconds")}
+                                {recommendedSeconds !== null && Math.round(recommendedSeconds) !== Math.round(targetSeconds) ? (
+                                    <span className="text-stone-400">· {t("canvas.videoTimeline.targetRecommended", { value: recommendedSeconds })}</span>
+                                ) : null}
+                                <Input
+                                    type="number"
+                                    size="small"
+                                    min={minSeconds}
+                                    max={maxLimitSeconds}
+                                    value={targetSeconds}
+                                    // 不在这里夹：夹了用户就看不到自己填了多少，只会觉得"输不进去"。
+                                    // 真正的夹取在 effectiveTargetMs，这里把超界的事实说出来。
+                                    onChange={(event) => {
+                                        const raw = Number(event.target.value);
+                                        if (!Number.isFinite(raw)) return;
+                                        setTargetSeconds(Math.max(0, raw));
+                                    }}
+                                    className="!w-14"
+                                />
+                                <span className="text-stone-400">s / {minSeconds}–{maxLimitSeconds}s</span>
+                                {targetSeconds > maxLimitSeconds ? (
+                                    <span className="text-amber-600 dark:text-amber-400">{t("canvas.videoTimeline.targetCappedMax", { max: maxLimitSeconds })}</span>
+                                ) : targetSeconds < minSeconds ? (
+                                    <span className="text-amber-600 dark:text-amber-400">{t("canvas.videoTimeline.targetCappedMin", { min: minSeconds })}</span>
+                                ) : null}
+                                <Tooltip title={t("canvas.videoTimeline.targetSecondsHint")}>
+                                    <span className="cursor-help text-stone-400 underline decoration-dotted">?</span>
+                                </Tooltip>
+                            </label>
+                        )}
                     </div>
 
                     {mode === "repaint" && selection ? (
@@ -870,6 +1087,13 @@ export function CanvasVideoTimelineModal({
                             showCast={mode === "character"}
                             onSelect={handleSelectSegment}
                         />
+                    ) : null}
+
+                    {isManual && doneCount > 0 ? (
+                        <div className="flex items-start gap-1.5 rounded-md bg-amber-50 px-2 py-1.5 text-[10px] leading-relaxed text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+                            <AlertTriangle className="mt-px size-3 shrink-0" />
+                            <span>{t("canvas.videoTimeline.boundary.doneInvalidated", { count: doneCount })}</span>
+                        </div>
                     ) : null}
 
                     {outOfLimits ? (
@@ -933,6 +1157,30 @@ export function CanvasVideoTimelineModal({
                             </div>
                             <div className="rounded-md bg-stone-100 px-2 py-1 font-mono text-[10px] text-stone-500 dark:bg-stone-800 dark:text-stone-400">
                                 {formatTimecode(selectedRange.startMs)} → {formatTimecode(selectedRange.endMs)}
+                            </div>
+
+                            {/* 边界微调：切开 / 合并。拖动时间轴是主路径，这里是"拖不准时的替身"——
+                                播放头能精确到帧，比拖动稳；合并则只能靠双击或这个按钮。 */}
+                            <div className="space-y-1">
+                                <div className="text-[11px] font-medium text-stone-600 dark:text-stone-300">{t("canvas.videoTimeline.boundary.title")}</div>
+                                <div className="flex items-center gap-1">
+                                    <Tooltip title={canSplitAtPlayhead ? t("canvas.videoTimeline.boundary.splitHint") : t("canvas.videoTimeline.boundary.splitDisabled")}>
+                                        <Button size="small" block icon={<Scissors className="size-3" />} disabled={!canSplitAtPlayhead} onClick={handleSplitAtPlayhead} className="!text-[10px]">
+                                            {t("canvas.videoTimeline.boundary.split", { time: formatTimecode(currentTimeMs) })}
+                                        </Button>
+                                    </Tooltip>
+                                    <Button
+                                        size="small"
+                                        block
+                                        icon={<Merge className="size-3" />}
+                                        disabled={selectedIndex === null || selectedIndex >= ranges.length - 1}
+                                        onClick={handleMergeWithNext}
+                                        className="!text-[10px]"
+                                    >
+                                        {t("canvas.videoTimeline.boundary.merge")}
+                                    </Button>
+                                </div>
+                                <p className="text-[10px] leading-relaxed text-stone-400">{t("canvas.videoTimeline.boundary.dragHint")}</p>
                             </div>
 
                             {mode === "character" ? (

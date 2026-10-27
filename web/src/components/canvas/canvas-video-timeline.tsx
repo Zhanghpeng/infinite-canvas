@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Scissors } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { formatTimecode, snapToCut, type SceneCut, type VideoRange } from "@/lib/canvas/video-timeline";
 
@@ -14,6 +15,13 @@ type CanvasVideoTimelineProps = {
     currentTimeMs: number;
     onSeek: (timeMs: number) => void;
     onSelectionChange: (selection: TimelineSelection | null) => void;
+    /**
+     * 拖动第 index 道段边界到 timeMs。不给就不显示手柄（只读或没有分段概念的地方）。
+     * index 与 `ranges` 对齐：第 index 道边界位于 `ranges[index].endMs`。
+     */
+    onBoundaryMove?: (index: number, timeMs: number) => void;
+    /** 双击第 index 道边界：合并左右两段。 */
+    onBoundaryRemove?: (index: number) => void;
     /** 只显示，不允许改选区（角色替换看全片时用）。 */
     readOnly?: boolean;
 };
@@ -22,21 +30,28 @@ type DragState = { mode: "new" | "resize-start" | "resize-end" | "move"; anchorM
 
 const MIN_RANGE_MS = 500;
 const EDGE_HIT_PX = 10;
+/** 拖段边界时的吸附容差。比拖选区的 300ms 小：微调的目的常常就是躲开自动切点。 */
+const BOUNDARY_SNAP_MS = 120;
+/** 段边界手柄的命中宽度（像素）。7px 差不多是"一指宽"，再宽会抢走拖选区的操作。 */
+const BOUNDARY_HIT_PX = 9;
 
-export function CanvasVideoTimeline({ durationMs, frames, cuts, ranges, selection, currentTimeMs, onSeek, onSelectionChange, readOnly = false }: CanvasVideoTimelineProps) {
+export function CanvasVideoTimeline({ durationMs, frames, cuts, ranges, selection, currentTimeMs, onSeek, onSelectionChange, onBoundaryMove, onBoundaryRemove, readOnly = false }: CanvasVideoTimelineProps) {
+    const { t } = useTranslation();
     const trackRef = useRef<HTMLDivElement>(null);
     const dragRef = useRef<DragState | null>(null);
+    const boundaryRef = useRef<number | null>(null);
     const [dragging, setDragging] = useState(false);
+    const [draggingBoundary, setDraggingBoundary] = useState<number | null>(null);
 
     const ratio = useCallback((timeMs: number) => (durationMs > 0 ? Math.min(1, Math.max(0, timeMs / durationMs)) : 0), [durationMs]);
 
     const timeAt = useCallback(
-        (clientX: number) => {
+        (clientX: number, snapMs = 300) => {
             const rect = trackRef.current?.getBoundingClientRect();
             if (!rect || rect.width <= 0) return 0;
             const value = ((clientX - rect.left) / rect.width) * durationMs;
             // 拖拽时吸到场景切点，避免用户手动对齐到 3187ms 这种别扭位置。
-            return Math.round(Math.min(durationMs, Math.max(0, snapToCut(value, cuts, 300))));
+            return Math.round(Math.min(durationMs, Math.max(0, snapToCut(value, cuts, snapMs))));
         },
         [cuts, durationMs],
     );
@@ -136,12 +151,74 @@ export function CanvasVideoTimeline({ durationMs, frames, cuts, ranges, selectio
                 {/* 段边界：细实线；场景切点：琥珀色高亮 */}
                 <div className="pointer-events-none absolute inset-0">
                     {ranges.slice(1).map((range) => (
-                        <div key={`range-${range.startMs}`} className="absolute inset-y-0 w-px bg-white/45" style={{ left: `${ratio(range.startMs) * 100}%` }} />
+                        <div
+                            key={`range-${range.startMs}`}
+                            className={`absolute inset-y-0 w-px ${draggingBoundary === null ? "bg-white/45" : "bg-white/25"}`}
+                            style={{ left: `${ratio(range.startMs) * 100}%` }}
+                        />
                     ))}
                     {cuts.map((cut) => (
                         <div key={`cut-${cut.timeMs}`} className="absolute inset-y-0 w-[2px] bg-amber-400/90" style={{ left: `${ratio(cut.timeMs) * 100}%` }} title={`${formatTimecode(cut.timeMs)} · ${cut.score.toFixed(2)}`} />
                     ))}
                 </div>
+
+                {/* 段边界手柄：拖一下改切点，双击合并左右两段。
+                    单独一层放在线条之上，是为了让"拖边界"优先于"拖选区" ——
+                    两者都在同一条轨道上，不抢的话用户永远拖不中边界。 */}
+                {onBoundaryMove
+                    ? ranges.slice(0, -1).map((range, index) => {
+                          const active = draggingBoundary === index;
+                          return (
+                              <div
+                                  key={`handle-${range.endMs}`}
+                                  role="separator"
+                                  aria-orientation="vertical"
+                                  aria-label={t("canvas.videoTimeline.boundary.handle", { time: formatTimecode(range.endMs) })}
+                                  title={onBoundaryRemove ? t("canvas.videoTimeline.boundary.dragHint") : t("canvas.videoTimeline.boundary.dragOnly")}
+                                  className="group/handle absolute inset-y-0 z-20 -translate-x-1/2 cursor-col-resize touch-none"
+                                  style={{ left: `${ratio(range.endMs) * 100}%`, width: BOUNDARY_HIT_PX }}
+                                  onPointerDown={(event) => {
+                                      if (event.button !== 0) return;
+                                      event.stopPropagation();
+                                      boundaryRef.current = index;
+                                      setDraggingBoundary(index);
+                                      event.currentTarget.setPointerCapture?.(event.pointerId);
+                                  }}
+                                  onPointerMove={(event) => {
+                                      if (boundaryRef.current !== index) return;
+                                      // 拖动过程中实时回报，段长与合规标跟着变 —— 微调靠的就是这个即时反馈。
+                                      onBoundaryMove(index, timeAt(event.clientX, BOUNDARY_SNAP_MS));
+                                  }}
+                                  onPointerUp={(event) => {
+                                      boundaryRef.current = null;
+                                      setDraggingBoundary(null);
+                                      event.currentTarget.releasePointerCapture?.(event.pointerId);
+                                  }}
+                                  onPointerCancel={() => {
+                                      boundaryRef.current = null;
+                                      setDraggingBoundary(null);
+                                  }}
+                                  onDoubleClick={(event) => {
+                                      event.stopPropagation();
+                                      boundaryRef.current = null;
+                                      setDraggingBoundary(null);
+                                      onBoundaryRemove?.(index);
+                                  }}
+                              >
+                                  <div className={`pointer-events-none absolute inset-y-0 left-1/2 w-[3px] -translate-x-1/2 rounded-full transition-colors ${active ? "bg-blue-400" : "bg-transparent group-hover/handle:bg-blue-400/70"}`} />
+                                  {/* 上下两个小把手：光靠一条线看不出"这个能拖"，尤其在全灰的胶片上。 */}
+                                  <div className={`pointer-events-none absolute left-1/2 top-0 size-1.5 -translate-x-1/2 rounded-full transition-opacity ${active ? "bg-blue-400" : "bg-white/70 opacity-0 group-hover/handle:opacity-100"}`} />
+                                  <div className={`pointer-events-none absolute bottom-0 left-1/2 size-1.5 -translate-x-1/2 rounded-full transition-opacity ${active ? "bg-blue-400" : "bg-white/70 opacity-0 group-hover/handle:opacity-100"}`} />
+                                  {active ? (
+                                      // 拖动时把当前时间码贴在把手上：微调关心的是"切在哪一帧"，不是拖了多远。
+                                      <span className="pointer-events-none absolute left-1/2 top-1 -translate-x-1/2 whitespace-nowrap rounded bg-blue-500 px-1.5 py-px font-mono text-[10px] leading-tight text-white shadow">
+                                          {formatTimecode(range.endMs)}
+                                      </span>
+                                  ) : null}
+                              </div>
+                          );
+                      })
+                    : null}
 
                 {/* 未选中区域压暗 */}
                 {handles ? (

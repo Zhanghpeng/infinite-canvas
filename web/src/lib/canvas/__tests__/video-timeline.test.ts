@@ -15,6 +15,13 @@ import {
     planSelectionRanges,
     promptTemplateKey,
     recommendSegmentTarget,
+    clampManualCut,
+    insertManualCut,
+    MIN_MANUAL_GAP_MS,
+    moveManualCut,
+    rangesFromCuts,
+    remapSegmentConfig,
+    removeManualCut,
     resolveSegmentLimits,
     sameRangeBoundaries,
     segmentAnchorTimes,
@@ -478,6 +485,113 @@ describe("segmentAnchorTimes 抽帧点", () => {
 
     it("起点为负时钳到 0（有些容器的首帧时间戳会是 -1）", () => {
         expect(segmentAnchorTimes({ startMs: -1, endMs: 4_000 })).toEqual({ headMs: 0, tailMs: 4_000 - SEGMENT_TAIL_FRAME_BACKOFF_MS });
+    });
+});
+
+
+describe("手动切点", () => {
+    it("按钉住的切点还原分段，首尾由区间补齐", () => {
+        const ranges = rangesFromCuts([3000, 7000], 0, 12_000);
+        expect(ranges.map((range) => [range.startMs, range.endMs])).toEqual([
+            [0, 3000],
+            [3000, 7000],
+            [7000, 12_000],
+        ]);
+    });
+
+    it("切在真实硬切上算场景起点，切在连续画面里不算", () => {
+        // 3000 处是硬切，5000 处在镜头中间
+        const ranges = rangesFromCuts([3000, 5000], 0, 9000, [{ timeMs: 3000, score: 0.6 }]);
+        expect(ranges[1].sceneStart).toBe(true);
+        expect(ranges[2].sceneStart).toBe(false);
+    });
+
+    it("拖切点时不许越过邻居，也不许把任一侧顶过上限", () => {
+        const cuts = [6000, 12_000];
+        // 往前拖太多会撞上 0 与自身；往后拖受 12000-300 限制
+        expect(clampManualCut(cuts, 0, -5000, 0, 20_000, 15_000)).toBe(MIN_MANUAL_GAP_MS);
+        expect(clampManualCut(cuts, 0, 100_000, 0, 20_000, 15_000)).toBe(12_000 - MIN_MANUAL_GAP_MS);
+        // 上限约束：这一段 0–12000 配 9000 上限，切点往前挪就会让左边超限
+        expect(clampManualCut([12_000], 0, 11_000, 0, 12_000, 9000)).toBe(9000);
+    });
+
+    it("拖动返回新数组，位置没变时原样返回", () => {
+        const cuts = [6000, 12_000];
+        expect(moveManualCut(cuts, 0, 10_000, 0, 20_000, 15_000)).toEqual([10_000, 12_000]);
+        // 夹完之后与原来一致：不制造新数组，省得下游 memo 白跑
+        expect(moveManualCut(cuts, 0, 6000, 0, 20_000, 15_000)).toBe(cuts);
+    });
+
+    it("补一刀：太贴边或切完仍超上限就拒绝", () => {
+        expect(insertManualCut([], 6000, 0, 12_000, 15_000)).toEqual([6000]);
+        // 贴边
+        expect(insertManualCut([], 100, 0, 12_000, 15_000)).toBeNull();
+        // 离已有切点太近
+        expect(insertManualCut([6000], 6100, 0, 12_000, 15_000)).toBeNull();
+        // 整段本来就超上限，切一刀左侧仍超
+        expect(insertManualCut([], 14_000, 0, 30_000, 15_000)).toBeNull();
+    });
+
+    it("合并：合并后超上限就不许并", () => {
+        expect(removeManualCut([6000, 12_000], 1, 0, 20_000, 15_000)).toEqual([6000]);
+        // 0–12000 并起来 12 秒，上限 9 秒，并不得
+        expect(removeManualCut([6000, 12_000], 1, 0, 20_000, 9000)).toBeNull();
+        // 不存在的下标
+        expect(removeManualCut([6000], 5, 0, 20_000, 15_000)).toBeNull();
+    });
+});
+
+describe("remapSegmentConfig 边界变化后配置跟着时间走", () => {
+    const previous = [
+        { startMs: 0, endMs: 6000 },
+        { startMs: 6000, endMs: 12_000 },
+        { startMs: 12_000, endMs: 18_000 },
+    ];
+
+    it("拖动边界：配置落在重叠最久的那一段上", () => {
+        // 第 2 段往左挪到 9000，原第 2 段（6000–12000）剩 6000–9000 归新第 2 段，9000–12000 归新第 3 段
+        const next = [
+            { startMs: 0, endMs: 6000 },
+            { startMs: 6000, endMs: 9000 },
+            { startMs: 9000, endMs: 18_000 },
+        ];
+        const mapped = remapSegmentConfig({ 1: ["a"] }, previous, next);
+        expect(mapped[1]).toEqual(["a"]);
+        // 新第 3 段与旧第 2 段重叠 3000ms、与旧第 3 段重叠 6000ms → 继承旧第 3 段（不存在配置）
+        expect(mapped[2]).toBeUndefined();
+    });
+
+    it("拆分：两段都继承原配置，拆出来的两边本来就是同一个人", () => {
+        const next = [
+            { startMs: 0, endMs: 6000 },
+            { startMs: 6000, endMs: 9000 },
+            { startMs: 9000, endMs: 12_000 },
+            { startMs: 12_000, endMs: 18_000 },
+        ];
+        const mapped = remapSegmentConfig({ 1: ["a"] }, previous, next);
+        expect(mapped[1]).toEqual(["a"]);
+        expect(mapped[2]).toEqual(["a"]);
+    });
+
+    it("合并：按重叠多的那一侧决定，两段各有主张时不静默二选一", () => {
+        // 0–9000 里 6000ms 来自第 1 段（跟随全局）、3000ms 来自第 2 段（挂了 a）：
+        // 合起来这一段同时含两种人，套任何一边都是错的，所以回落到跟随全局。
+        const mapped = remapSegmentConfig({ 1: ["a"] }, previous, [
+            { startMs: 0, endMs: 9000 },
+            { startMs: 9000, endMs: 18_000 },
+        ]);
+        expect(mapped[0]).toBeUndefined();
+        // 反过来，合并后主体就是挂了配置的那段，配置跟着过来
+        const trimmed = remapSegmentConfig({ 1: ["a"] }, previous, [
+            { startMs: 0, endMs: 3000 },
+            { startMs: 3000, endMs: 18_000 },
+        ]);
+        expect(trimmed[1]).toEqual(["a"]);
+    });
+
+    it("新段与所有旧段都不重叠时不留残留配置", () => {
+        const mapped = remapSegmentConfig({ 12: ["a"] }, previous, [{ startMs: 0, endMs: 6000 }]);
+        expect(mapped).toEqual({});
     });
 });
 

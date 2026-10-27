@@ -3566,6 +3566,8 @@ function InfiniteCanvasPage() {
             restore: {
                 mode: pending.plan.mode === "repaint" ? ("repaint" as const) : ("character" as const),
                 targetMs: pending.plan.targetMs,
+                // 手动排过的边界原样带回：这些点是逐帧拖出来的，按自动规划重算就是把它丢掉。
+                manualCuts: pending.plan.manualCuts,
                 prompt: pending.plan.prompt,
                 crossfadeFrames: pending.plan.crossfadeFrames,
                 keepAudio: pending.plan.keepAudio,

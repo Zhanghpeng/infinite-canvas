@@ -311,6 +311,146 @@ export function planSelectionRanges(startMs: number, endMs: number, cuts: SceneC
 }
 
 /**
+ * 相邻两个切点的最小间隔。
+ *
+ * 不是审美问题：间距为 0 会产出零长度段，抽帧抽到同一帧，合成时除以零。
+ * 300ms 也差不多是"这一段里至少还有半个动作"的下限，比它更碎的段没有意义。
+ */
+export const MIN_MANUAL_GAP_MS = 300;
+
+/**
+ * 由一组内部切点还原分段。
+ *
+ * 手动微调之后边界不再由 `planSegments` 推导，而是"用户钉住的几个点"——
+ * 自动规划的那套优先级（镜头优先、夹进能力区间）在用户已经明确表态的地方不再适用，
+ * 只能老实按点切。上限由 `clampManualCut` / `insertManualCut` 在入口拦住，到这里
+ * 不再二次修正：二次修正会偷偷插刀，用户拖一刀却多出两段。
+ */
+export function rangesFromCuts(cuts: number[], startMs: number, endMs: number, sceneCuts: SceneCut[] = []): VideoRange[] {
+    const start = Math.max(0, Math.min(startMs, endMs));
+    const end = Math.max(start, Math.max(startMs, endMs));
+    if (end - start <= 1) return [];
+    const inner = uniqueSorted(cuts.filter((time) => time > start + 1 && time < end - 1));
+    const points = [start, ...inner, end];
+    const ranges: VideoRange[] = [];
+    for (let index = 1; index < points.length; index += 1) {
+        const from = points[index - 1];
+        const to = points[index];
+        if (to <= from) continue;
+        // 起点是片头/选区头，或正好压在一个真实硬切上：接缝两侧画面本来就不连续，
+        // 合成时不必靠淡化去藏。手动切在该位置以外的地方一律视为"切在连续画面里"。
+        ranges.push({ startMs: from, endMs: to, sceneStart: from === start || hasSceneCutAt(sceneCuts, from) });
+    }
+    return ranges;
+}
+
+/**
+ * 拖动第 index 个切点时能落在哪。
+ *
+ * 两侧邻居是硬墙（不许交叉、不许贴成零长度），上限是模型的硬约束：
+ * 左边那段 `timeMs - left` 与右边那段 `right - timeMs` 都不能超过 maxMs。
+ * 两个约束一起解，就是 `[right - maxMs, left + maxMs]` 与邻居间距的交集。
+ *
+ * 交集为空（两侧加起来本来就不够分，或上限小得离谱）时返回原位置 ——
+ * 拖不动，比拖出一个必然提交失败的段要好。
+ */
+export function clampManualCut(cuts: number[], index: number, timeMs: number, startMs: number, endMs: number, maxMs: number): number {
+    const current = cuts[index];
+    if (current === undefined) return timeMs;
+    const left = index > 0 ? cuts[index - 1] : startMs;
+    const right = index < cuts.length - 1 ? cuts[index + 1] : endMs;
+    const ceiling = Math.max(MIN_MANUAL_GAP_MS, maxMs);
+    const lower = Math.max(left + MIN_MANUAL_GAP_MS, right - ceiling);
+    const upper = Math.min(right - MIN_MANUAL_GAP_MS, left + ceiling);
+    if (lower > upper) return current;
+    return clamp(Math.round(timeMs), lower, upper);
+}
+
+/** 拖动一个切点后的新数组。超出可动范围时会被夹回去，不会返回非法值。 */
+export function moveManualCut(cuts: number[], index: number, timeMs: number, startMs: number, endMs: number, maxMs: number): number[] {
+    if (index < 0 || index >= cuts.length) return cuts;
+    const next = clampManualCut(cuts, index, timeMs, startMs, endMs, maxMs);
+    if (next === cuts[index]) return cuts;
+    const result = [...cuts];
+    result[index] = next;
+    return result;
+}
+
+/**
+ * 在 timeMs 处补一刀。
+ *
+ * 拒绝的两种情况：切点离两侧太近（会产出碎段）、切完任一侧超上限。
+ * 后者看着反直觉 —— 切开只会让段更短，怎么会超上限？因为原段本来就可能超限
+ * （整片比上限还短、或上一轮就是手动边界），切开后仍有一侧超限就白切了一刀。
+ *
+ * 返回 null 表示切不了，调用方据此提示，而不是默默生成一个不合规的段。
+ */
+export function insertManualCut(cuts: number[], timeMs: number, startMs: number, endMs: number, maxMs: number): number[] | null {
+    const start = Math.max(0, Math.min(startMs, endMs));
+    const end = Math.max(start, Math.max(startMs, endMs));
+    const point = Math.round(timeMs);
+    if (point - start < MIN_MANUAL_GAP_MS || end - point < MIN_MANUAL_GAP_MS) return null;
+    if (cuts.some((cut) => Math.abs(cut - point) < MIN_MANUAL_GAP_MS)) return null;
+    const ordered = uniqueSorted([...cuts, point].filter((time) => time > start + 1 && time < end - 1));
+    const points = [start, ...ordered, end];
+    for (let index = 1; index < points.length; index += 1) {
+        if (points[index] - points[index - 1] > maxMs) return null;
+    }
+    return ordered;
+}
+
+/**
+ * 删掉第 index 个切点，把左右两段并成一段。
+ *
+ * 合并后超上限就不许并：那不是"再切一刀"能补救的事，得用户自己往中间补一刀。
+ * 返回 null 让调用方把话说清楚。
+ */
+export function removeManualCut(cuts: number[], index: number, startMs: number, endMs: number, maxMs: number): number[] | null {
+    if (index < 0 || index >= cuts.length) return null;
+    const left = index > 0 ? cuts[index - 1] : startMs;
+    const right = index < cuts.length - 1 ? cuts[index + 1] : endMs;
+    if (right - left > maxMs) return null;
+    return cuts.filter((_, position) => position !== index);
+}
+
+/**
+ * 边界变化后，把按序号存的段级配置搬到新序号上。
+ *
+ * 段级角色是按 ranges 下标存的，用户手动拖一刀之后下标就整体位移，第 3 段挂的角色
+ * 会套到另一段时间上 —— 这比丢掉更糟，模型会照着一张不相干的参考图去换人。
+ *
+ * 搬法是"按时间重叠"：新段与旧段重叠最久的那一个，继承它的配置。这同时覆盖了
+ * 三种真实动作：拖窄（两段各继承原本那段）、拖宽（一段继承）、拆分（两段都继承，
+ * 因为拆出来的两边本来就都还是那个人）。
+ */
+export function remapSegmentConfig<T>(config: Record<number, T>, previous: Array<{ startMs: number; endMs: number }>, next: Array<{ startMs: number; endMs: number }>): Record<number, T> {
+    // 没配过就原样返回：拖动边界时这个函数每帧都会被调用，返回新对象会白白触发一轮渲染。
+    if (!Object.keys(config).length) return config;
+    if (!previous.length || !next.length) return {};
+    const result: Record<number, T> = {};
+    next.forEach((range, index) => {
+        let bestKey = -1;
+        let bestOverlap = 0;
+        // 与**所有**旧段比重叠，而不是只跟"有配置的那几段"比：新段主要属于哪个旧段，
+        // 就该继承那个旧段的状态 —— 它没有配置（跟随全局）也是一个明确的状态。
+        previous.forEach((source, key) => {
+            const overlap = Math.min(source.endMs, range.endMs) - Math.max(source.startMs, range.startMs);
+            if (overlap > bestOverlap) {
+                bestOverlap = overlap;
+                bestKey = key;
+            }
+        });
+        if (bestKey >= 0 && config[bestKey] !== undefined) result[index] = config[bestKey];
+    });
+    return result;
+}
+
+/** 时间点是否压在某个真实硬切上（容差 40ms，采样步长造成的偏移不算另一处）。 */
+function hasSceneCutAt(cuts: SceneCut[], timeMs: number, toleranceMs = 40): boolean {
+    return cuts.some((cut) => Math.abs(cut.timeMs - timeMs) <= toleranceMs);
+}
+
+/**
  * 把切出来的段捏进模型的能力区间。
  *
  * 场景检测只认画面变化，产出的段长完全不受模型约束：一段 0.8 秒的闪白、
