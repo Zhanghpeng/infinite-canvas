@@ -22,7 +22,15 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
-    const blob = await getStorage().getBlob(SCOPE, storageKey);
+    // 本地后端优先给直链：<video>/<audio> 直接流式加载，不必把整份字节读进内存。
+    // 浏览器模式的 IndexedDB 后端没有直链可给，仍走 Blob + objectURL。
+    const backend = getStorage();
+    const direct = backend.mediaUrl ? await backend.mediaUrl(SCOPE, storageKey) : null;
+    if (direct) {
+        objectUrls.set(storageKey, direct);
+        return direct;
+    }
+    const blob = await backend.getBlob(SCOPE, storageKey);
     if (!blob) return fallback;
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);

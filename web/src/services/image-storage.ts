@@ -32,7 +32,15 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
-    const blob = await getStorage().getBlob(IMAGE_SCOPE, storageKey);
+    // 本地后端给直链：图片交给浏览器自己加载/缓存，不再把整份字节读进 JS 堆。
+    // 显示侧不需要 CORS；只有 drawImage 出图的地方要 crossOrigin，已在 loadImage 里统一声明。
+    const backend = getStorage();
+    const direct = backend.mediaUrl ? await backend.mediaUrl(IMAGE_SCOPE, storageKey) : null;
+    if (direct) {
+        objectUrls.set(storageKey, direct);
+        return direct;
+    }
+    const blob = await backend.getBlob(IMAGE_SCOPE, storageKey);
     if (!blob) return fallback;
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);

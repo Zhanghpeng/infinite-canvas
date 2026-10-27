@@ -70,8 +70,21 @@ export async function initWorkspace(baseUrl: string, token: string, workspacePat
     return (await response.json()) as { ok: boolean; workspacePath: string; manifest: LocalWorkspaceManifest };
 }
 
-export async function listWorkspaceFiles(baseUrl: string, token: string, dir: string, recursive = false) {
-    const response = await fetch(endpoint(baseUrl, "files", { dir, recursive: recursive ? "true" : undefined }), { headers: authHeaders(token), signal: AbortSignal.timeout(FILE_TIMEOUT_MS) });
+/**
+ * 列目录。
+ *
+ * withStat=false 时服务端只做一次 readdir，不逐个 stat —— 定位媒体文件只需要文件名，
+ * 而媒体目录动辄上千个文件，省掉这一步能明显降低列目录的磁盘压力。
+ */
+export async function listWorkspaceFiles(baseUrl: string, token: string, dir: string, options?: { recursive?: boolean; withStat?: boolean }) {
+    const response = await fetch(
+        endpoint(baseUrl, "files", {
+            dir,
+            recursive: options?.recursive ? "true" : undefined,
+            stat: options?.withStat === false ? "false" : undefined,
+        }),
+        { headers: authHeaders(token), signal: AbortSignal.timeout(FILE_TIMEOUT_MS) },
+    );
     if (!response.ok) throw new Error(await readError(response, "列目录失败"));
     const body = (await response.json()) as { ok: boolean; entries: LocalWorkspaceEntry[] };
     return body.entries;
