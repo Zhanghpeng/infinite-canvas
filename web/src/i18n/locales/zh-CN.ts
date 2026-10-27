@@ -636,6 +636,7 @@ export default {
             "analyzing": "正在分析画面… {{percent}}%",
             "analyzeFailed": "画面分析失败",
             "targetSeconds": "目标段长",
+            "targetRecommended": "推荐 {{value}}s",
             "targetSecondsHint": "切分时优先把边界落在镜头切换上，段长在这个值附近浮动。默认取镜头长度的中位数，也就是一段一个镜头；调大可以让一段横跨多个镜头、减少段数。",
             "spec": {
                 "title": "输出规格",

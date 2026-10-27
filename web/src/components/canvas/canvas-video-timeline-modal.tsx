@@ -132,6 +132,14 @@ export function CanvasVideoTimelineModal({
     const [selection, setSelection] = useState<TimelineSelection | null>(null);
     const [currentTimeMs, setCurrentTimeMs] = useState(0);
     const [targetSeconds, setTargetSeconds] = useState(limits.maxMs / 1000);
+    /**
+     * 按镜头算出来的推荐段长。
+     *
+     * 只显示不自动回填：用户把它调大是有意的（想少切几段），每隔一次输入就弹回去
+     * 等于跟人对着干。但什么都不提示也不行 —— 他改完就再也看不到"一段一镜头"
+     * 是什么值了，所以偏离时在标签旁标一下。
+     */
+    const [recommendedSeconds, setRecommendedSeconds] = useState<number | null>(null);
     const [prompt, setPrompt] = useState("");
     /**
      * 上一次自动填入的模板。
@@ -293,9 +301,9 @@ export function CanvasVideoTimelineModal({
                 setCuts(scene.cuts);
                 // 默认按镜头长度定目标段长（一段一镜头）。续跑上一批时不动：
                 // 边界必须与上一批完全一致，否则按序号的段级配置会套到别的时间上。
-                if (!revived?.targetMs) {
-                    setTargetSeconds(recommendSegmentTarget(0, scene.durationMs, scene.cuts, limits.minMs, limits.maxMs) / 1000);
-                }
+                const recommended = recommendSegmentTarget(0, scene.durationMs, scene.cuts, limits.minMs, limits.maxMs) / 1000;
+                if (!revived?.targetMs) setTargetSeconds(recommended);
+                setRecommendedSeconds(recommended);
                 const strip = await buildFilmstrip(src, Math.min(24, Math.max(8, Math.round(scene.durationMs / 1000))), { width: 128 });
                 if (cancelled) return;
                 setFrames(strip.frames);
@@ -807,6 +815,9 @@ export function CanvasVideoTimelineModal({
                         </span>
                         <label className="ml-auto flex items-center gap-1.5">
                             {t("canvas.videoTimeline.targetSeconds")}
+                            {recommendedSeconds !== null && Math.round(recommendedSeconds) !== Math.round(targetSeconds) ? (
+                                <span className="text-stone-400">· {t("canvas.videoTimeline.targetRecommended", { value: recommendedSeconds })}</span>
+                            ) : null}
                             <Input
                                 type="number"
                                 size="small"

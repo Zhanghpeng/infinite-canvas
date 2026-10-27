@@ -636,6 +636,7 @@ export default {
             "analyzing": "Analyzing footage… {{percent}}%",
             "analyzeFailed": "Failed to analyze the footage",
             "targetSeconds": "Target length",
+            "targetRecommended": "{{value}}s recommended",
             "targetSecondsHint": "Cuts prefer real shot changes and float around this length. The default is the median shot length, i.e. one shot per segment; raise it to span several shots and end up with fewer segments.",
             "spec": {
                 "title": "Output",
