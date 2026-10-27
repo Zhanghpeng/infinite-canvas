@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { createPortal } from "react-dom";
-import { Mic, Search, Upload } from "lucide-react";
+import { Mic, Pause, Play, Search, Upload } from "lucide-react";
 import { Button, Input, Slider } from "antd";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
-import { CANVAS_VOICES, searchVoices, voiceAssetUrl, voiceFacets, type CanvasVoice } from "@/lib/canvas/voice-library";
+import { CANVAS_VOICES, searchVoices, voiceAudioUrl, voiceAssetUrl, voiceFacets, type CanvasVoice } from "@/lib/canvas/voice-library";
+import { previewVoiceAudio, stopVoicePreview } from "@/lib/canvas/voice-preview";
 
 type CanvasVoicePickerProps = {
     voiceId?: string;
@@ -38,11 +39,21 @@ export function CanvasVoicePicker({ voiceId, voiceName, voiceAvatar, strength, d
     const [keyword, setKeyword] = useState("");
     const [typeFilter, setTypeFilter] = useState<string>("");
     const [styleFilter, setStyleFilter] = useState<string>("");
+    const [playingId, setPlayingId] = useState<string | null>(null);
+
+    /** 关掉弹层就别再响了：声音留在后台、又找不到是哪儿发的，是最烦的一种状态。 */
+    const stopPreview = () => {
+        stopVoicePreview();
+        setPlayingId(null);
+    };
 
     const updateOpen = (next: boolean) => {
+        if (!next) stopPreview();
         setOpen(next);
         onOpenChange?.(next);
     };
+
+    useEffect(() => stopVoicePreview, []);
 
     useEffect(() => {
         if (!open) return;
@@ -82,6 +93,19 @@ export function CanvasVoicePicker({ voiceId, voiceName, voiceAvatar, strength, d
 
     const current = voiceName || "选择音色";
     const label = voiceId ? `${current} · ${strength.toFixed(2)}` : current;
+
+    const togglePreview = (voice: CanvasVoice) => {
+        const url = voiceAudioUrl(voice);
+        if (!url) return;
+        if (playingId === voice.id) {
+            stopPreview();
+            return;
+        }
+        // 试听的就是生成时会拿去当参考的那份文件，不存在「试听好听、生成变了」。
+        const audio = previewVoiceAudio(url);
+        setPlayingId(voice.id);
+        audio.addEventListener("ended", () => setPlayingId((current) => (current === voice.id ? null : current)));
+    };
 
     const handleFile = (event: ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
@@ -131,21 +155,45 @@ export function CanvasVoicePicker({ voiceId, voiceName, voiceAvatar, strength, d
                               <div className="grid max-h-[260px] grid-cols-2 gap-2 overflow-y-auto pr-1">
                                   {voices.map((voice) => {
                                       const active = voice.id === voiceId;
+                                      const previewing = playingId === voice.id;
                                       return (
-                                          <button
+                                          <div
                                               key={voice.id}
-                                              type="button"
-                                              className="flex items-start gap-2 rounded-xl border p-2 text-left transition-colors"
+                                              role="button"
+                                              tabIndex={0}
+                                              className="flex cursor-pointer items-start gap-2 rounded-xl border p-2 text-left transition-colors"
                                               style={{ borderColor: active ? theme.node.text : theme.toolbar.border, background: active ? theme.node.fill : "transparent" }}
                                               onClick={() => onSelect(voice)}
+                                              onKeyDown={(event) => {
+                                                  if (event.key !== "Enter" && event.key !== " ") return;
+                                                  event.preventDefault();
+                                                  onSelect(voice);
+                                              }}
                                           >
-                                              {voice.avatar ? (
-                                                  <img src={voiceAssetUrl(voice.avatar)} alt="" className="size-9 shrink-0 rounded-lg object-cover" />
-                                              ) : (
-                                                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg text-xs" style={{ background: theme.node.fill }}>
-                                                      {voice.name.slice(0, 1)}
-                                                  </span>
-                                              )}
+                                              <span className="relative shrink-0">
+                                                  {voice.avatar ? (
+                                                      <img src={voiceAssetUrl(voice.avatar)} alt="" className="size-9 rounded-lg object-cover" />
+                                                  ) : (
+                                                      <span className="flex size-9 items-center justify-center rounded-lg text-xs" style={{ background: theme.node.fill }}>
+                                                          {voice.name.slice(0, 1)}
+                                                      </span>
+                                                  )}
+                                                  {/* 常驻而不是悬停才出现：能不能试听必须一眼看出来，靠 hover 猜等于没有。 */}
+                                                  {voice.audio ? (
+                                                      <button
+                                                          type="button"
+                                                          title={previewing ? "停止试听" : "试听"}
+                                                          className="absolute -bottom-1 -right-1 flex size-4 items-center justify-center rounded-full shadow-sm transition-transform hover:scale-110"
+                                                          style={{ background: previewing ? theme.node.text : "rgba(28,25,23,0.72)", color: previewing ? theme.toolbar.panel : "#fff" }}
+                                                          onClick={(event) => {
+                                                              event.stopPropagation();
+                                                              togglePreview(voice);
+                                                          }}
+                                                      >
+                                                          {previewing ? <Pause className="size-2.5" fill="currentColor" /> : <Play className="size-2.5 translate-x-px" fill="currentColor" />}
+                                                      </button>
+                                                  ) : null}
+                                              </span>
                                               <span className="min-w-0 flex-1">
                                                   <span className="flex items-center gap-1">
                                                       <span className="truncate text-xs font-medium">{voice.name}</span>
@@ -157,7 +205,7 @@ export function CanvasVoicePicker({ voiceId, voiceName, voiceAvatar, strength, d
                                                   </span>
                                                   <span className="mt-0.5 line-clamp-2 block text-[11px] leading-4 opacity-60">{voice.description}</span>
                                               </span>
-                                          </button>
+                                          </div>
                                       );
                                   })}
                                   {voices.length === 0 ? <div className="col-span-2 py-6 text-center text-xs opacity-50">没有匹配的音色</div> : null}
