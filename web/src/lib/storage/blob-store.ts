@@ -52,7 +52,10 @@ export function mimeForFileName(fileName: string): string {
 
 function withMime(blob: Blob, path: string): Blob {
     if (blob.type && blob.type !== "application/octet-stream") return blob;
-    return new Blob([blob], { type: mimeForFileName(path) });
+    // 用 slice 而不是 new Blob([blob])：目录句柄(FSA) 拿到的 File 只是磁盘文件的句柄，
+    // slice 会保留这层引用，浏览器按需读取；而 new Blob([blob]) 会把整份内容物化进内存，
+    // 打开一个有很多视频的画布时这一步就是几百 MB 的白读。
+    return blob.slice(0, blob.size, mimeForFileName(path));
 }
 
 export function createBlobStore(io: PathIo) {
