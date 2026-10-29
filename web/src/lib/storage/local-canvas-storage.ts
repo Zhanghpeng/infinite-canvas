@@ -254,11 +254,35 @@ export function createLocalCanvasStorage<S extends CanvasPersistedState>(): Pers
         return indexCache;
     }
 
+    // 只救第一次骤减：用户确实要批量删时，第二次保存就放行，不会被无限救回。
+    let keepShrunkIndex = true;
+
     async function flush() {
         if (!queued) return;
         const state = queued;
         queued = null;
-        indexCache = await writeWorkspaceCanvas(state, { incremental: true, previous: await loadIndex() });
+        const previous = await loadIndex();
+
+        // 防误覆盖。这次加载未必完整（目录授权失效、某份图解析异常、另一个窗口同时在写…），
+        // 用「内存里那少量项目」落盘会把磁盘索引里的其它项目整体抹掉 —— 画布列表只剩一两个，
+        // 而图文件其实都还在 projects/ 下面，用户只能靠猜。
+        // 判据取「腰斩 + 至少少 3 个」：正常删一两个不会触发。
+        if (keepShrunkIndex && previous?.projects?.length) {
+            const kept = new Set(state.projects.map((item) => item.id));
+            const tombstoned = new Set((state.deletedProjects ?? []).map((item) => item.id));
+            const missing = previous.projects.filter((meta) => !kept.has(meta.id) && !tombstoned.has(meta.id));
+            if (missing.length >= 3 && state.projects.length * 2 < previous.projects.length) {
+                // 用 lazy 骨架补回：图不再加载、也不会被写回，只保住索引里的这条元数据。
+                state.projects = [...state.projects, ...missing.map(fromMeta)];
+                keepShrunkIndex = false;
+                console.warn(
+                    `[workspace] 索引项目数从 ${previous.projects.length} 骤减到 ${previous.projects.length - missing.length}，` +
+                    `已保留 ${missing.length} 个「本次未加载」项目的元数据。若确实是主动批量删除，再删一次即可生效。`,
+                );
+            }
+        }
+
+        indexCache = await writeWorkspaceCanvas(state, { incremental: true, previous });
     }
 
     return {
