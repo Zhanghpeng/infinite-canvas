@@ -15,6 +15,7 @@ import type { CanvasNodeToolbarItem } from "@/types/canvas-plugin";
 import { ImageToolSettingsModal, type ImageToolbarSettingsTool } from "./canvas-image-toolbar-settings-modal";
 import { IMAGE_QUICK_TOOLS_STORAGE_KEY, buildImageToolbarTools, defaultImageQuickToolIds, type ImageQuickToolId } from "./canvas-image-toolbar-tools";
 import { localizeErrorDetails } from "@/lib/canvas/canvas-generation-helpers";
+import { getModelProfile } from "@/services/api/models";
 
 type CanvasNodeHoverToolbarProps = {
     node: CanvasNodeData | null;
@@ -164,7 +165,12 @@ export function CanvasNodeHoverToolbar({
         }
         copyText(prompt, t("common.promptCopied"));
     };
-    const imageTools = buildImageToolbarTools(node, { onUpload, onToggleFreeResize, onMaskEdit, onCrop, onSplit, onUpscale, onSuperResolve, onAngle, onViewImage, onCopyPrompt: copyImagePrompt, onReversePrompt });
+    const nodeProfile = getModelProfile(node.metadata?.modelId || node.metadata?.model);
+    const supportedTools = node.metadata?.supportedTools || nodeProfile?.supportedTools;
+    const canFaceRefine = hasVideo && Boolean(supportedTools?.faceRefine);
+    const canDepthVideo = hasVideo && Boolean(supportedTools?.depthVideo ?? true);
+
+    const imageTools = buildImageToolbarTools(node, { onUpload, onToggleFreeResize, onMaskEdit, onCrop, onSplit, onUpscale, onSuperResolve, onAngle, onViewImage, onCopyPrompt: copyImagePrompt, onReversePrompt }, supportedTools);
 
     function openImageToolSettings() {
         onKeep(activeNode.id);
@@ -248,9 +254,9 @@ export function CanvasNodeHoverToolbar({
         ...(hasImage || hasVideo || hasAudio || isText ? [{ id: "saveAsset", title: t("common.addToAssets"), label: t("canvas.nodeToolbar.saveAsset"), icon: <FolderPlus className="size-4" />, onClick: () => onSaveAsset(node) }] : []),
         ...(hasImage || hasVideo || hasAudio ? [{ id: "download", title: t(hasAudio ? "canvas.nodeToolbar.downloadAudio" : hasVideo ? "canvas.nodeToolbar.downloadVideo" : "canvas.nodeToolbar.downloadImage"), label: t("common.download"), icon: <Download className="size-4" />, onClick: () => onDownload(node) }] : []),
         ...(hasVideo ? [{ id: "separateAudio", title: t("canvas.nodeToolbar.separateAudio"), label: t("canvas.nodeToolbar.separateAudio"), icon: <Music className="size-4" />, onClick: () => onSeparateAudio?.(node) }] : []),
-        ...(hasVideo ? [{ id: "faceRefine", title: "人脸修复", label: "人脸修复", icon: <SmilePlus className="size-4" />, onClick: () => onFaceRefine?.(node) }] : []),
+        ...(canFaceRefine ? [{ id: "faceRefine", title: "人脸修复", label: "人脸修复", icon: <SmilePlus className="size-4" />, onClick: () => onFaceRefine?.(node) }] : []),
         ...(hasVideo ? [{ id: "videoTimeline", title: t("canvas.nodeToolbar.videoTimeline"), label: t("canvas.nodeToolbar.videoTimeline"), icon: <Scissors className="size-4" />, onClick: () => onVideoTimeline?.(node) }] : []),
-        ...(hasVideo ? [{ id: "depthVideo", title: t("canvas.nodeToolbar.depthVideo"), label: t("canvas.nodeToolbar.depthVideo"), icon: <Layers className="size-4" />, onClick: () => onDepthVideo?.(node) }] : []),
+        ...(canDepthVideo ? [{ id: "depthVideo", title: t("canvas.nodeToolbar.depthVideo"), label: t("canvas.nodeToolbar.depthVideo"), icon: <Layers className="size-4" />, onClick: () => onDepthVideo?.(node) }] : []),
         ...(hasVideo ? [{ id: "viewVideo", title: t("canvas.nodeToolbar.viewVideo"), label: t("canvas.nodeToolbar.viewVideo"), icon: <Eye className="size-4" />, onClick: () => onViewImage(node) }] : []),
         ...(isVideo || isAudio ? [{ id: "edit", title: t("common.edit"), label: t("common.edit"), icon: <MessageSquare className="size-4" />, onClick: () => onToggleDialog(node) }] : []),
         ...(isText && node.metadata?.status !== "loading" ? [{ id: "generateImage", title: t("canvas.node.generateImage"), label: t("canvas.node.generate"), icon: <ImageIcon className="size-4" />, onClick: () => onGenerateImage(node) }] : []),
@@ -381,6 +387,9 @@ export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeD
                             <InfoRow label={t("canvas.nodeToolbar.size")} value={`${Math.round(node.width)} x ${Math.round(node.height)}`} />
                             <InfoRow label={t("canvas.nodeToolbar.position")} value={`${Math.round(node.position.x)}, ${Math.round(node.position.y)}`} />
                             <InfoRow label={t("canvas.nodeToolbar.status")} value={node.metadata?.status || "idle"} />
+                            {(node.metadata?.modelId || node.metadata?.model) ? (
+                                <InfoRow label={t("workbench.model")} value={(node.metadata?.modelId && getModelProfile(node.metadata.modelId)?.name) || node.metadata?.modelId || node.metadata?.model} />
+                            ) : null}
                             {batchCount > 1 ? <InfoRow label={t("canvas.nodeToolbar.imageGroup")} value={t("canvas.configNode.images", { count: batchCount })} /> : null}
                             {node.metadata?.prompt ? <InfoRow label={t("canvas.configNode.prompt")} value={node.metadata.prompt} /> : null}
                             {imageBytes ? <InfoRow label={t("canvas.nodeToolbar.imageSize")} value={formatBytes(imageBytes)} /> : null}

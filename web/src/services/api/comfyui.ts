@@ -10,25 +10,33 @@ import {
     DEFAULT_COMFYUI_T2I_WORKFLOW,
     DEFAULT_COMFYUI_TEXT_WORKFLOW,
     DEFAULT_COMFYUI_VIDEO_WORKFLOW,
+    getWorkflowForModelProfile,
 } from "./comfyui-default-workflows";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
+
+export { formatIngestSuccessMessage, ingestWorkflow, type IngestOptions, type IngestResult, type DetectedSlotInfo, type AmbiguityInfo } from "./comfyui-adapter";
+import {
+    dispatchComfyuiModelWorkflow,
+    getModelProfile,
+    validateModelExecution,
+    IMAGE_RESOLUTION_PRESETS,
+    type ImageResolutionTier,
+    type ImageAspectRatio,
+} from "./models";
+export * from "./models";
 
 export type ComfyuiSize = {
     width: number;
     height: number;
 };
 
-const DEFAULT_SIZE: ComfyuiSize = { width: 1024, height: 1024 };
-/** Short-edge base (px) used to materialize a plain aspect ratio into pixel dimensions. */
-const SIZE_BASE = 1024;
-/** Long-edge base (px) for the "2k"/"4k" ratio tiers exposed by the image settings panel. */
-const SIZE_TIER_BASE: Record<string, number> = { "2k": 2048, "4k": 3840 };
+const DEFAULT_SIZE: ComfyuiSize = { width: 512, height: 512 };
 /** Hard ceiling per side for explicit pixel sizes; beyond this the input is treated as invalid. */
 const MAX_PIXEL = 8192;
 
 const PIXEL_SIZE_PATTERN = /^(\d+)\s*[x×]\s*(\d+)$/;
-const RATIO_PATTERN = /^(\d+)\s*:\s*(\d+)(?:\s*[-_]\s*(2k|4k))?$/i;
+const RATIO_PATTERN = /^(\d+)\s*:\s*(\d+)(?:\s*[-_]\s*(1k|2k|4k))?$/i;
 
 function roundToEven(value: number) {
     return Math.max(2, Math.round(value / 2) * 2);
@@ -36,12 +44,9 @@ function roundToEven(value: number) {
 
 /**
  * Parse an image size setting into pixel dimensions.
- * Accepts "auto"/empty (falls back to 1024x1024), pixel sizes ("1024x1024", rounded to
- * even, each side capped at 8192px), and aspect ratios ("3:4", shorter edge at 1024px,
- * or "16:9-2k"/"9:16-4k" tiers with the longer edge at 2048/3840px to match the
- * image-settings-panel presets). Note the ratio materialization (short edge 1024) may
- * differ by a few pixels from the OpenAI-side preset the UI advertises for the same
- * ratio value (e.g. 4:3 → 1366x1024 here vs 1360x1024 for OpenAI). Anything else throws.
+ * Accepts "auto"/empty (falls back to 512x512 1K), pixel sizes ("512x512", "1024x1024"),
+ * and standard aspect ratios ("1:1", "16:9", "16:9-2k", "9:16-4k" matching 64px-aligned presets).
+ * Anything else throws.
  */
 export function parseSize(size?: string): ComfyuiSize {
     const value = (size || "").trim();
@@ -61,16 +66,16 @@ export function parseSize(size?: string): ComfyuiSize {
         const a = Number(ratioMatch[1]);
         const b = Number(ratioMatch[2]);
         if (a <= 0 || b <= 0) throw new Error(`Invalid image size: ${value}`);
-        const tier = ratioMatch[3]?.toLowerCase();
-        if (tier) {
-            const base = SIZE_TIER_BASE[tier];
-            return a >= b
-                ? { width: base, height: roundToEven((base * b) / a) }
-                : { width: roundToEven((base * a) / b), height: base };
+        const tier = (ratioMatch[3]?.toLowerCase() || "1k") as ImageResolutionTier;
+        const ratioKey = `${a}:${b}` as ImageAspectRatio;
+        const preset = IMAGE_RESOLUTION_PRESETS[tier]?.[ratioKey];
+        if (preset) {
+            return { width: preset.width, height: preset.height };
         }
+        const base = tier === "4k" ? 2048 : tier === "2k" ? 1024 : 512;
         return a >= b
-            ? { width: roundToEven((SIZE_BASE * a) / b), height: SIZE_BASE }
-            : { width: SIZE_BASE, height: roundToEven((SIZE_BASE * b) / a) };
+            ? { width: roundToEven((base * a) / b), height: base }
+            : { width: base, height: roundToEven((base * b) / a) };
     }
     throw new Error(`Invalid image size: ${value}`);
 }
@@ -591,11 +596,64 @@ export class ComfyuiAbortedError extends ComfyuiError {
     }
 }
 
+/** Thrown when the ComfyUI job was lost (e.g. server restart, queue wipe, missing from queue and history). */
+export class ComfyuiJobLostError extends ComfyuiError {
+    readonly jobId: string;
+    constructor(jobId: string, message = "ComfyUI 任务已丢失（服务可能已重启或队列已清空）") {
+        super(message);
+        this.name = "ComfyuiJobLostError";
+        this.jobId = jobId;
+    }
+}
+
+/** Thrown when the ComfyUI job ID does not exist. */
+export class ComfyuiJobNotFoundError extends ComfyuiError {
+    readonly jobId: string;
+    constructor(jobId: string, message = "ComfyUI 任务不存在") {
+        super(message);
+        this.name = "ComfyuiJobNotFoundError";
+        this.jobId = jobId;
+    }
+}
+
+/** Thrown when the ComfyUI job was cancelled or interrupted. */
+export class ComfyuiJobCancelledError extends ComfyuiError {
+    readonly jobId: string;
+    constructor(jobId: string, message = i18n.t("comfyui.cancelled")) {
+        super(message);
+        this.name = "ComfyuiJobCancelledError";
+        this.jobId = jobId;
+    }
+}
+
 /** Thrown when the selected model has no ComfyUI workflow attached. */
 export class ComfyuiNoWorkflowError extends ComfyuiError {
     constructor(message = "No ComfyUI workflow is attached to this model") {
         super(message);
         this.name = "ComfyuiNoWorkflowError";
+    }
+}
+
+/** Thrown when network connection to ComfyUI fails (e.g. server crash, offline, connection refused). */
+export class ComfyuiNetworkError extends ComfyuiError {
+    readonly baseUrl: string;
+    readonly isOffline: boolean;
+    readonly jobId?: string;
+
+    constructor(baseUrl: string, jobId?: string, cause?: unknown) {
+        const isOffline = typeof navigator !== "undefined" && !navigator.onLine;
+        const cleanUrl = baseUrl.trim().replace(/\/+$/, "");
+        const message = isOffline
+            ? "本地网络连接已断开，请检查网络设置"
+            : `无法连接 ComfyUI 服务（${cleanUrl}）。服务可能已崩溃或未启动，请检查服务状态与端口`;
+        super(message);
+        this.name = "ComfyuiNetworkError";
+        this.baseUrl = cleanUrl;
+        this.isOffline = isOffline;
+        this.jobId = jobId;
+        if (cause && typeof cause === "object") {
+            (this as { cause?: unknown }).cause = cause;
+        }
     }
 }
 
@@ -624,11 +682,21 @@ async function comfyuiFetch(url: string, init?: RequestInit, baseUrl = url): Pro
     try {
         return await fetch(url, init);
     } catch (error) {
+        if (error instanceof ComfyuiError) {
+            throw error;
+        }
         if (isMixedContentHttp(baseUrl)) {
             notifyMixedContentBlocked(baseUrl);
             throw new ComfyuiMixedContentError(baseUrl);
         }
-        throw error;
+        if (
+            init?.signal?.aborted ||
+            (error instanceof Error && error.name === "AbortError") ||
+            (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError")
+        ) {
+            throw error;
+        }
+        throw new ComfyuiNetworkError(baseUrl, undefined, error);
     }
 }
 
@@ -699,6 +767,64 @@ export function adaptWorkflowModelPaths(
     return modified ? cloned : workflow;
 }
 
+export const COMFYUI_CORE_PLUGINS = [
+    {
+        name: "ComfyUI-MiniMaxH3-Myang",
+        url: "https://github.com/civilcoco/ComfyUI-MiniMaxH3-Myang",
+        keywords: ["h3facetrackcrop", "h3injectvideolatent", "minimaxh3nativeaudiolock", "h3perframedenoise", "h3facestitch"],
+        desc: "MiniMax H3 视频人脸追踪精修组件",
+    },
+    {
+        name: "ComfyUI-VideoHelperSuite",
+        url: "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+        keywords: ["vhs_videocombine", "videohelpersuite", "loadvideo"],
+        desc: "视频加载与音画封装输出",
+    },
+    {
+        name: "ComfyUI-KJNodes",
+        url: "https://github.com/kijai/ComfyUI-KJNodes",
+        keywords: ["getvideocomponents", "kjnodes", "colormatch", "getimagesize"],
+        desc: "全能参考视频及组件处理",
+    },
+    {
+        name: "ComfyLiterals",
+        url: "https://github.com/M1kep/ComfyLiterals",
+        keywords: ["comfyliterals", "primitiveint", "primitivefloat"],
+        desc: "首尾帧/全能视频字面量与基础常数",
+    },
+    {
+        name: "Comfyui-kktools",
+        url: "https://github.com/zhiwendesign/Comfyui-kktools",
+        keywords: ["kktools", "prompt_expansion", "vision_llm", "kksomethingtoany"],
+        desc: "文本生成与提示词反推",
+    },
+    {
+        name: "ComfyUI-UniversalToolkit",
+        url: "https://github.com/whmc76/ComfyUI-UniversalToolkit",
+        keywords: ["universaltoolkit", "showany_utk", "toolkit"],
+        desc: "通用工具与参数解析",
+    },
+    {
+        name: "ComfyUI_LayerStyle",
+        url: "https://github.com/chflame163/ComfyUI_LayerStyle",
+        keywords: ["layerstyle", "layermask"],
+        desc: "遮罩处理与图层合成",
+    },
+];
+
+export function translateComfyuiValidationError(errMsg: string): string {
+    const lower = errMsg.toLowerCase();
+    for (const plugin of COMFYUI_CORE_PLUGINS) {
+        if (plugin.keywords.some((kw) => lower.includes(kw))) {
+            return `缺少核心依赖插件「${plugin.name}」(${plugin.desc})。请在 ComfyUI 的 custom_nodes 目录安装：git clone ${plugin.url}\n原始错误: ${errMsg}`;
+        }
+    }
+    if (lower.includes("prompt outputs failed validation") || lower.includes("class not found")) {
+        return `ComfyUI 节点校验失败，请检查是否已在 ComfyUI 安装所需的核心插件（如 ComfyUI-KJNodes、ComfyLiterals 等）。\n原始错误: ${errMsg}`;
+    }
+    return errMsg;
+}
+
 async function submitJobInternal(workflow: ComfyuiWorkflowJson, baseUrl: string, token?: string): Promise<string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -720,14 +846,28 @@ async function submitJobInternal(workflow: ComfyuiWorkflowJson, baseUrl: string,
         } catch {
             // ignore
         }
-        throw new ComfyuiApiError(`ComfyUI 任务提交失败: ${errDetail}`, response.status);
+        const friendlyDetail = translateComfyuiValidationError(errDetail);
+        throw new ComfyuiApiError(`ComfyUI 任务提交失败: ${friendlyDetail}`, response.status);
     }
     const data = (await response.json()) as { prompt_id?: unknown; node_errors?: Record<string, unknown> };
     if (data?.node_errors && Object.keys(data.node_errors).length > 0) {
-        throw new ComfyuiApiError(`ComfyUI 工作流校验报错: ${JSON.stringify(data.node_errors)}`);
+        const friendly = translateComfyuiValidationError(JSON.stringify(data.node_errors));
+        throw new ComfyuiApiError(`ComfyUI 工作流校验报错: ${friendly}`);
     }
     if (typeof data?.prompt_id !== "string") throw new ComfyuiApiError("ComfyUI /prompt 响应未返回 prompt_id");
     return data.prompt_id;
+}
+
+function workflowHasYoloPaths(workflow: ComfyuiWorkflowJson): boolean {
+    for (const node of Object.values(workflow)) {
+        if (!node || typeof node !== "object" || !node.inputs || typeof node.inputs !== "object") continue;
+        for (const val of Object.values(node.inputs)) {
+            if (typeof val === "string" && /(?:^|[\\/])(bbox|segm)[\\/]/i.test(val)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 /**
@@ -739,7 +879,11 @@ export async function submitJob(workflow: ComfyuiWorkflowJson, baseUrl: string, 
         throw new ComfyuiNoWorkflowError("工作流拓扑为空，请检查当前渠道工作流配置或重新选择有效的工作流");
     }
 
-    // 1. 探测主机操作系统并自适应转换路径
+    // 1. 若工作流包含 segm/bbox 路径，探测主机操作系统并自适应转换路径
+    if (!workflowHasYoloPaths(workflow)) {
+        return await submitJobInternal(workflow, baseUrl, token);
+    }
+
     const targetOs = await detectComfyuiHostOs(baseUrl, token);
     const adaptedWorkflow = adaptWorkflowModelPaths(workflow, targetOs);
 
@@ -772,10 +916,14 @@ export async function submitJob(workflow: ComfyuiWorkflowJson, baseUrl: string, 
     }
 }
 
-/** How often the job status is polled while the job is pending or in progress. */
-const JOB_POLL_INTERVAL_MS = 2_000;
-/** Total window allowed for the job to complete before the request times out (2 hours). */
-const JOB_TIMEOUT_MS = 7_200_000;
+/** How often the job status is polled when running tasks exist (2 seconds). */
+export const JOB_POLL_INTERVAL_RUNNING_MS = 2_000;
+/** How often the job status is polled when all active tasks are in pending/queue (3.5 seconds). */
+export const JOB_POLL_INTERVAL_PENDING_MS = 3_500;
+/** Default poll interval for backward compatibility. */
+export const JOB_POLL_INTERVAL_MS = 2_000;
+/** Total window allowed for the job to complete before the request times out (18 hours). */
+export const JOB_TIMEOUT_MS = 64_800_000;
 
 type ComfyuiJobResponse = {
     status?: {
@@ -882,211 +1030,639 @@ export type PollJobResult = {
     job: ComfyuiJobResponse;
 };
 
-export async function pollJobRaw(jobId: string, baseUrl: string, token?: string, signal?: AbortSignal, deadlineMs?: number): Promise<PollJobResult | undefined> {
-    const headers: Record<string, string> = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const startedAt = Date.now();
-    for (;;) {
-        if (signal?.aborted) return undefined;
-        if (deadlineMs !== undefined && Date.now() >= deadlineMs) throw new ComfyuiTimeoutError(Math.max(0, deadlineMs - startedAt), jobId);
-        const response = await comfyuiFetch(`${normalizeBaseUrl(baseUrl)}/history/${jobId}`, { headers }, baseUrl);
-        if (!response.ok) throw new ComfyuiApiError(`Failed to poll ComfyUI history: ${response.status}`, response.status);
-        const data = (await response.json()) as Record<
-            string,
-            {
-                outputs?: Record<
-                    string,
-                    {
-                        images?: Array<{ filename: string; subfolder?: string; type?: string }>;
-                        videos?: Array<{ filename: string; subfolder?: string; type?: string }>;
-                        gifs?: Array<{ filename: string; subfolder?: string; type?: string }>;
-                        audio?: Array<{ filename: string; subfolder?: string; type?: string }>;
-                        text?: string[] | string;
-                        string?: string[] | string;
-                        animated?: boolean[];
-                        ui?: Record<string, unknown>;
-                    }
-                >;
-                status?: {
-                    status_str?: string;
-                    completed?: boolean;
-                    messages?: unknown[];
-                };
-            }
-        >;
+export function isComfyuiJobInterrupted(jobEntry: ComfyuiJobResponse): boolean {
+    const messages = jobEntry.status?.messages;
+    if (!Array.isArray(messages)) return false;
+    return messages.some((m) => {
+        if (Array.isArray(m) && m[0] === "execution_interrupted") return true;
+        if (typeof m === "object" && m !== null && (m as Record<string, unknown>).type === "execution_interrupted") return true;
+        return typeof m === "string" && m.includes("execution_interrupted");
+    });
+}
 
-        const jobEntry = data?.[jobId];
-        if (jobEntry) {
-            const statusStr = jobEntry.status?.status_str;
-            if (statusStr === "error") {
-                const msg = Array.isArray(jobEntry.status?.messages) ? JSON.stringify(jobEntry.status?.messages) : statusStr;
-                throw new ComfyuiJobError(`ComfyUI 执行失败: ${msg}`, statusStr);
-            }
+export function extractOutputsFromComfyuiJob(jobEntry: ComfyuiJobResponse): PollJobResult["outputs"] {
+    const rawOutputs = jobEntry.outputs || {};
+    const outputs: PollJobResult["outputs"] = [];
 
-            const rawOutputs = jobEntry.outputs || {};
-            const outputs: PollJobResult["outputs"] = [];
+    for (const [nodeId, nodeOut] of Object.entries(rawOutputs)) {
+        if (!nodeOut || typeof nodeOut !== "object") continue;
+        const out = nodeOut as {
+            images?: Array<{ filename: string; subfolder?: string; type?: string }>;
+            videos?: Array<{ filename: string; subfolder?: string; type?: string }>;
+            gifs?: Array<{ filename: string; subfolder?: string; type?: string }>;
+            audio?: unknown;
+            text?: string[] | string;
+            string?: string[] | string;
+            animated?: boolean[];
+            ui?: Record<string, unknown>;
+        };
 
-            for (const [nodeId, nodeOut] of Object.entries(rawOutputs)) {
-                if (!nodeOut || typeof nodeOut !== "object") continue;
-
-                if (Array.isArray(nodeOut.images)) {
-                    for (const img of nodeOut.images) {
-                        if (img?.filename) {
-                            const subfolder = img.subfolder || "";
-                            const itemType = img.type || "output";
-                            const isVideo = /\.(mp4|webm|mov|avi|mkv)$/i.test(img.filename);
-                            const isAnimated = Boolean(Array.isArray(nodeOut.animated) && nodeOut.animated[0]);
-                            const contentType = isVideo ? "video/mp4" : isAnimated ? "image/gif" : "image/png";
-                            const viewPath = `/api/view?filename=${encodeURIComponent(img.filename)}&type=${encodeURIComponent(itemType)}&subfolder=${encodeURIComponent(subfolder)}`;
-                            outputs.push({
-                                id: viewPath,
-                                filename: img.filename,
-                                subfolder,
-                                type: isVideo ? "video" : itemType,
-                                output_type: itemType,
-                                content_type: contentType,
-                                node_id: nodeId,
-                            });
-                        }
-                    }
+        if (Array.isArray(out.images)) {
+            for (const img of out.images) {
+                if (img?.filename) {
+                    const subfolder = img.subfolder || "";
+                    const itemType = img.type || "output";
+                    const isVideo = /\.(mp4|webm|mov|avi|mkv)$/i.test(img.filename);
+                    const isAnimated = Boolean(Array.isArray(out.animated) && out.animated[0]);
+                    const contentType = isVideo ? "video/mp4" : isAnimated ? "image/gif" : "image/png";
+                    const viewPath = `/api/view?filename=${encodeURIComponent(img.filename)}&type=${encodeURIComponent(itemType)}&subfolder=${encodeURIComponent(subfolder)}`;
+                    outputs.push({
+                        id: viewPath,
+                        filename: img.filename,
+                        subfolder,
+                        type: isVideo ? "video" : itemType,
+                        output_type: itemType,
+                        content_type: contentType,
+                        node_id: nodeId,
+                    });
                 }
-
-                if (Array.isArray(nodeOut.videos)) {
-                    for (const vid of nodeOut.videos) {
-                        if (vid?.filename) {
-                            const subfolder = vid.subfolder || "";
-                            const itemType = vid.type || "output";
-                            const viewPath = `/api/view?filename=${encodeURIComponent(vid.filename)}&type=${encodeURIComponent(itemType)}&subfolder=${encodeURIComponent(subfolder)}`;
-                            outputs.push({
-                                id: viewPath,
-                                filename: vid.filename,
-                                subfolder,
-                                type: "video",
-                                output_type: itemType,
-                                content_type: "video/mp4",
-                                node_id: nodeId,
-                            });
-                        }
-                    }
-                }
-                if (Array.isArray(nodeOut.gifs)) {
-                    for (const gif of nodeOut.gifs) {
-                        if (gif?.filename) {
-                            const subfolder = gif.subfolder || "";
-                            const itemType = gif.type || "output";
-                            const viewPath = `/api/view?filename=${encodeURIComponent(gif.filename)}&type=${encodeURIComponent(itemType)}&subfolder=${encodeURIComponent(subfolder)}`;
-                            outputs.push({
-                                id: viewPath,
-                                filename: gif.filename,
-                                subfolder,
-                                type: "video",
-                                output_type: itemType,
-                                content_type: "video/mp4",
-                                node_id: nodeId,
-                            });
-                        }
-                    }
-                }
-
-                const rawAudioList = Array.isArray(nodeOut.audio)
-                    ? nodeOut.audio
-                    : Array.isArray((nodeOut.ui as any)?.audio)
-                    ? (nodeOut.ui as any).audio
-                    : Array.isArray((nodeOut as any)?.audios)
-                    ? (nodeOut as any).audios
-                    : Array.isArray((nodeOut.ui as any)?.audios)
-                    ? (nodeOut.ui as any).audios
-                    : nodeOut.audio && typeof nodeOut.audio === "object"
-                    ? [nodeOut.audio]
-                    : (nodeOut.ui as any)?.audio && typeof (nodeOut.ui as any).audio === "object"
-                    ? [(nodeOut.ui as any).audio]
-                    : [];
-
-                if (rawAudioList.length > 0) {
-                    for (const aud of rawAudioList) {
-                        const filename = typeof aud === "string" ? aud : aud?.filename || aud?.name || "";
-                        if (filename) {
-                            const subfolder = typeof aud === "object" && aud?.subfolder ? aud.subfolder : "";
-                            const itemType = typeof aud === "object" && aud?.type ? aud.type : "output";
-                            const ext = filename.split(".").pop()?.toLowerCase() || "";
-                            const contentType =
-                                ext === "wav" ? "audio/wav" :
-                                ext === "ogg" ? "audio/ogg" :
-                                ext === "flac" ? "audio/flac" :
-                                ext === "opus" ? "audio/opus" :
-                                ext === "m4a" || ext === "aac" ? "audio/mp4" :
-                                "audio/mpeg";
-                            const viewPath = `/api/view?filename=${encodeURIComponent(filename)}&type=${encodeURIComponent(itemType)}&subfolder=${encodeURIComponent(subfolder)}`;
-                            outputs.push({
-                                id: viewPath,
-                                filename,
-                                subfolder,
-                                type: "audio",
-                                output_type: itemType,
-                                content_type: contentType,
-                                node_id: nodeId,
-                            });
-                        }
-                    }
-                } else {
-                    const scanObj = (nodeOut.ui && typeof nodeOut.ui === "object" ? { ...nodeOut, ...(nodeOut.ui as any) } : nodeOut) as Record<string, unknown>;
-                    for (const [key, val] of Object.entries(scanObj)) {
-                        if (key === "text" || key === "string" || key === "ui") continue;
-                        const items = Array.isArray(val) ? val : [val];
-                        for (const item of items) {
-                            if (!item) continue;
-                            const fn = typeof item === "string" ? item : typeof item === "object" && "filename" in item ? String(item.filename) : typeof item === "object" && "name" in item ? String(item.name) : "";
-                            if (fn && /\.(mp3|wav|ogg|flac|m4a|aac|opus)$/i.test(fn)) {
-                                const subfolder = typeof item === "object" && "subfolder" in item ? String(item.subfolder || "") : "";
-                                const itemType = typeof item === "object" && "type" in item ? String(item.type || "output") : "output";
-                                const viewPath = `/api/view?filename=${encodeURIComponent(fn)}&type=${encodeURIComponent(itemType)}&subfolder=${encodeURIComponent(subfolder)}`;
-                                outputs.push({
-                                    id: viewPath,
-                                    filename: fn,
-                                    subfolder,
-                                    type: "audio",
-                                    output_type: itemType,
-                                    content_type: "audio/mpeg",
-                                    node_id: nodeId,
-                                    });
-                            }
-                        }
-                    }
-                }
-
-                if (nodeOut.text) {
-                    const textVal = Array.isArray(nodeOut.text) ? nodeOut.text.join("\n") : String(nodeOut.text);
-                    if (textVal.trim()) {
-                        outputs.push({
-                            id: `text_${nodeId}`,
-                            text: textVal,
-                            content_type: "text/plain",
-                            node_id: nodeId,
-                        });
-                    }
-                }
-                if (nodeOut.string) {
-                    const strVal = Array.isArray(nodeOut.string) ? nodeOut.string.join("\n") : String(nodeOut.string);
-                    if (strVal.trim()) {
-                        outputs.push({
-                            id: `text_${nodeId}`,
-                            text: strVal,
-                            content_type: "text/plain",
-                            node_id: nodeId,
-                        });
-                    }
-                }
-            }
-
-            if (jobEntry.status?.completed || outputs.length > 0) {
-                // Prioritize outputs: type = "output" (0) > "temp" (1) > "input" / others (2)
-                outputs.sort((a, b) => getOutputTypeRank(a.output_type, a.id) - getOutputTypeRank(b.output_type, b.id));
-                return { outputs, job: jobEntry };
             }
         }
 
-        await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+        if (Array.isArray(out.videos)) {
+            for (const vid of out.videos) {
+                if (vid?.filename) {
+                    const subfolder = vid.subfolder || "";
+                    const itemType = vid.type || "output";
+                    const viewPath = `/api/view?filename=${encodeURIComponent(vid.filename)}&type=${encodeURIComponent(itemType)}&subfolder=${encodeURIComponent(subfolder)}`;
+                    outputs.push({
+                        id: viewPath,
+                        filename: vid.filename,
+                        subfolder,
+                        type: "video",
+                        output_type: itemType,
+                        content_type: "video/mp4",
+                        node_id: nodeId,
+                    });
+                }
+            }
+        }
+
+        if (Array.isArray(out.gifs)) {
+            for (const gif of out.gifs) {
+                if (gif?.filename) {
+                    const subfolder = gif.subfolder || "";
+                    const itemType = gif.type || "output";
+                    const viewPath = `/api/view?filename=${encodeURIComponent(gif.filename)}&type=${encodeURIComponent(itemType)}&subfolder=${encodeURIComponent(subfolder)}`;
+                    outputs.push({
+                        id: viewPath,
+                        filename: gif.filename,
+                        subfolder,
+                        type: "video",
+                        output_type: itemType,
+                        content_type: "video/mp4",
+                        node_id: nodeId,
+                    });
+                }
+            }
+        }
+
+        const rawAudioList = Array.isArray(out.audio)
+            ? out.audio
+            : Array.isArray((out.ui as any)?.audio)
+            ? (out.ui as any).audio
+            : Array.isArray((out as any)?.audios)
+            ? (out as any).audios
+            : Array.isArray((out.ui as any)?.audios)
+            ? (out.ui as any).audios
+            : out.audio && typeof out.audio === "object"
+            ? [out.audio]
+            : (out.ui as any)?.audio && typeof (out.ui as any).audio === "object"
+            ? [(out.ui as any).audio]
+            : [];
+
+        if (rawAudioList.length > 0) {
+            for (const aud of rawAudioList) {
+                const filename = typeof aud === "string" ? aud : aud?.filename || aud?.name || "";
+                if (filename) {
+                    const subfolder = typeof aud === "object" && aud?.subfolder ? aud.subfolder : "";
+                    const itemType = typeof aud === "object" && aud?.type ? aud.type : "output";
+                    const ext = filename.split(".").pop()?.toLowerCase() || "";
+                    const contentType =
+                        ext === "wav" ? "audio/wav" :
+                        ext === "ogg" ? "audio/ogg" :
+                        ext === "flac" ? "audio/flac" :
+                        ext === "opus" ? "audio/opus" :
+                        ext === "m4a" || ext === "aac" ? "audio/mp4" :
+                        "audio/mpeg";
+                    const viewPath = `/api/view?filename=${encodeURIComponent(filename)}&type=${encodeURIComponent(itemType)}&subfolder=${encodeURIComponent(subfolder)}`;
+                    outputs.push({
+                        id: viewPath,
+                        filename,
+                        subfolder,
+                        type: "audio",
+                        output_type: itemType,
+                        content_type: contentType,
+                        node_id: nodeId,
+                    });
+                }
+            }
+        } else {
+            const scanObj = (out.ui && typeof out.ui === "object" ? { ...out, ...(out.ui as any) } : out) as Record<string, unknown>;
+            for (const [key, val] of Object.entries(scanObj)) {
+                if (key === "text" || key === "string" || key === "ui") continue;
+                const items = Array.isArray(val) ? val : [val];
+                for (const item of items) {
+                    if (!item) continue;
+                    const fn = typeof item === "string" ? item : typeof item === "object" && "filename" in item ? String((item as any).filename) : typeof item === "object" && "name" in item ? String((item as any).name) : "";
+                    if (fn && /\.(mp3|wav|ogg|flac|m4a|aac|opus)$/i.test(fn)) {
+                        const subfolder = typeof item === "object" && "subfolder" in item ? String((item as any).subfolder || "") : "";
+                        const itemType = typeof item === "object" && "type" in item ? String((item as any).type || "output") : "output";
+                        const viewPath = `/api/view?filename=${encodeURIComponent(fn)}&type=${encodeURIComponent(itemType)}&subfolder=${encodeURIComponent(subfolder)}`;
+                        outputs.push({
+                            id: viewPath,
+                            filename: fn,
+                            subfolder,
+                            type: "audio",
+                            output_type: itemType,
+                            content_type: "audio/mpeg",
+                            node_id: nodeId,
+                        });
+                    }
+                }
+            }
+        }
+
+        if (out.text) {
+            const textVal = Array.isArray(out.text) ? out.text.join("\n") : String(out.text);
+            if (textVal.trim()) {
+                outputs.push({
+                    id: `text_${nodeId}`,
+                    text: textVal,
+                    content_type: "text/plain",
+                    node_id: nodeId,
+                });
+            }
+        }
+        if (out.string) {
+            const strVal = Array.isArray(out.string) ? out.string.join("\n") : String(out.string);
+            if (strVal.trim()) {
+                outputs.push({
+                    id: `text_${nodeId}`,
+                    text: strVal,
+                    content_type: "text/plain",
+                    node_id: nodeId,
+                });
+            }
+        }
     }
+
+    outputs.sort((a, b) => getOutputTypeRank(a.output_type, a.id) - getOutputTypeRank(b.output_type, b.id));
+    return outputs;
+}
+
+export type ComfyuiTaskStatus =
+    | "pending"     // 排队中 (在 queue_pending)
+    | "running"     // 执行中 (在 queue_running)
+    | "success"     // 执行成功 (在 history 且 status_str === "success")
+    | "error"       // 执行出错 (在 history 且 status_str === "error" 且非中断)
+    | "cancelled"   // 任务已取消 (在 history 且 messages 含 execution_interrupted，或本地标记取消)
+    | "lost"        // 任务丢失 (本地在等待，但服务端 /queue 与 /history 均无痕迹)
+    | "not_found";  // 任务不存在 (服务端查无此任务，且无本地等待上下文)
+
+export interface ComfyuiTaskStatusResult {
+    status: ComfyuiTaskStatus;
+    queuePosition?: number;
+    error?: string;
+    outputs?: PollJobResult["outputs"];
+    job?: ComfyuiJobResponse;
+}
+
+function evaluateFinishedJobEntry(jobEntry: ComfyuiJobResponse, isLocallyCancelled?: boolean): ComfyuiTaskStatusResult {
+    if (isComfyuiJobInterrupted(jobEntry) || isLocallyCancelled) {
+        return { status: "cancelled", job: jobEntry };
+    }
+    const statusStr = jobEntry.status?.status_str;
+    if (statusStr === "error") {
+        const msg = Array.isArray(jobEntry.status?.messages) ? JSON.stringify(jobEntry.status?.messages) : statusStr;
+        return { status: "error", error: msg, job: jobEntry };
+    }
+    const outputs = extractOutputsFromComfyuiJob(jobEntry);
+    if (statusStr === "success" || jobEntry.status?.completed || outputs.length > 0) {
+        return { status: "success", outputs, job: jobEntry };
+    }
+    return { status: "running", job: jobEntry };
+}
+
+/**
+ * 显式查询任务状态（一次性主动检测，不发起长时间轮询）
+ */
+export async function queryComfyuiJobStatus(
+    jobId: string,
+    baseUrl: string,
+    token?: string,
+    options?: { isLocallyActive?: boolean; isLocallyCancelled?: boolean },
+): Promise<ComfyuiTaskStatusResult> {
+    if (!jobId) {
+        return { status: "not_found" };
+    }
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const normalized = normalizeBaseUrl(baseUrl);
+    const historyUrl = `${normalized}/history/${jobId}`;
+    const queueUrl = `${normalized}/queue`;
+
+    // 1. 查询 /history/{jobId}
+    const historyResponse = await comfyuiFetch(historyUrl, { headers }, baseUrl);
+    if (!historyResponse.ok) throw new ComfyuiApiError(`Failed to fetch ComfyUI history: ${historyResponse.status}`, historyResponse.status);
+    const historyData = (await historyResponse.json()) as Record<string, ComfyuiJobResponse>;
+    const jobEntry = historyData?.[jobId];
+
+    if (jobEntry) {
+        return evaluateFinishedJobEntry(jobEntry, options?.isLocallyCancelled);
+    }
+
+    // 2. /history 为空，查询 /queue
+    const queueResponse = await comfyuiFetch(queueUrl, { headers }, baseUrl);
+    if (!queueResponse.ok) throw new ComfyuiApiError(`Failed to fetch ComfyUI queue: ${queueResponse.status}`, queueResponse.status);
+    const queueData = (await queueResponse.json()) as { queue_running?: unknown[]; queue_pending?: unknown[] };
+    const pendingList = Array.isArray(queueData.queue_pending) ? queueData.queue_pending : [];
+    const runningList = Array.isArray(queueData.queue_running) ? queueData.queue_running : [];
+
+    const pendingIndex = pendingList.findIndex((item) => Array.isArray(item) && String(item[1]) === jobId);
+    if (pendingIndex >= 0) {
+        return { status: "pending", queuePosition: pendingIndex + 1 };
+    }
+    const isRunning = runningList.some((item) => Array.isArray(item) && String(item[1]) === jobId);
+    if (isRunning) {
+        return { status: "running" };
+    }
+
+    // 3. 防竞态检查：若队列中无记录，二次拉取 /history（防止刚好完成从 running 移入 history 的瞬间）
+    const recheckResponse = await comfyuiFetch(historyUrl, { headers }, baseUrl);
+    if (recheckResponse.ok) {
+        const recheckData = (await recheckResponse.json()) as Record<string, ComfyuiJobResponse>;
+        const recheckEntry = recheckData?.[jobId];
+        if (recheckEntry) {
+            return evaluateFinishedJobEntry(recheckEntry, options?.isLocallyCancelled);
+        }
+    }
+
+    // 4. 队列与历史均查无此任务
+    if (options?.isLocallyCancelled) {
+        return { status: "cancelled" };
+    }
+    if (options?.isLocallyActive) {
+        return { status: "lost" };
+    }
+    return { status: "not_found" };
+}
+
+export const MAX_POLL_NETWORK_RETRIES = 5;
+
+interface TrackedJobSubscription {
+    startedAt: number;
+    deadlineMs?: number;
+    token?: string;
+    signal?: AbortSignal;
+    onProgress?: (status: string, detail?: Record<string, unknown>) => void;
+    resolve: (result: PollJobResult | undefined) => void;
+    reject: (error: unknown) => void;
+    onAbort?: () => void;
+}
+
+interface TrackedJobEntry {
+    jobId: string;
+    token?: string;
+    seenInQueue: boolean;
+    unseenTicks: number;
+    status: "pending" | "running" | "checking_history" | "unknown";
+    queuePosition?: number;
+    subscriptions: TrackedJobSubscription[];
+}
+
+/**
+ * 统一批量轮询调度器 (按 baseUrl 聚合实例)
+ * 多个并发任务共享单次 /queue 批量查询，大幅减轻对 ComfyUI 服务端的请求压力；
+ * 采用自适应节拍：全 pending 时放缓至 3.5s，有 running 时保持 2s，出队时精准拉取 /history。
+ */
+export class ComfyuiJobBatchPoller {
+    readonly baseUrl: string;
+    private jobs = new Map<string, TrackedJobEntry>();
+    private isRunning = false;
+    private hasRunningJobs = false;
+    private consecutiveNetworkErrors = 0;
+
+    constructor(baseUrl: string) {
+        this.baseUrl = normalizeBaseUrl(baseUrl);
+    }
+
+    poll(
+        jobId: string,
+        token?: string,
+        signal?: AbortSignal,
+        deadlineMs?: number,
+        onProgress?: (status: string, detail?: Record<string, unknown>) => void,
+    ): Promise<PollJobResult | undefined> {
+        if (signal?.aborted) return Promise.resolve(undefined);
+
+        const startedAt = Date.now();
+        const effectiveDeadline = deadlineMs ?? (startedAt + JOB_TIMEOUT_MS);
+
+        return new Promise<PollJobResult | undefined>((resolve, reject) => {
+            let entry = this.jobs.get(jobId);
+            if (!entry) {
+                entry = {
+                    jobId,
+                    token,
+                    seenInQueue: false,
+                    unseenTicks: 0,
+                    status: "unknown",
+                    subscriptions: [],
+                };
+                this.jobs.set(jobId, entry);
+            } else if (token && !entry.token) {
+                entry.token = token;
+            }
+
+            const sub: TrackedJobSubscription = {
+                startedAt,
+                deadlineMs: effectiveDeadline,
+                token,
+                signal,
+                onProgress,
+                resolve,
+                reject,
+            };
+
+            if (signal) {
+                const onAbort = () => {
+                    this.removeSubscription(jobId, sub);
+                    resolve(undefined);
+                };
+                sub.onAbort = onAbort;
+                signal.addEventListener("abort", onAbort, { once: true });
+            }
+
+            entry.subscriptions.push(sub);
+
+            // 若已有现成进度状态，立即同步一次
+            if (entry.status === "pending" && entry.queuePosition !== undefined) {
+                onProgress?.("pending", { queuePosition: entry.queuePosition });
+            } else if (entry.status === "running") {
+                onProgress?.("running");
+            }
+
+            this.ensureLoop();
+        });
+    }
+
+    private removeSubscription(jobId: string, sub: TrackedJobSubscription) {
+        if (sub.signal && sub.onAbort) {
+            sub.signal.removeEventListener("abort", sub.onAbort);
+        }
+        const entry = this.jobs.get(jobId);
+        if (!entry) return;
+        const idx = entry.subscriptions.indexOf(sub);
+        if (idx >= 0) {
+            entry.subscriptions.splice(idx, 1);
+        }
+        if (entry.subscriptions.length === 0) {
+            this.jobs.delete(jobId);
+        }
+    }
+
+    private ensureLoop() {
+        if (this.isRunning || this.jobs.size === 0) return;
+        this.isRunning = true;
+        void this.loop();
+    }
+
+    private async loop() {
+        while (this.isRunning && this.jobs.size > 0) {
+            await this.tick();
+            if (!this.isRunning || this.jobs.size === 0) break;
+            const interval = this.hasRunningJobs ? JOB_POLL_INTERVAL_RUNNING_MS : JOB_POLL_INTERVAL_PENDING_MS;
+            await new Promise((resolve) => setTimeout(resolve, interval));
+        }
+        this.isRunning = false;
+    }
+
+    private async tick() {
+        const now = Date.now();
+
+        // 1. 检查各任务的所有订阅是否超时
+        for (const [jobId, entry] of Array.from(this.jobs.entries())) {
+            const timedOutSubs: TrackedJobSubscription[] = [];
+            for (const sub of entry.subscriptions) {
+                if (sub.deadlineMs !== undefined && now >= sub.deadlineMs) {
+                    timedOutSubs.push(sub);
+                }
+            }
+            for (const sub of timedOutSubs) {
+                this.removeSubscription(jobId, sub);
+                sub.reject(new ComfyuiTimeoutError(Math.max(0, (sub.deadlineMs || now) - sub.startedAt), jobId));
+            }
+        }
+        if (this.jobs.size === 0) return;
+
+        // 2. 尝试批量单次请求 /queue
+        const anyToken = Array.from(this.jobs.values()).find((e) => e.token)?.token;
+        const headers: Record<string, string> = {};
+        if (anyToken) headers.Authorization = `Bearer ${anyToken}`;
+
+        let queueData: { queue_running?: unknown[]; queue_pending?: unknown[] } | null = null;
+        let fallbackToHistory = false;
+
+        try {
+            const queueRes = await comfyuiFetch(`${this.baseUrl}/queue`, { headers }, this.baseUrl);
+            if (queueRes.ok) {
+                queueData = (await queueRes.json()) as { queue_running?: unknown[]; queue_pending?: unknown[] };
+                this.consecutiveNetworkErrors = 0;
+            } else {
+                fallbackToHistory = true;
+            }
+        } catch (error) {
+            if (error instanceof ComfyuiNetworkError) {
+                this.consecutiveNetworkErrors++;
+                if (this.consecutiveNetworkErrors <= MAX_POLL_NETWORK_RETRIES) {
+                    for (const entry of this.jobs.values()) {
+                        for (const sub of entry.subscriptions) {
+                            sub.onProgress?.("network_retry", {
+                                retryCount: this.consecutiveNetworkErrors,
+                                maxRetries: MAX_POLL_NETWORK_RETRIES,
+                                baseUrl: this.baseUrl,
+                                message: `服务连接中断，正在重试 (${this.consecutiveNetworkErrors}/${MAX_POLL_NETWORK_RETRIES})...`,
+                            });
+                        }
+                    }
+                    return;
+                }
+                const entries = Array.from(this.jobs.values());
+                this.jobs.clear();
+                for (const entry of entries) {
+                    for (const sub of entry.subscriptions) {
+                        if (sub.signal && sub.onAbort) sub.signal.removeEventListener("abort", sub.onAbort);
+                        sub.reject(new ComfyuiNetworkError(this.baseUrl, entry.jobId, error));
+                    }
+                }
+                return;
+            }
+            throw error;
+        }
+
+        if (fallbackToHistory || !queueData) {
+            await this.checkHistoryForEntries(Array.from(this.jobs.values()));
+            return;
+        }
+
+        // 3. 解析 /queue 列表
+        const pendingList = Array.isArray(queueData.queue_pending) ? queueData.queue_pending : [];
+        const runningList = Array.isArray(queueData.queue_running) ? queueData.queue_running : [];
+
+        const pendingMap = new Map<string, number>();
+        pendingList.forEach((item, index) => {
+            if (Array.isArray(item) && item[1]) {
+                pendingMap.set(String(item[1]), index + 1);
+            }
+        });
+
+        const runningSet = new Set<string>();
+        runningList.forEach((item) => {
+            if (Array.isArray(item) && item[1]) {
+                runningSet.add(String(item[1]));
+            }
+        });
+
+        this.hasRunningJobs = runningSet.size > 0;
+
+        const entriesToCheckHistory: TrackedJobEntry[] = [];
+
+        for (const [jobId, entry] of Array.from(this.jobs.entries())) {
+            if (pendingMap.has(jobId)) {
+                entry.seenInQueue = true;
+                entry.unseenTicks = 0;
+                const pos = pendingMap.get(jobId)!;
+                entry.status = "pending";
+                entry.queuePosition = pos;
+                for (const sub of entry.subscriptions) {
+                    sub.onProgress?.("pending", { queuePosition: pos });
+                }
+            } else if (runningSet.has(jobId)) {
+                entry.seenInQueue = true;
+                entry.unseenTicks = 0;
+                entry.status = "running";
+                entry.queuePosition = undefined;
+                for (const sub of entry.subscriptions) {
+                    sub.onProgress?.("running");
+                }
+            } else {
+                entry.unseenTicks++;
+                entriesToCheckHistory.push(entry);
+            }
+        }
+
+        if (entriesToCheckHistory.length > 0) {
+            await this.checkHistoryForEntries(entriesToCheckHistory);
+        }
+    }
+
+    private async checkHistoryForEntries(entries: TrackedJobEntry[]) {
+        for (const entry of entries) {
+            if (!this.jobs.has(entry.jobId)) continue;
+            const headers: Record<string, string> = {};
+            if (entry.token) headers.Authorization = `Bearer ${entry.token}`;
+
+            try {
+                const res = await comfyuiFetch(`${this.baseUrl}/history/${entry.jobId}`, { headers }, this.baseUrl);
+                if (!res.ok) {
+                    throw new ComfyuiApiError(`Failed to poll ComfyUI history: ${res.status}`, res.status);
+                }
+                const data = (await res.json()) as Record<string, ComfyuiJobResponse>;
+                const jobEntry = data?.[entry.jobId];
+
+                if (jobEntry) {
+                    this.jobs.delete(entry.jobId);
+                    if (isComfyuiJobInterrupted(jobEntry)) {
+                        for (const sub of entry.subscriptions) {
+                            if (sub.signal && sub.onAbort) sub.signal.removeEventListener("abort", sub.onAbort);
+                            sub.reject(new ComfyuiJobCancelledError(entry.jobId));
+                        }
+                        continue;
+                    }
+                    const statusStr = jobEntry.status?.status_str;
+                    if (statusStr === "error") {
+                        const msg = Array.isArray(jobEntry.status?.messages) ? JSON.stringify(jobEntry.status?.messages) : statusStr;
+                        for (const sub of entry.subscriptions) {
+                            if (sub.signal && sub.onAbort) sub.signal.removeEventListener("abort", sub.onAbort);
+                            sub.reject(new ComfyuiJobError(`ComfyUI 执行失败: ${msg}`, statusStr));
+                        }
+                        continue;
+                    }
+                    const outputs = extractOutputsFromComfyuiJob(jobEntry);
+                    if (statusStr === "success" || jobEntry.status?.completed || outputs.length > 0) {
+                        for (const sub of entry.subscriptions) {
+                            if (sub.signal && sub.onAbort) sub.signal.removeEventListener("abort", sub.onAbort);
+                            sub.resolve({ outputs, job: jobEntry });
+                        }
+                        continue;
+                    }
+                } else {
+                    const isLost = entry.seenInQueue ? entry.unseenTicks >= 2 : entry.unseenTicks >= 3;
+                    if (isLost) {
+                        this.jobs.delete(entry.jobId);
+                        for (const sub of entry.subscriptions) {
+                            if (sub.signal && sub.onAbort) sub.signal.removeEventListener("abort", sub.onAbort);
+                            sub.reject(new ComfyuiJobLostError(entry.jobId));
+                        }
+                    }
+                }
+            } catch (error) {
+                if (error instanceof ComfyuiNetworkError) {
+                    continue;
+                }
+                this.jobs.delete(entry.jobId);
+                for (const sub of entry.subscriptions) {
+                    if (sub.signal && sub.onAbort) sub.signal.removeEventListener("abort", sub.onAbort);
+                    sub.reject(error);
+                }
+            }
+        }
+    }
+
+    clear() {
+        this.isRunning = false;
+        this.hasRunningJobs = false;
+        this.consecutiveNetworkErrors = 0;
+        for (const entry of this.jobs.values()) {
+            for (const sub of entry.subscriptions) {
+                if (sub.signal && sub.onAbort) sub.signal.removeEventListener("abort", sub.onAbort);
+            }
+        }
+        this.jobs.clear();
+    }
+}
+
+const batchPollers = new Map<string, ComfyuiJobBatchPoller>();
+
+export function getBatchPoller(baseUrl: string): ComfyuiJobBatchPoller {
+    const normalized = normalizeBaseUrl(baseUrl);
+    let poller = batchPollers.get(normalized);
+    if (!poller) {
+        poller = new ComfyuiJobBatchPoller(normalized);
+        batchPollers.set(normalized, poller);
+    }
+    return poller;
+}
+
+export function resetComfyuiBatchPollers() {
+    for (const poller of batchPollers.values()) {
+        poller.clear();
+    }
+    batchPollers.clear();
+}
+
+export function pollJobRaw(
+    jobId: string,
+    baseUrl: string,
+    token?: string,
+    signal?: AbortSignal,
+    deadlineMs?: number,
+    onProgress?: (status: string, detail?: Record<string, unknown>) => void,
+): Promise<PollJobResult | undefined> {
+    const poller = getBatchPoller(baseUrl);
+    return poller.poll(jobId, token, signal, deadlineMs, onProgress);
 }
 
 /**
@@ -1099,8 +1675,9 @@ export async function pollJob(
     signal?: AbortSignal,
     deadlineMs?: number,
     collector: (outputs: unknown) => string[] = collectImageAssetIds,
+    onProgress?: (status: string, detail?: Record<string, unknown>) => void,
 ): Promise<string[] | undefined> {
-    const res = await pollJobRaw(jobId, baseUrl, token, signal, deadlineMs);
+    const res = await pollJobRaw(jobId, baseUrl, token, signal, deadlineMs, onProgress);
     return res !== undefined ? collector(res.outputs) : undefined;
 }
 
@@ -1335,28 +1912,52 @@ export async function requestComfyuiImage(req: ComfyuiImageRequest): Promise<Com
             : Array.isArray(channel.workflows)
               ? getDefaultWorkflow(channel, category)
               : undefined;
-        const workflow = targetWorkflowItem
-            ? { json: targetWorkflowItem.json }
-            : isI2i
+        const channelWorkflow = isI2i
             ? (channelModel && isI2iWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
               channel.comfyuiI2iWorkflow ||
               channel.models.find((m) => isI2iWorkflowModel(m))?.comfyuiWorkflow
             : (channelModel && isT2iWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
               channel.comfyuiT2iWorkflow ||
               channel.models.find((m) => isT2iWorkflowModel(m))?.comfyuiWorkflow;
+
+        const modelProfile = getModelProfile(req.model || targetWorkflowItem?.id || targetWorkflowItem?.name || rawModel);
+        if (modelProfile) {
+            validateModelExecution(modelProfile, {
+                imagesCount: references.length,
+                size: req.size,
+            });
+        }
+        const profileWorkflow = modelProfile ? getWorkflowForModelProfile(modelProfile.id) : undefined;
+        const workflow = targetWorkflowItem
+            ? { json: targetWorkflowItem.json }
+            : channelWorkflow
+            ? { json: channelWorkflow.json }
+            : profileWorkflow
+            ? { json: profileWorkflow.json }
+            : undefined;
         if (!workflow) throw new ComfyuiNoWorkflowError(i18n.t("comfyui.noWorkflow", { model: requestModel }));
         const baseUrl = (channel.comfyuiProxyUrl || "").trim();
         const token = channel.comfyuiProxyToken;
 
         if (!jobId) {
-            const referenceSlots = imageReferenceSlots(workflow.json);
-            if (references.length && !referenceSlots.length) throw new ComfyuiError(i18n.t("comfyui.noImageReferenceSlot"));
-            if (references.length > referenceSlots.length) throw new ComfyuiError(i18n.t("comfyui.imageReferenceLimit", { count: referenceSlots.length }));
+            if (!modelProfile) {
+                const referenceSlots = imageReferenceSlots(workflow.json);
+                if (references.length && !referenceSlots.length) throw new ComfyuiError(i18n.t("comfyui.noImageReferenceSlot"));
+                if (references.length > referenceSlots.length) throw new ComfyuiError(i18n.t("comfyui.imageReferenceLimit", { count: referenceSlots.length }));
+            }
 
             const size = parseSize(req.size);
             if (seed === undefined) seed = generateRandomSeed();
             const refImages = await Promise.all(references.map((image, index) => uploadComfyuiAsset(baseUrl, token, image.dataUrl, image.name || `ref_image_${index + 1}.png`, req.signal)));
-            const boundWorkflow = applyBindings(workflow.json, { prompt: req.prompt, width: size.width, height: size.height, seed, refImages });
+            const boundWorkflow = modelProfile
+                ? dispatchComfyuiModelWorkflow(modelProfile, workflow.json, {
+                      prompt: req.prompt,
+                      width: size.width,
+                      height: size.height,
+                      seed,
+                      assetIds: refImages,
+                  })
+                : applyBindings(workflow.json, { prompt: req.prompt, width: size.width, height: size.height, seed, refImages });
             jobId = await submitJob(boundWorkflow, baseUrl, token);
             req.onProgress?.("submitted", { jobId });
         }
@@ -1367,7 +1968,7 @@ export async function requestComfyuiImage(req: ComfyuiImageRequest): Promise<Com
             throw new ComfyuiAbortedError();
         }
 
-        const polling = pollJob(jobId, baseUrl, token, signal, startedAt + JOB_TIMEOUT_MS);
+        const polling = pollJob(jobId, baseUrl, token, signal, startedAt + JOB_TIMEOUT_MS, collectImageAssetIds, req.onProgress);
         let waiting: Promise<string[] | undefined> = polling;
         if (signal) {
             // `{ once: true }` keeps the cancel call idempotent across repeated aborts;
@@ -1479,9 +2080,13 @@ export async function requestComfyuiInpaint(req: ComfyuiInpaintRequest): Promise
             : Array.isArray(channel.workflows)
               ? getDefaultWorkflow(channel, "inpaint")
               : undefined;
+        const modelProfile = getModelProfile(req.model || targetWorkflowItem?.id || targetWorkflowItem?.name || rawModel || "inpaint");
+        const profileWorkflow = modelProfile ? getWorkflowForModelProfile(modelProfile.id) : undefined;
         const inpaintWorkflow =
             targetWorkflowItem
                 ? { json: targetWorkflowItem.json }
+                : profileWorkflow
+                ? { json: profileWorkflow.json }
                 : (channelModel && isInpaintWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
                   channel.comfyuiInpaintWorkflow ||
                   channel.models.find((m) => isInpaintWorkflowModel(m))?.comfyuiWorkflow;
@@ -1500,12 +2105,19 @@ export async function requestComfyuiInpaint(req: ComfyuiInpaintRequest): Promise
 
             // 2. Bind parameters into workflow
             if (seed === undefined) seed = generateRandomSeed();
-            const boundWorkflow = applyBindings(inpaintWorkflow.json, {
-                prompt: req.prompt,
-                seed,
-                refImages: [refAssetId],
-                refMask: maskAssetId,
-            });
+            const boundWorkflow = modelProfile
+                ? dispatchComfyuiModelWorkflow(modelProfile, inpaintWorkflow.json, {
+                      prompt: req.prompt,
+                      seed,
+                      assetIds: [refAssetId],
+                      maskAssetId,
+                  })
+                : applyBindings(inpaintWorkflow.json, {
+                      prompt: req.prompt,
+                      seed,
+                      refImages: [refAssetId],
+                      refMask: maskAssetId,
+                  });
 
             // 3. Submit job
             jobId = await submitJob(boundWorkflow, baseUrl, token);
@@ -1519,7 +2131,7 @@ export async function requestComfyuiInpaint(req: ComfyuiInpaintRequest): Promise
         }
 
         // 4. Poll job
-        const polling = pollJob(jobId, baseUrl, token, signal, startedAt + JOB_TIMEOUT_MS, (outputs) => prioritizeInpaintOutput(outputs, inpaintWorkflow.json));
+        const polling = pollJob(jobId, baseUrl, token, signal, startedAt + JOB_TIMEOUT_MS, (outputs) => prioritizeInpaintOutput(outputs, inpaintWorkflow.json), req.onProgress);
         let waiting: Promise<string[] | undefined> = polling;
         if (signal) {
             const aborted: Promise<never> = new Promise((_resolve, reject) => {
@@ -1661,7 +2273,13 @@ export const FALLBACK_COMFYUI_TEXT_WORKFLOW_JSON: ComfyuiWorkflowJson = {
  */
 export function applyTextBindings(
     workflow: ComfyuiWorkflowJson,
-    params: { prompt: string; assetId?: string; seed?: number },
+    params: {
+        prompt: string;
+        assetId?: string;
+        seed?: number;
+        maxLength?: number;
+        thinking?: boolean;
+    },
 ): ComfyuiWorkflowJson {
     const cloned = structuredClone(workflow);
     type NodeRecord = {
@@ -1682,9 +2300,18 @@ export function applyTextBindings(
         const title = rawTitle.trim().toLowerCase();
 
         if (title === "prompt" && record.inputs) {
-            if ("value" in record.inputs) record.inputs.value = params.prompt;
-            else if ("text" in record.inputs) record.inputs.text = params.prompt;
-            else if ("prompt" in record.inputs) record.inputs.prompt = params.prompt;
+            const defaultVlmPrompt =
+                "请根据参考图片反推一段适合用于 AI 生图的提示词。\n\n要求：\n1. 只输出提示词正文，不要解释。\n2. 覆盖主体、构图、风格、光线、色彩、材质、镜头和氛围。\n3. 尽量写成可直接用于生图模型的完整提示词。";
+            const promptVal = params.prompt && params.prompt.trim()
+                ? params.prompt
+                : params.assetId
+                ? (typeof record.inputs.value === "string" && record.inputs.value && record.inputs.value.includes("反推")
+                    ? record.inputs.value
+                    : defaultVlmPrompt)
+                : params.prompt;
+            if ("value" in record.inputs) record.inputs.value = promptVal;
+            else if ("text" in record.inputs) record.inputs.text = promptVal;
+            else if ("prompt" in record.inputs) record.inputs.prompt = promptVal;
         } else if (title === "image" || title === "ref_image_01" || title === "ref_image") {
             imageNodeId = nodeId;
         } else if (title === "seed" && params.seed !== undefined && record.inputs) {
@@ -1732,6 +2359,19 @@ export function applyTextBindings(
             } else if ("seed" in record.inputs && !Array.isArray(record.inputs.seed)) {
                 record.inputs.seed = params.seed;
             }
+        }
+    }
+
+    // 4. Handle text generator parameters: max_length, thinking
+    for (const node of Object.values(cloned)) {
+        if (typeof node !== "object" || node === null) continue;
+        const record = node as NodeRecord;
+        if (!record.inputs) continue;
+        if (params.maxLength !== undefined && "max_length" in record.inputs && typeof record.inputs.max_length === "number") {
+            record.inputs.max_length = params.maxLength;
+        }
+        if (params.thinking !== undefined && "thinking" in record.inputs && typeof record.inputs.thinking === "boolean") {
+            record.inputs.thinking = params.thinking;
         }
     }
 
@@ -1833,6 +2473,8 @@ export interface ComfyuiTextRequest {
     channelId?: string;
     workflowId?: string;
     seed?: number;
+    maxLength?: number;
+    thinking?: boolean;
     jobId?: string;
     signal?: AbortSignal;
     onProgress?: (status: string, detail?: { jobId?: string }) => void;
@@ -1879,6 +2521,8 @@ export async function requestComfyuiText(req: ComfyuiTextRequest): Promise<{ tex
                 prompt: req.prompt,
                 assetId,
                 seed,
+                maxLength: req.maxLength,
+                thinking: req.thinking,
             });
 
             jobId = await submitJob(boundWorkflow, baseUrl, token);
@@ -1891,7 +2535,7 @@ export async function requestComfyuiText(req: ComfyuiTextRequest): Promise<{ tex
             throw new ComfyuiAbortedError();
         }
 
-        const polling = pollJobRaw(jobId, baseUrl, token, signal, startedAt + JOB_TIMEOUT_MS);
+        const polling = pollJobRaw(jobId, baseUrl, token, signal, startedAt + JOB_TIMEOUT_MS, req.onProgress);
         let waiting: Promise<PollJobResult | undefined> = polling;
         if (signal) {
             const aborted: Promise<never> = new Promise((_resolve, reject) => {
@@ -2350,6 +2994,31 @@ export function applyVideoBindings(
         }
     }
 
+    // 动态切换潜空间路由开关（例如文生图与图生图/多图参考切换的 ComfySwitchNode）
+    for (const node of Object.values(cloned)) {
+        if (typeof node !== "object" || node === null) continue;
+        const record = node as NodeRecord;
+        if (record.class_type === "ComfySwitchNode" && record.inputs) {
+            const onTrue = record.inputs.on_true;
+            const onFalse = record.inputs.on_false;
+            if (Array.isArray(onTrue) && Array.isArray(onFalse)) {
+                const trueTargetId = String(onTrue[0]);
+                const falseTargetId = String(onFalse[0]);
+                const trueTargetNode = cloned[trueTargetId] as NodeRecord | undefined;
+                const falseTargetNode = cloned[falseTargetId] as NodeRecord | undefined;
+
+                const trueIsEmptyLatent = Boolean(trueTargetNode?.class_type?.includes("EmptyLatent"));
+                const falseIsEmptyLatent = Boolean(falseTargetNode?.class_type?.includes("EmptyLatent"));
+
+                if (trueIsEmptyLatent && !falseIsEmptyLatent) {
+                    record.inputs.switch = assignedImageCount === 0;
+                } else if (falseIsEmptyLatent && !trueIsEmptyLatent) {
+                    record.inputs.switch = assignedImageCount > 0;
+                }
+            }
+        }
+    }
+
     return cloned;
 }
 
@@ -2390,24 +3059,35 @@ export async function submitComfyuiVideoJob(req: ComfyuiVideoRequest): Promise<{
         : Array.isArray(channel.workflows)
           ? getDefaultWorkflow(channel, initialVideoMode === "frame" ? "frameVideo" : "omniVideo")
           : undefined;
+    const modelProfile = getModelProfile(req.model || targetWorkflowItem?.id || targetWorkflowItem?.name || rawModel || initialVideoMode);
     const isFrameWorkflow = targetWorkflowItem?.category === "frameVideo";
-    const isOmniOrRefineWorkflow = targetWorkflowItem?.category === "omniVideo" || targetWorkflowItem?.category === "faceRefine" || targetWorkflowItem?.category === "depthVideo";
-    const hasReferenceVideos = Boolean(req.referenceVideos && req.referenceVideos.length > 0);
-    const videoMode = isFrameWorkflow
-        ? "frame"
-        : isOmniOrRefineWorkflow || hasReferenceVideos
-        ? "omni"
-        : initialVideoMode;
+    const isFrameMode = modelProfile?.category === "frameVideo" || isFrameWorkflow || initialVideoMode === "frame";
+    const videoMode = isFrameMode ? "frame" : "omni";
+    if (modelProfile) {
+        validateModelExecution(modelProfile, {
+            imagesCount: (req.references?.length || 0) + (req.firstFrame ? 1 : 0) + (req.lastFrame ? 1 : 0),
+            videosCount: req.referenceVideos?.length || 0,
+            audiosCount: req.referenceAudios?.length || 0,
+            size: req.config.size,
+            duration: req.config.videoSeconds ? Number(req.config.videoSeconds) : undefined,
+        });
+    }
+
+    const profileWorkflow = modelProfile ? getWorkflowForModelProfile(modelProfile.id) : undefined;
     const videoWorkflow =
         targetWorkflowItem
             ? { json: targetWorkflowItem.json }
+            : profileWorkflow
+            ? { json: profileWorkflow.json }
             : videoMode === "frame"
             ? (channelModel && isFrameVideoWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
               channel.comfyuiFrameVideoWorkflow ||
-              channel.models.find((m) => isFrameVideoWorkflowModel(m))?.comfyuiWorkflow
+              channel.models.find((m) => isFrameVideoWorkflowModel(m))?.comfyuiWorkflow ||
+              DEFAULT_COMFYUI_FRAME_VIDEO_WORKFLOW
             : (channelModel && isOmniVideoWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
               channel.comfyuiVideoWorkflow ||
-              channel.models.find((m) => isOmniVideoWorkflowModel(m))?.comfyuiWorkflow;
+              channel.models.find((m) => isOmniVideoWorkflowModel(m))?.comfyuiWorkflow ||
+              DEFAULT_COMFYUI_VIDEO_WORKFLOW;
 
     if (!videoWorkflow) {
         throw new ComfyuiNoWorkflowError(i18n.t(videoMode === "frame" ? "comfyui.noFrameVideoWorkflow" : "comfyui.noVideoWorkflow"));
@@ -2506,26 +3186,45 @@ export async function submitComfyuiVideoJob(req: ComfyuiVideoRequest): Promise<{
     const duration = req.seconds !== undefined ? Math.max(1, Math.round(req.seconds)) : req.config.videoSeconds ? Number(req.config.videoSeconds) : 5;
 
     const seed = req.seed !== undefined ? req.seed : generateRandomSeed() % 1_000_000_000;
-    const boundWorkflow = applyVideoBindings(videoWorkflow.json, {
-        prompt: req.prompt,
-        assetIds,
-        videoAssetIds,
-        audioAssetIds,
-        firstFrameAssetId,
-        lastFrameAssetId,
-        videoMode,
-        seed,
-        width,
-        height,
-        duration,
-    });
+    const boundWorkflow = modelProfile
+        ? dispatchComfyuiModelWorkflow(modelProfile, videoWorkflow.json, {
+              prompt: req.prompt,
+              width,
+              height,
+              duration,
+              seed,
+              firstFrameAssetId,
+              lastFrameAssetId,
+              assetIds,
+              videoAssetIds,
+              audioAssetIds,
+          })
+        : applyVideoBindings(videoWorkflow.json, {
+              prompt: req.prompt,
+              assetIds,
+              videoAssetIds,
+              audioAssetIds,
+              firstFrameAssetId,
+              lastFrameAssetId,
+              videoMode,
+              seed,
+              width,
+              height,
+              duration,
+          });
 
     const jobId = await submitJob(boundWorkflow, baseUrl, token);
     return { jobId, baseUrl, token };
 }
 
-export async function pollComfyuiVideoJob(jobId: string, baseUrl: string, token?: string, signal?: AbortSignal): Promise<{ url: string; mimeType: string }> {
-    const assetIds = await pollJob(jobId, baseUrl, token, signal, Date.now() + JOB_TIMEOUT_MS, collectVideoAssetIds);
+export async function pollComfyuiVideoJob(
+    jobId: string,
+    baseUrl: string,
+    token?: string,
+    signal?: AbortSignal,
+    onProgress?: (status: string, detail?: Record<string, unknown>) => void,
+): Promise<{ url: string; mimeType: string }> {
+    const assetIds = await pollJob(jobId, baseUrl, token, signal, Date.now() + JOB_TIMEOUT_MS, collectVideoAssetIds, onProgress);
     if (!assetIds) {
         throw new ComfyuiAbortedError();
     }
@@ -2556,7 +3255,7 @@ export async function requestComfyuiVideo(req: ComfyuiVideoRequest): Promise<{ u
             throw new ComfyuiAbortedError();
         }
 
-        const polling = pollComfyuiVideoJob(jobId, baseUrl, token, signal);
+        const polling = pollComfyuiVideoJob(jobId, baseUrl, token, signal, req.onProgress);
         let waiting: Promise<{ url: string; mimeType: string }> = polling;
         if (signal) {
             // `{ once: true }` keeps the cancel call idempotent across repeated aborts;
@@ -2592,88 +3291,7 @@ export type ComfyuiAudioBindings = {
  * Split prompt strictly by [caption] and [lyrics] tags.
  * If neither tag is present, the whole text is passed as caption.
  */
-export function parseAudioPrompt(rawPrompt: string): { caption: string; lyrics: string } {
-    const text = (rawPrompt || "").trim();
-    if (!text) return { caption: "", lyrics: "" };
-
-    const captionMatch = /\[caption\]([\s\S]*?)(?=\[lyrics\]|$)/i.exec(text);
-    const lyricsMatch = /\[lyrics\]([\s\S]*?)(?=\[caption\]|$)/i.exec(text);
-
-    if (captionMatch || lyricsMatch) {
-        return {
-            caption: (captionMatch ? captionMatch[1] : "").trim(),
-            lyrics: (lyricsMatch ? lyricsMatch[1] : "").trim(),
-        };
-    }
-
-    return {
-        caption: text,
-        lyrics: "",
-    };
-}
-
-export function applyAudioBindings(workflow: ComfyuiWorkflowJson, params: ComfyuiAudioBindings): ComfyuiWorkflowJson {
-    const cloned = structuredClone(workflow);
-    type NodeRecord = { class_type?: string; inputs?: Record<string, unknown>; _meta?: { title?: unknown } };
-    let boundSeed = false;
-
-    for (const node of Object.values(cloned)) {
-        if (typeof node !== "object" || node === null) continue;
-        const record = node as NodeRecord;
-        const rawTitle = record._meta?.title;
-        if (typeof rawTitle !== "string" || !record.class_type || !record.inputs) continue;
-        const title = rawTitle.trim().toLowerCase();
-        let slot: string | undefined;
-        let value: unknown;
-
-        if (title === "caption" && params.caption !== undefined) {
-            slot = BINDING_TITLE_TO_INPUT_SLOT.caption?.[record.class_type] ||
-                ("value" in record.inputs ? "value" : "text" in record.inputs ? "text" : "caption" in record.inputs ? "caption" : undefined);
-            value = params.caption;
-        } else if (title === "lyrics" && params.lyrics !== undefined) {
-            slot = BINDING_TITLE_TO_INPUT_SLOT.lyrics?.[record.class_type] ||
-                ("value" in record.inputs ? "value" : "text" in record.inputs ? "text" : "lyrics" in record.inputs ? "lyrics" : undefined);
-            value = params.lyrics;
-        } else if ((title === "duration" || title === "max_duration") && params.duration !== undefined) {
-            slot = BINDING_TITLE_TO_INPUT_SLOT.duration?.[record.class_type] ||
-                ("Number" in record.inputs ? "Number" : "value" in record.inputs ? "value" : "duration" in record.inputs ? "duration" : "max_duration" in record.inputs ? "max_duration" : undefined);
-            // 绑定音频生成时长（秒）。注意：params.duration 已由上层调用包含针对 MiniMax Music 03 产物少 1 秒的 +1s 补偿值
-            value = params.duration;
-        } else if (title === "prompt" && params.prompt !== undefined) {
-            slot = BINDING_TITLE_TO_INPUT_SLOT.prompt[record.class_type] ||
-                ("value" in record.inputs ? "value" : "text" in record.inputs ? "text" : "prompt" in record.inputs ? "prompt" : undefined);
-            value = params.prompt || params.caption || "";
-        } else if (title === "seed" && params.seed !== undefined) {
-            slot = BINDING_TITLE_TO_INPUT_SLOT.seed[record.class_type];
-            if (!slot) {
-                if ("seed" in record.inputs) slot = "seed";
-                else if ("noise_seed" in record.inputs) slot = "noise_seed";
-                else if ("value" in record.inputs) slot = "value";
-            }
-            value = params.seed;
-            boundSeed = true;
-        }
-
-        if (slot) record.inputs[slot] = value;
-    }
-
-    if (!boundSeed && params.seed !== undefined) {
-        for (const node of Object.values(cloned)) {
-            if (typeof node !== "object" || node === null) continue;
-            const record = node as NodeRecord;
-            if (!record.inputs) continue;
-            if (typeof record.inputs.seed === "number") {
-                record.inputs.seed = params.seed;
-                break;
-            } else if (typeof record.inputs.noise_seed === "number") {
-                record.inputs.noise_seed = params.seed;
-                break;
-            }
-        }
-    }
-
-    return cloned;
-}
+// parseAudioPrompt 已迁移至 ./models/audio-models 并统一导出
 
 export type ComfyuiAudioRequest = {
     config: AiConfig;
@@ -2702,7 +3320,12 @@ export async function requestComfyuiAudio(req: ComfyuiAudioRequest): Promise<Com
     const baseUrl = (channel.comfyuiProxyUrl || "").trim();
     const token = channel.comfyuiProxyToken;
 
+    const modelProfile = getModelProfile(rawModel || "audio-minimax-music-3");
+
     let workflowItem = req.workflowId ? findWorkflow(req.config, channel.id, req.workflowId, "audio") : undefined;
+    if (!workflowItem && modelProfile) {
+        workflowItem = getWorkflowForModelProfile(modelProfile.id);
+    }
     if (!workflowItem) workflowItem = getDefaultWorkflow(channel, "audio");
     if (!workflowItem && channel.comfyuiAudioWorkflow) {
         workflowItem = {
@@ -2719,27 +3342,17 @@ export async function requestComfyuiAudio(req: ComfyuiAudioRequest): Promise<Com
     }
 
     const seed = req.seed !== undefined && req.seed >= 0 ? req.seed : generateRandomSeed();
-    const { caption, lyrics } = parseAudioPrompt(req.prompt);
     const duration = req.duration ?? (Number(req.config.audioSeconds) || 60);
 
-    // =========================================================================
-    // 【特别说明 / 时长偏差补偿处理 (+1s)】
-    // 实测与 ComfyUI 原生工作流验证发现：MiniMax Music 03 音频生成工作流（由 MiniMaxMusic3TextEncode
-    // 与 EmptyMiniMaxMusic3LatentAudio 等节点驱动）实际生成的音频文件时长总是比传入的 max_duration / duration
-    // 参数少 1 秒（例如用户选择 10 秒，模型实际产物仅有 9 秒；选择 60 秒，实际产物仅有 59 秒）。
-    //
-    // 为了使模型最终生成的音频产物时长与用户在画布 UI（设置面板 / 节点秒数选项）中期望的秒数完全吻合：
-    // 此处在向 ComfyUI 提交工作流参数时，对时长默认自动多加 1 秒（即 submittedDuration = duration + 1）。
-    // 前端 UI、画布节点元数据与历史记录中依然保持用户原始选定的目标数值（如 10s、60s），
-    // 仅在向底层 ComfyUI API 提交运行参数时进行该偏差补偿，彻底解决导出音频总短 1 秒的问题。
-    // =========================================================================
-    const submittedDuration = Math.max(1, duration + 1);
-
-    const boundWorkflow = applyAudioBindings(workflowItem.json, {
+    const profileToUse = modelProfile || getModelProfile("audio-minimax-music-3")!;
+    validateModelExecution(profileToUse, {
         prompt: req.prompt,
-        caption,
-        lyrics,
-        duration: submittedDuration,
+        duration,
+    });
+
+    const boundWorkflow = dispatchComfyuiModelWorkflow(profileToUse, workflowItem.json, {
+        prompt: req.prompt,
+        duration,
         seed,
     });
 
@@ -2754,7 +3367,7 @@ export async function requestComfyuiAudio(req: ComfyuiAudioRequest): Promise<Com
         }
 
         const startedAt = Date.now();
-        const polling = pollJobRaw(jobId, baseUrl, token, signal, startedAt + JOB_TIMEOUT_MS);
+        const polling = pollJobRaw(jobId, baseUrl, token, signal, startedAt + JOB_TIMEOUT_MS, req.onProgress);
         let waiting: Promise<PollJobResult | undefined> = polling;
         if (signal) {
             const aborted: Promise<never> = new Promise((_resolve, reject) => {
@@ -2971,4 +3584,291 @@ export async function fetchComfyuiModels(
     }
     return [];
 }
+
+/**
+ * ComfyUI 内存与模型卸载请求参数
+ * 对应 POST /free 与 POST /api/free 端点
+ */
+export type ComfyuiFreeRequest = {
+    /**
+     * 是否卸载显存中已缓存的模型权重 (Checkpoint, UNET, CLIP, VAE, LoRA 等)
+     * 若为 true，底层执行 model_management.unload_all_models()
+     */
+    unload_models?: boolean;
+    /**
+     * 是否释放 PyTorch 显存缓存与系统内存垃圾回收
+     * 若为 true，底层执行 model_management.soft_empty_cache() (torch.cuda.empty_cache / gc.collect)
+     */
+    free_memory?: boolean;
+};
+
+/**
+ * ComfyUI 宿主机 CPU 运行指标
+ * 来源于 GET /api/kktools/runtime_stats
+ */
+export type ComfyuiRuntimeCpu = {
+    /** CPU 当前整体使用率百分比，取值范围 0.0 ~ 100.0 */
+    percent: number;
+    /** CPU 逻辑处理器总核心数 */
+    logical_cores: number;
+};
+
+/**
+ * ComfyUI 宿主机系统物理内存 (RAM) 运行指标
+ * 来源于 GET /api/kktools/runtime_stats
+ */
+export type ComfyuiRuntimeMemory = {
+    /** 宿主机物理内存总容量，单位：字节 (Bytes) */
+    total: number;
+    /** 宿主机当前可用空闲物理内存，单位：字节 (Bytes) */
+    available: number;
+    /** 宿主机当前已使用物理内存，单位：字节 (Bytes) */
+    used: number;
+    /** 宿主机物理内存使用率百分比，取值范围 0.0 ~ 100.0 */
+    percent: number;
+};
+
+/**
+ * ComfyUI 服务进程自身资源占用与生命周期
+ * 来源于 GET /api/kktools/runtime_stats
+ */
+export type ComfyuiRuntimeProcess = {
+    /** ComfyUI 后端 Python 进程当前占用的物理内存 (RSS)，单位：字节 (Bytes) */
+    memory_used: number;
+    /** ComfyUI 服务进程自启动以来的累计运行秒数 (Seconds) */
+    uptime_seconds: number;
+};
+
+/**
+ * 单个 GPU/加速设备运行状态指标
+ * 来源于 GET /api/kktools/runtime_stats
+ */
+export type ComfyuiRuntimeDevice = {
+    /** 设备名称与内存分配器描述 (例如 "cuda:0 NVIDIA GeForce RTX 3090 Ti : cudaMallocAsync") */
+    name: string;
+    /** 设备类型，通常为 "cuda"、"mps"、"cpu" 等 */
+    type: string;
+    /** 设备在系统中的物理序号索引 (0, 1, ...) */
+    index: number;
+    /** GPU 计算核心实时利用率百分比，取值范围 0.0 ~ 100.0 */
+    utilization: number;
+    /** GPU 物理显存总容量 (VRAM Total)，单位：字节 (Bytes) */
+    memory_total: number;
+    /** GPU 物理显存当前空闲剩余量 (VRAM Free)，单位：字节 (Bytes) */
+    memory_free: number;
+    /** GPU 物理显存当前已占用量 (VRAM Used)，单位：字节 (Bytes) */
+    memory_used: number;
+    /** GPU 显存占用率百分比，取值范围 0.0 ~ 100.0 */
+    memory_percent: number;
+};
+
+/**
+ * ComfyUI 运行时监控指标整体响应数据结构
+ * 来源于 GET /api/kktools/runtime_stats
+ */
+export type ComfyuiRuntimeStats = {
+    /** 请求是否成功 */
+    ok: boolean;
+    /** 运行状态核心监控数据 */
+    data: {
+        /** CPU 负载指标 */
+        cpu: ComfyuiRuntimeCpu;
+        /** 宿主机系统内存 (RAM) 负载指标 */
+        memory: ComfyuiRuntimeMemory;
+        /** ComfyUI 服务进程自身指标 */
+        process: ComfyuiRuntimeProcess;
+        /** 各 GPU / 计算加速设备状态列表 */
+        devices: ComfyuiRuntimeDevice[];
+    };
+};
+
+/**
+ * ComfyUI 官方原生系统设备信息
+ * 来源于 GET /system_stats
+ */
+export type ComfyuiSystemDevice = {
+    /** 设备名称与分配器信息 (例如 "cuda:0 NVIDIA GeForce RTX 3090 Ti : cudaMallocAsync") */
+    name: string;
+    /** 设备类型 (例如 "cuda", "mps", "cpu") */
+    type: string;
+    /** 设备序号 */
+    index: number;
+    /** 显存总容量，单位：字节 (Bytes) */
+    vram_total: number;
+    /** 显存剩余容量，单位：字节 (Bytes) */
+    vram_free: number;
+    /** PyTorch 显存保留总量，单位：字节 (Bytes) */
+    torch_vram_total?: number;
+    /** PyTorch 显存空闲可用量，单位：字节 (Bytes) */
+    torch_vram_free?: number;
+};
+
+/**
+ * ComfyUI 官方原生环境与系统统计响应
+ * 来源于 GET /system_stats
+ */
+export type ComfyuiSystemStats = {
+    /** 系统与运行环境详情 */
+    system: {
+        /** 操作系统平台 (例如 "win32", "linux", "darwin") */
+        os?: string;
+        /** 系统总内存 (RAM)，单位：字节 (Bytes) */
+        ram_total?: number;
+        /** 系统可用空闲内存 (RAM)，单位：字节 (Bytes) */
+        ram_free?: number;
+        /** ComfyUI 核心版本号 */
+        comfyui_version?: string;
+        /** Python 运行环境版本及编译详情 */
+        python_version?: string;
+        /** PyTorch 与 CUDA/ROCm 版本号 */
+        pytorch_version?: string;
+        /** 是否使用便携嵌入式 Python 环境 */
+        embedded_python?: boolean;
+        /** 启动命令行参数数组 */
+        argv?: string[];
+        [key: string]: unknown;
+    };
+    /** 加速设备列表 */
+    devices: ComfyuiSystemDevice[];
+};
+
+/**
+ * 请求 ComfyUI 执行清理动作，卸载已加载的模型并释放系统与显存缓存
+ * 优先调用 /api/free，降级兼容 /free
+ * @param baseUrl ComfyUI 服务基础 URL
+ * @param token 可选鉴权 Bearer Token
+ * @param options 清理选项，默认两者皆为 true
+ * @returns 是否成功释放
+ */
+export async function freeComfyuiMemory(
+    baseUrl: string,
+    token?: string,
+    options: ComfyuiFreeRequest = { unload_models: true, free_memory: true }
+): Promise<boolean> {
+    const normalized = normalizeBaseUrl(baseUrl);
+    const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "*/*",
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const body = JSON.stringify({
+        unload_models: options.unload_models !== false,
+        free_memory: options.free_memory !== false,
+    });
+
+    try {
+        // 优先打 /api/free
+        let res = await comfyuiFetch(`${normalized}/api/free`, { method: "POST", headers, body }, baseUrl);
+        if (res.status === 404) {
+            // 降级回退至 /free
+            res = await comfyuiFetch(`${normalized}/free`, { method: "POST", headers, body }, baseUrl);
+        }
+        return res.ok;
+    } catch (error) {
+        if (error instanceof ComfyuiError) throw error;
+        return false;
+    }
+}
+
+/**
+ * 获取 ComfyUI 硬件实时运行状态 (基于 Comfyui-kktools 插件)
+ * @param baseUrl ComfyUI 服务基础 URL
+ * @param token 可选鉴权 Bearer Token
+ * @returns 实时监控数据对象，若端点不可用或报错返回 null
+ */
+export async function getComfyuiRuntimeStats(
+    baseUrl: string,
+    token?: string
+): Promise<ComfyuiRuntimeStats | null> {
+    const normalized = normalizeBaseUrl(baseUrl);
+    const headers: Record<string, string> = {
+        Accept: "*/*",
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    try {
+        const res = await comfyuiFetch(`${normalized}/api/kktools/runtime_stats?t=${Date.now()}`, { headers }, baseUrl);
+        if (!res.ok) return null;
+        const json = (await res.json()) as ComfyuiRuntimeStats;
+        if (json && json.ok && json.data) {
+            return json;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * 获取 ComfyUI 原生系统统计与设备信息 (基于官方原生 /system_stats)
+ * @param baseUrl ComfyUI 服务基础 URL
+ * @param token 可选鉴权 Bearer Token
+ * @returns 系统统计数据对象，若端点不可用或报错返回 null
+ */
+export async function getComfyuiSystemStats(
+    baseUrl: string,
+    token?: string
+): Promise<ComfyuiSystemStats | null> {
+    const normalized = normalizeBaseUrl(baseUrl);
+    const headers: Record<string, string> = {
+        Accept: "*/*",
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    try {
+        const res = await comfyuiFetch(`${normalized}/system_stats`, { headers }, baseUrl);
+        if (!res.ok) return null;
+        return (await res.json()) as ComfyuiSystemStats;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * ComfyUI 队列统计数据
+ * 来源于 GET /queue
+ */
+export type ComfyuiQueueStats = {
+    /** 当前正在 GPU 上计算执行的任务数 */
+    runningCount: number;
+    /** 在队列中排队等待执行的任务数 */
+    pendingCount: number;
+    /** 总活跃任务数 (running + pending) */
+    totalActive: number;
+};
+
+/**
+ * 获取 ComfyUI 任务队列状态 (基于官方原生 /queue)
+ * @param baseUrl ComfyUI 服务基础 URL
+ * @param token 可选鉴权 Bearer Token
+ * @returns 队列统计对象，若请求失败或服务离线返回 null
+ */
+export async function getComfyuiQueueStats(
+    baseUrl: string,
+    token?: string
+): Promise<ComfyuiQueueStats | null> {
+    const normalized = normalizeBaseUrl(baseUrl);
+    const headers: Record<string, string> = {
+        Accept: "*/*",
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    try {
+        const res = await comfyuiFetch(`${normalized}/queue`, { headers }, baseUrl);
+        if (!res.ok) return null;
+        const data = (await res.json()) as { queue_running?: unknown[]; queue_pending?: unknown[] };
+        const runningCount = Array.isArray(data.queue_running) ? data.queue_running.length : 0;
+        const pendingCount = Array.isArray(data.queue_pending) ? data.queue_pending.length : 0;
+        return {
+            runningCount,
+            pendingCount,
+            totalActive: runningCount + pendingCount,
+        };
+    } catch {
+        return null;
+    }
+}
+
+
 

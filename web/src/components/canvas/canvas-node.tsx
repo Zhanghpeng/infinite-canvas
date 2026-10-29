@@ -14,7 +14,8 @@ import type { CanvasNodeContext, CanvasPluginHost } from "@/types/canvas-plugin"
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasVideoPlayer } from "./canvas-video-player";
 import { useTranslation } from "react-i18next";
-import { localizeErrorDetails } from "@/lib/canvas/canvas-generation-helpers";
+import { Tooltip } from "antd";
+import { formatCompactErrorMessage, formatNodeLoadingText, localizeErrorDetails } from "@/lib/canvas/canvas-generation-helpers";
 import { formatTimecode } from "@/lib/canvas/video-timeline";
 
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -28,14 +29,14 @@ type CanvasNodeProps = {
     isRelated: boolean;
     isFocusRelated: boolean;
     isConnectionTarget: boolean;
+    isConnectionRejected?: boolean;
+    hasInvalidConnections?: boolean;
     isConnecting: boolean;
     referenceSelectionState?: "target" | "disabled" | "available";
-    showPanel: boolean;
     showImageInfo: boolean;
     mentionReferences?: CanvasResourceReference[];
     pluginHost?: CanvasPluginHost;
     registryVersion?: number;
-    renderPanel?: (node: CanvasNodeData) => ReactNode;
     renderNodeContent?: (node: CanvasNodeData) => ReactNode;
     groupChildCount?: number;
     groupSummary?: CanvasGroupSummary;
@@ -94,6 +95,8 @@ type NodeContentRendererProps = {
     groupChildCount: number;
     groupSummary?: CanvasGroupSummary;
     isLocked?: boolean;
+    /** 画布缩放比。节点内的标题栏按 1/scale 反算，避免分组放大时文字跟着糊成一片。 */
+    scale?: number;
     onToggleGroupCollapse?: (nodeId: string) => void;
 };
 
@@ -104,13 +107,13 @@ export const CanvasNode = React.memo(function CanvasNode({
     isRelated,
     isFocusRelated,
     isConnectionTarget,
+    isConnectionRejected = false,
+    hasInvalidConnections = false,
     isConnecting,
     referenceSelectionState,
-    showPanel,
     showImageInfo,
     mentionReferences = [],
     pluginHost,
-    renderPanel,
     renderNodeContent,
     groupChildCount = 0,
     groupSummary,
@@ -145,6 +148,7 @@ export const CanvasNode = React.memo(function CanvasNode({
 }: CanvasNodeProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { t } = useTranslation();
+    const safeScale = scale > 0 ? scale : 1;
     const activeRoomId = useCollabStore((state) => state.activeRoomId);
     const collabRole = useCollabStore((state) => state.role);
     const isViewer = Boolean(activeRoomId && collabRole === "viewer");
@@ -357,7 +361,16 @@ export const CanvasNode = React.memo(function CanvasNode({
             }}
         >
             {!referenceSelectionState && (isSelected || hovered || isEditingTitle) && (
-                <div className="absolute left-3 top-[-28px] z-[65] max-w-[calc(100%-24px)]" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+                <div
+                    className="absolute left-3 bottom-full z-[65] origin-bottom-left"
+                    style={{
+                        transform: `scale(${1 / safeScale})`,
+                        paddingBottom: 6,
+                        maxWidth: `${Math.max(160, (data.width - 24) * safeScale)}px`,
+                    }}
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onPointerDown={(event) => event.stopPropagation()}
+                >
                     {isEditingTitle ? (
                         <input
                             ref={titleInputRef}
@@ -397,9 +410,33 @@ export const CanvasNode = React.memo(function CanvasNode({
                 className="relative h-full w-full overflow-visible rounded-3xl border-2"
                 style={{
                     background: isGroup ? "transparent" : hasImageContent || hasVideoContent || transparentBg ? "transparent" : theme.node.fill,
-                    borderColor: isGroup ? (isGroupDropTarget || isActive ? selectionBlue : theme.node.stroke) : hasImageContent ? imageBorderColor : isActive ? selectionBlue : isRelated ? theme.node.muted : transparentBg ? "transparent" : theme.node.stroke,
-                    borderStyle: isGroup ? "dashed" : "solid",
-                    boxShadow: isGroupDropTarget ? `0 0 0 2px ${selectionBlue}66, inset 0 0 0 999px ${selectionBlue}10` : isActive ? `0 0 0 1px ${selectionBlue}55` : isRelated ? `0 0 0 1px ${theme.node.muted}55, 0 18px 48px rgba(0,0,0,.14)` : undefined,
+                    borderColor: isConnectionRejected
+                        ? "#ef4444"
+                        : isGroup
+                          ? (isGroupDropTarget || isActive ? selectionBlue : theme.node.stroke)
+                          : hasImageContent
+                            ? imageBorderColor
+                            : isActive
+                              ? selectionBlue
+                              : isRelated
+                                ? theme.node.muted
+                                : hasInvalidConnections
+                                  ? "#f59e0b"
+                                  : transparentBg
+                                    ? "transparent"
+                                    : theme.node.stroke,
+                    borderStyle: isGroup ? "dashed" : hasInvalidConnections && !isActive ? "dashed" : "solid",
+                    boxShadow: isConnectionRejected
+                        ? "0 0 0 2px #ef4444, 0 0 20px rgba(239, 68, 68, 0.45)"
+                        : isGroupDropTarget
+                          ? `0 0 0 2px ${selectionBlue}66, inset 0 0 0 999px ${selectionBlue}10`
+                          : isActive
+                            ? `0 0 0 1px ${selectionBlue}55`
+                            : hasInvalidConnections
+                              ? "0 0 0 1px #f59e0b55"
+                              : isRelated
+                                ? `0 0 0 1px ${theme.node.muted}55, 0 18px 48px rgba(0,0,0,.14)`
+                                : undefined,
                 }}
                 onMouseDown={(event) => {
                     if (!referenceSelectionState) onMouseDown(event, data.id);
@@ -472,6 +509,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         groupChildCount={groupChildCount}
                         groupSummary={groupSummary}
                         isLocked={isLocked}
+                        scale={safeScale}
                         onToggleGroupCollapse={onToggleGroupCollapse}
                     />
                 </div>
@@ -492,17 +530,23 @@ export const CanvasNode = React.memo(function CanvasNode({
                 {!referenceSelectionState && !isViewer && !isLocked && !isCollapsedGroup ? <ResizeHandle corner="bottom-right" onMouseDown={handleResizeMouseDown} /> : null}
             </div>
 
-            {!referenceSelectionState && !isGroup && !isViewer ? <ConnectionHandleDot side="left" visible={hovered || isSelected || isConnecting} onMouseDown={(event) => onConnectStart(event, data.id, "target")} /> : null}
+            {!referenceSelectionState && !isGroup && !isViewer ? (
+                <ConnectionHandleDot
+                    side="left"
+                    visible={hovered || isSelected || isConnecting}
+                    scale={safeScale}
+                    onMouseDown={(event) => onConnectStart(event, data.id, "target")}
+                />
+            ) : null}
             {!referenceSelectionState && !isViewer && (definition?.hasSourceHandle ?? true) && data.type !== CanvasNodeType.Config && !(hasMultipleSelected && isSelected) ? (
                 <ConnectionHandleDot
                     side="right"
                     visible={hovered || isSelected || isConnecting}
+                    scale={safeScale}
                     onMouseDown={(event) => onConnectStart(event, data.id, "source")}
                     onClick={(event) => onConnectClick?.(event, data.id, "source")}
                 />
             ) : null}
-
-            {showPanel && !isGroup && !isViewer && renderPanel ? <div className="absolute left-1/2 top-full z-[70] w-[720px] -translate-x-1/2 pt-4">{renderPanel(data)}</div> : null}
         </div>
     );
 });
@@ -535,16 +579,17 @@ const nodeContentRenderers = {
     [CanvasNodeType.Group]: GroupNodeContent,
 } satisfies Record<CanvasNodeType, (props: NodeContentRendererProps) => ReactNode>;
 
-function GroupNodeContent({ node, theme, groupSummary, onToggleGroupCollapse }: NodeContentRendererProps) {
+function GroupNodeContent({ node, theme, groupSummary, isLocked, scale, onToggleGroupCollapse }: NodeContentRendererProps) {
     const { t } = useTranslation();
     const collapsed = Boolean(node.metadata?.collapsed);
-    const locked = Boolean(node.metadata?.locked);
+    const locked = isLocked ?? Boolean(node.metadata?.locked);
+    const safeScale = scale && scale > 0 ? scale : 1;
     const collapseLabel = collapsed ? t("canvas.node.expand") : t("canvas.node.collapse");
     const kinds = groupSummary?.kinds;
     const kindEntries = (["image", "video", "audio", "text"] as CanvasGroupKind[]).filter((kind) => (kinds?.[kind] || 0) > 0);
     return (
         <div className={`pointer-events-none flex h-full w-full flex-col p-3 ${collapsed ? "gap-2" : "items-start"}`}>
-            <div className="flex w-full max-w-full items-center gap-2 text-[13px] font-medium" style={{ color: theme.node.text }}>
+            <div className="flex w-full max-w-full origin-top-left items-center gap-2 text-[13px] font-medium" style={{ color: theme.node.text, transform: `scale(${1 / safeScale})` }}>
                 <button
                     type="button"
                     className="pointer-events-auto grid size-5 shrink-0 place-items-center rounded transition hover:bg-black/10 dark:hover:bg-white/10"
@@ -609,13 +654,14 @@ function GroupNodeContent({ node, theme, groupSummary, onToggleGroupCollapse }: 
     );
 }
 
-function LoadingContent({ theme, node }: Pick<NodeContentRendererProps, "theme" | "node">) {
+function LoadingContent({ theme, node }: Pick<NodeContentRendererProps, "theme"> & { node?: CanvasNodeData }) {
     const { t } = useTranslation();
     // 分段任务的段节点一提交就全铺在画布上，轮到谁才真正开始跑。
     // 都画成转圈的话，十个节点长得一样，看不出"哪个在跑、哪些在等" ——
     // 排队用静止的虚线圈，跑起来的才转。
-    const segment = node.metadata?.videoSegment;
-    const waiting = node.metadata?.queueState === "waiting";
+    const segment = node?.metadata?.videoSegment;
+    const waiting = node?.metadata?.queueState === "waiting";
+    const loadingText = waiting ? t("canvas.videoTimeline.node.queued") : formatNodeLoadingText(node?.metadata);
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.activeStroke }}>
             {waiting ? (
@@ -624,7 +670,7 @@ function LoadingContent({ theme, node }: Pick<NodeContentRendererProps, "theme" 
                 <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
             )}
             {segment ? <span className="rounded-full bg-indigo-600/80 px-2 py-0.5 text-[10px] font-medium text-white">{t("canvas.videoTimeline.node.segmentBadge", { index: segment.index + 1 })}</span> : null}
-            <span className="text-[10px] tracking-[0.2em]">{waiting ? t("canvas.videoTimeline.node.queued") : t("canvas.node.generating")}</span>
+            <span className="text-[10px] tracking-[0.2em]">{loadingText}</span>
         </div>
     );
 }
@@ -632,9 +678,16 @@ function LoadingContent({ theme, node }: Pick<NodeContentRendererProps, "theme" 
 function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "node" | "theme" | "onRetry">) {
     const { t } = useTranslation();
     const canResume = Boolean(node.metadata?.jobId);
+    const fullError = localizeErrorDetails(node.metadata?.errorDetails) || t("canvas.node.failed");
+    const compactError = formatCompactErrorMessage(node.metadata?.errorDetails) || t("canvas.node.failed");
+
     return (
         <div className="flex max-w-[260px] flex-col items-center gap-3 px-5 text-center">
-            <div className="text-xs leading-5 text-red-300">{localizeErrorDetails(node.metadata?.errorDetails) || t("canvas.node.failed")}</div>
+            <Tooltip title={fullError} placement="top">
+                <div className="text-xs leading-5 text-red-300 cursor-help line-clamp-3">
+                    {compactError}
+                </div>
+            </Tooltip>
             <button
                 type="button"
                 className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
@@ -755,7 +808,7 @@ function ExpandedTextCard({ node, text, index, onSetPrimary }: { node: CanvasNod
 
     return (
         <div
-            className="absolute z-20 overflow-hidden rounded-3xl border shadow-[0_18px_50px_rgba(28,25,23,.14)]"
+            className="group absolute z-20 overflow-hidden rounded-3xl border shadow-[0_18px_50px_rgba(28,25,23,.14)]"
             style={
                 {
                     left: x,
@@ -775,10 +828,15 @@ function ExpandedTextCard({ node, text, index, onSetPrimary }: { node: CanvasNod
         >
             {text.content ? (
                 <>
-                    <div className="thin-scrollbar h-full overflow-y-auto whitespace-pre-wrap break-words px-4 pb-4 pt-14 font-mono text-sm leading-6" style={{ color: theme.node.text }} onWheel={(event) => event.stopPropagation()}>
+                    <div className="thin-scrollbar h-full overflow-y-auto whitespace-pre-wrap break-words p-4 font-mono text-sm leading-6" style={{ color: theme.node.text }} onWheel={(event) => event.stopPropagation()}>
                         {text.content}
                     </div>
-                    <button type="button" className="absolute right-2.5 top-2.5 flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition hover:bg-black/5 dark:hover:bg-white/10" style={{ color: theme.node.text }} onClick={(event) => (event.stopPropagation(), onSetPrimary())}>
+                    <button
+                        type="button"
+                        className="absolute right-2.5 top-2.5 flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium opacity-0 transition-opacity duration-150 group-hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/10"
+                        style={{ color: theme.node.text }}
+                        onClick={(event) => (event.stopPropagation(), onSetPrimary())}
+                    >
                         <Star className="size-3.5" style={{ color: selectionBlue }} />
                         {t("canvas.node.setPrimaryText")}
                     </button>
@@ -795,10 +853,22 @@ function TextSlotStatus({ text }: { text: CanvasNodeText }) {
     const { t } = useTranslation();
     const failed = text.status === "error";
     const loading = text.status === "loading";
+    const loadingText = formatNodeLoadingText(text);
+    const fullError = localizeErrorDetails(text.errorDetails) || t("canvas.node.failed");
+    const compactError = formatCompactErrorMessage(text.errorDetails) || t("canvas.node.failed");
+
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: theme.node.fill, color: failed ? theme.node.text : theme.node.activeStroke }}>
-            {failed ? <span className="text-xs leading-5">{localizeErrorDetails(text.errorDetails) || t("canvas.node.failed")}</span> : loading ? <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} /> : <span className="text-xs">{t("apiErrors.noContent")}</span>}
-            {loading ? <span className="text-[10px] tracking-[0.2em]">{t("canvas.node.generating")}</span> : null}
+            {failed ? (
+                <Tooltip title={fullError} placement="top">
+                    <span className="text-xs leading-5 text-red-300 cursor-help line-clamp-3">{compactError}</span>
+                </Tooltip>
+            ) : loading ? (
+                <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
+            ) : (
+                <span className="text-xs">{t("apiErrors.noContent")}</span>
+            )}
+            {loading ? <span className="text-[10px] tracking-[0.2em]">{loadingText}</span> : null}
         </div>
     );
 }
@@ -835,13 +905,16 @@ function EmptyImageContent({ theme }: NodeContentRendererProps) {
 
 function VideoNodeContent({ node, theme, onViewMedia }: NodeContentRendererProps) {
     const { t } = useTranslation();
-    if (!node.metadata?.content)
+    if (!node.metadata?.content) {
         return (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.placeholder }}>
-                <Video className="size-7 opacity-35" />
-                <span className="text-sm">{t("canvas.node.emptyVideo")}</span>
+            <div className="flex h-full w-full flex-col items-center justify-center gap-2" style={{ color: theme.node.placeholder }}>
+                <div className="flex size-12 items-center justify-center rounded-2xl bg-black/5 dark:bg-white/5">
+                    <Video className="size-6 opacity-30" />
+                </div>
+                <span className="text-[10px] tracking-[0.18em] opacity-50">{t("canvas.node.emptyVideo")}</span>
             </div>
         );
+    }
     // 段与成片都要能一眼认出来：画布上并排躺着十几个视频节点时，靠标题区分太慢。
     const segment = node.metadata.videoSegment;
     const composite = node.metadata.videoComposite;
@@ -957,13 +1030,6 @@ function ImageContent({
                     <ImageSlotStatus image={primaryImage} />
                 )}
             </div>
-            {primaryImage?.status === "error" ? <BatchImageFailureActions placement="left" canResume={Boolean(primaryImage.jobId)} onRetry={() => onRetryBatchImage?.(primaryImage.id)} onDelete={() => onDeleteBatchImage?.(primaryImage.id)} /> : null}
-            {primaryImage?.content ? (
-                <button type="button" className="absolute left-2.5 top-2.5 z-30 flex h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium shadow-[0_6px_18px_rgba(15,23,42,.16)] backdrop-blur-md transition hover:scale-[1.02]" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.activeText }} title={t("common.download")} onClick={(event) => (event.stopPropagation(), onDownloadBatchImage?.(primaryImage.id))}>
-                    <Download className="size-3" />
-                    {t("common.download")}
-                </button>
-            ) : null}
             {isBatchRoot ? (
                 <button
                     type="button"
@@ -1000,7 +1066,7 @@ function ExpandedImageCard({ node, image, index, onView, onSetPrimary, onDuplica
 
     return (
         <div
-            className={`absolute z-20 overflow-hidden rounded-3xl ${image.content ? "" : "border shadow-[0_18px_50px_rgba(28,25,23,.18)]"}`}
+            className={`group absolute z-20 overflow-hidden rounded-3xl ${image.content ? "" : "border shadow-[0_18px_50px_rgba(28,25,23,.18)]"}`}
             style={
                 {
                     left: x,
@@ -1025,7 +1091,7 @@ function ExpandedImageCard({ node, image, index, onView, onSetPrimary, onDuplica
         >
             {image.content ? <img src={image.content} alt={node.title} draggable={false} className="pointer-events-none h-full w-full select-none object-contain" /> : <ImageSlotStatus image={image} />}
             {image.content ? (
-                <div className="absolute inset-x-2 top-2 flex items-center gap-1">
+                <div className="absolute inset-x-2 top-2 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto">
                     <button type="button" className="flex h-8 min-w-0 flex-1 items-center justify-center gap-1 rounded-lg border px-1.5 text-[10px] font-medium shadow-[0_6px_18px_rgba(15,23,42,.16)] backdrop-blur-md transition hover:scale-[1.02]" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.activeText }} title={t("common.download")} onClick={(event) => (event.stopPropagation(), onDownload())}>
                         <Download className="size-3 shrink-0" />
                         <span className="truncate">{t("common.download")}</span>
@@ -1040,23 +1106,6 @@ function ExpandedImageCard({ node, image, index, onView, onSetPrimary, onDuplica
                     </button>
                 </div>
             ) : null}
-            {image.status === "error" ? <BatchImageFailureActions placement="right" canResume={Boolean(image.jobId)} onRetry={onRetry} onDelete={onDelete} /> : null}
-        </div>
-    );
-}
-
-function BatchImageFailureActions({ placement, canResume, onRetry, onDelete }: { placement: "left" | "right"; canResume: boolean; onRetry: () => void; onDelete: () => void }) {
-    const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const { t } = useTranslation();
-    return (
-        <div className={`absolute top-3 z-30 flex items-center gap-1.5 ${placement === "left" ? "left-3" : "right-3"}`}>
-            <button type="button" className="flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium shadow-sm transition hover:scale-[1.02]" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }} onClick={(event) => (event.stopPropagation(), onRetry())}>
-                <RefreshCw className="size-3.5" />
-                {canResume ? t("canvas.node.resumePolling") : t("canvas.node.retry")}
-            </button>
-            <button type="button" className="grid size-8 place-items-center rounded-lg border shadow-sm transition hover:scale-[1.02]" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }} onClick={(event) => (event.stopPropagation(), onDelete())} aria-label={t("common.delete")} title={t("common.delete")}>
-                <Trash2 className="size-3.5" />
-            </button>
         </div>
     );
 }
@@ -1066,14 +1115,20 @@ function ImageSlotStatus({ image }: { image?: CanvasNodeImage }) {
     const { t } = useTranslation();
     const failed = image?.status === "error";
     const loading = image?.status === "loading";
+    const loadingText = formatNodeLoadingText(image);
+    const fullError = localizeErrorDetails(image?.errorDetails) || t("canvas.node.failed");
+    const compactError = formatCompactErrorMessage(image?.errorDetails) || t("canvas.node.failed");
+
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: theme.node.fill, color: failed ? theme.node.text : theme.node.activeStroke }}>
             {failed ? (
-                <span className="text-xs leading-5">{localizeErrorDetails(image?.errorDetails) || t("canvas.node.failed")}</span>
+                <Tooltip title={fullError} placement="top">
+                    <span className="text-xs leading-5 text-red-300 cursor-help line-clamp-3">{compactError}</span>
+                </Tooltip>
             ) : loading ? (
                 <>
                     <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
-                    <span className="text-[10px] tracking-[0.2em]">{t("canvas.node.generating")}</span>
+                    <span className="text-[10px] tracking-[0.2em]">{loadingText}</span>
                 </>
             ) : (
                 <div className="flex flex-col items-center justify-center gap-2" style={{ color: theme.node.placeholder }}>
@@ -1142,16 +1197,19 @@ function ResizeHandle({ corner, onMouseDown }: { corner: ResizeCorner; onMouseDo
 function ConnectionHandleDot({
     side,
     visible,
+    scale = 1,
     onMouseDown,
     onClick,
 }: {
     side: "left" | "right";
     visible: boolean;
+    scale?: number;
     onMouseDown: (event: React.MouseEvent) => void;
     onClick?: (event: React.MouseEvent) => void;
 }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
+    const safeScale = scale > 0 ? scale : 1;
 
     const handleMouseDown = (event: React.MouseEvent) => {
         dragStartPosRef.current = { x: event.clientX, y: event.clientY };
@@ -1172,9 +1230,15 @@ function ConnectionHandleDot({
         return (
             <div
                 data-connection-handle
-                className={`absolute top-1/2 z-30 flex size-12 -translate-y-1/2 cursor-crosshair items-center justify-center transition-opacity duration-150 -right-6 ${
+                className={`absolute z-30 flex size-12 cursor-crosshair items-center justify-center transition-opacity duration-150 ${
                     visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
                 }`}
+                style={{
+                    left: "100%",
+                    top: "50%",
+                    transform: `translate(-50%, -50%) scale(${1 / safeScale})`,
+                    transformOrigin: "center center",
+                }}
                 onMouseDown={handleMouseDown}
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={handleClick}
@@ -1198,9 +1262,15 @@ function ConnectionHandleDot({
     return (
         <div
             data-connection-handle
-            className={`absolute top-1/2 z-30 flex size-12 -translate-y-1/2 cursor-crosshair items-center justify-center transition-opacity duration-150 -left-6 ${
+            className={`absolute z-30 flex size-12 cursor-crosshair items-center justify-center transition-opacity duration-150 ${
                 visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
             }`}
+            style={{
+                left: "0%",
+                top: "50%",
+                transform: `translate(-50%, -50%) scale(${1 / safeScale})`,
+                transformOrigin: "center center",
+            }}
             onMouseDown={onMouseDown}
             onPointerDown={(e) => e.stopPropagation()}
         >

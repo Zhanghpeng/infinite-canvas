@@ -10,7 +10,8 @@
  */
 
 export type MiniMaxVideoTier = {
-    mp: string;
+    /** 像素档位的展示副标签（0.5M 之类）。上游按模型 DSL 现场算档位时没有这一层。 */
+    mp?: string;
     landscapeW: number;
     landscapeH: number;
 };
@@ -31,8 +32,8 @@ export const MINIMAX_VIDEO_SIZE_TIERS: MiniMaxVideoTier[] = [
 ];
 
 export const videoSizeOptions = MINIMAX_VIDEO_SIZE_TIERS.flatMap((tier) => [
-    { value: `${tier.landscapeW}x${tier.landscapeH}`, label: `16:9 · ${tier.landscapeW}×${tier.landscapeH} (${tier.mp})`, width: tier.landscapeW, height: tier.landscapeH },
-    { value: `${tier.landscapeH}x${tier.landscapeW}`, label: `9:16 · ${tier.landscapeH}×${tier.landscapeW} (${tier.mp})`, width: tier.landscapeH, height: tier.landscapeW },
+    { value: `${tier.landscapeW}x${tier.landscapeH}`, label: `16:9 · ${tier.landscapeW}×${tier.landscapeH}${tier.mp ? ` (${tier.mp})` : ""}`, width: tier.landscapeW, height: tier.landscapeH },
+    { value: `${tier.landscapeH}x${tier.landscapeW}`, label: `9:16 · ${tier.landscapeH}×${tier.landscapeW}${tier.mp ? ` (${tier.mp})` : ""}`, width: tier.landscapeH, height: tier.landscapeW },
 ]);
 
 /** 认不出尺寸时的默认值，保持历史行为（竖屏 0.5M）。 */
@@ -46,17 +47,25 @@ export function isPixelVideoSize(value?: string): boolean {
     return PIXEL_SIZE_PATTERN.test((value || "").trim());
 }
 
-export function normalizeVideoSizeValue(value?: string) {
-    if (!value) return DEFAULT_VIDEO_SIZE;
+export function normalizeVideoSizeValue(value?: string, profile?: { capabilityConfig?: { size?: { values?: string[]; default?: string } } }) {
+    const allowed = profile?.capabilityConfig?.size?.values;
+    const fallback = profile?.capabilityConfig?.size?.default || DEFAULT_VIDEO_SIZE;
+    if (!value) return fallback;
+    if (allowed && allowed.length > 0) {
+        const clean = value.toLowerCase().replace(/\s+/g, "");
+        const matched = allowed.find((item) => item.toLowerCase().replace(/\s+/g, "") === clean);
+        return matched || fallback;
+    }
     const isValid = videoSizeOptions.some((option) => option.value === value);
-    return isValid ? value : DEFAULT_VIDEO_SIZE;
+    return isValid ? value : fallback;
 }
 
-export function parseVideoSize(sizeStr?: string): { width: number; height: number; aspect: "16:9" | "9:16"; tier: MiniMaxVideoTier } {
+export function parseVideoSize(sizeStr?: string, tiers?: MiniMaxVideoTier[]): { width: number; height: number; aspect: "16:9" | "9:16"; tier: MiniMaxVideoTier } {
     const raw = (sizeStr || "").trim().toLowerCase();
     const match = raw.match(PIXEL_SIZE_PATTERN);
     const w = Number(match?.[1]) || 544;
     const h = Number(match?.[2]) || 960;
+    const availableTiers = tiers && tiers.length ? tiers : MINIMAX_VIDEO_SIZE_TIERS;
 
     const isLandscape = w >= h;
     const aspect: "16:9" | "9:16" = isLandscape ? "16:9" : "9:16";
@@ -66,7 +75,7 @@ export function parseVideoSize(sizeStr?: string): { width: number; height: numbe
     // 寻找最接近的 tier（默认 0.5M）
     let matchedTier = SEGMENT_DEFAULT_TIER;
     let minDiff = Infinity;
-    for (const t of MINIMAX_VIDEO_SIZE_TIERS) {
+    for (const t of availableTiers) {
         const diff = Math.abs(t.landscapeW - longSide) + Math.abs(t.landscapeH - shortSide);
         if (diff < minDiff) {
             minDiff = diff;

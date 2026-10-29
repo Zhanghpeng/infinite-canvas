@@ -83,8 +83,15 @@ export function cloneNodeMetadata(metadata?: CanvasNodeMetadata, nodeType?: Canv
 
     // 1. 重置瞬时任务与报错标记
     delete cloned.jobId;
+    delete cloned.queuePosition;
+    delete cloned.networkRetryText;
     delete cloned.errorDetails;
     delete cloned.isTimeout;
+
+    // 2. 复制时将活跃草稿 (composerContent) 提拔为 official prompt，并清除 draft 避免影子遮蔽
+    const activePrompt = cloned.composerContent ?? cloned.prompt;
+    if (activePrompt !== undefined) cloned.prompt = activePrompt;
+    delete cloned.composerContent;
 
     const targetType = nodeType || (cloned.generationMode as CanvasNodeType) || undefined;
 

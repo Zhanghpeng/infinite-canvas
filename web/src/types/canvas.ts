@@ -1,4 +1,5 @@
 import type { BuiltinPromptSkillId } from "@/lib/canvas/prompt-skills";
+import type { ModelSupportedTools } from "@/services/api/models/types";
 
 export type Position = {
     x: number;
@@ -49,6 +50,8 @@ export type CanvasNodeImage = {
     mimeType: string;
     seed?: number;
     jobId?: string;
+    queuePosition?: number;
+    networkRetryText?: string;
     isTimeout?: boolean;
 };
 
@@ -58,6 +61,8 @@ export type CanvasNodeText = {
     errorDetails?: string;
     content: string;
     jobId?: string;
+    queuePosition?: number;
+    networkRetryText?: string;
     isTimeout?: boolean;
 };
 
@@ -154,6 +159,8 @@ export type CanvasNodeMetadata = {
     generationReferences?: CanvasGenerationReferenceSnapshot[];
     generationOriginNodeId?: string;
     jobId?: string;
+    queuePosition?: number;
+    networkRetryText?: string;
     isTimeout?: boolean;
     status?: CanvasNodeStatus;
     /**
@@ -170,6 +177,7 @@ export type CanvasNodeMetadata = {
     channelId?: string;
     workflowId?: string;
     model?: string;
+    modelId?: string;
     reasoningEffort?: "auto" | "low" | "medium" | "high" | "xhigh";
     size?: string;
     quality?: string;
@@ -219,6 +227,8 @@ export type CanvasNodeMetadata = {
     videoComposite?: CanvasVideoComposite;
     /** 视频节点：从源片切出来、作为生成输入的参考片段（非结果，供人工检查）。 */
     referenceClip?: CanvasVideoReferenceClip;
+    /** 视频节点：当前模型支持的工具（上游按模型能力动态出 UI）。 */
+    supportedTools?: ModelSupportedTools;
 };
 
 export type CanvasNodeData = {

@@ -21,6 +21,7 @@ export type VideoRequestOptions = {
     firstFrame?: ReferenceImage;
     lastFrame?: ReferenceImage;
     videoMode?: "omni" | "frame";
+    model?: string;
     channelId?: string;
     workflowId?: string;
     /**
@@ -56,7 +57,7 @@ function aiHeaders(config: AiConfig, contentType?: string) {
 }
 
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], options?: VideoRequestOptions): Promise<VideoGenerationResult> {
-    const rawModel = config.videoModel || config.model;
+    const rawModel = options?.model || config.videoModel || config.model;
     const res = await requestComfyuiVideo({
         config,
         model: rawModel,
@@ -79,7 +80,7 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 }
 
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], options?: VideoRequestOptions): Promise<VideoGenerationTask> {
-    const rawModel = config.videoModel || config.model;
+    const rawModel = options?.model || config.videoModel || config.model;
     const { jobId } = await submitComfyuiVideoJob({
         config,
         model: rawModel,
@@ -101,7 +102,7 @@ export async function pollVideoGenerationTask(config: AiConfig, task: VideoGener
     const baseUrl = (channel.comfyuiProxyUrl || "").trim();
     const token = channel.comfyuiProxyToken;
     try {
-        const result = await pollComfyuiVideoJob(task.id, baseUrl, token, options?.signal);
+        const result = await pollComfyuiVideoJob(task.id, baseUrl, token, options?.signal, options?.onProgress);
         return { status: "completed", result };
     } catch (error) {
         return { status: "failed", error: error instanceof Error ? error.message : String(error) };
