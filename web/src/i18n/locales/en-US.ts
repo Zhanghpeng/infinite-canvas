@@ -618,7 +618,24 @@ export default {
             "noVideo": "Please select a valid video node",
             "noChannel": "No available ComfyUI channel found",
             "noWorkflow": "No depth video workflow configured for current channel. Please configure it in channel settings.",
-            "convertFailed": "Failed to extract video depth, please try again"
+            "convertFailed": "Failed to extract video depth, please try again",
+            "modal": {
+                "title": "Video Depth Estimation / Depth Video",
+                "description": "Derive monocular temporal continuous grayscale depth video for source video. Select the ComfyUI host (channel) and corresponding workflow to execute this task.",
+                "channelLabel": "Execution Host / Channel",
+                "manageChannels": "Manage Channels",
+                "channelPlaceholder": "Select execution channel host",
+                "workflowLabel": "Depth Video Workflow",
+                "workflowPlaceholder": "Select depth video workflow",
+                "videoDetection": "Input Source Video Detection",
+                "videoReady": "{{title}} (Ready)",
+                "noVideoContent": "No video content detected",
+                "depthTip": "Note: Based on ReShot / Video Depth Anything monocular continuous depth estimation, transforms source video directly into temporal depth maps (white near, black far), stripping character appearance and style while extracting motion and depth without needing prompts or references.",
+                "hasVideo": "Target video is ready",
+                "noVideo": "No valid video detected",
+                "startDepth": "Start Extracting Depth Video",
+                "createNode": "Create Depth Estimation Node"
+            }
         },
         "videoPlayer": {
             "play": "Play",
@@ -1441,25 +1458,6 @@ export default {
                 "noReferences": "No reference images detected (can connect after creation)",
                 "startRefine": "Start Face Refine",
                 "createNode": "Create Face Refine Node"
-            }
-        },
-        "depthVideo": {
-            "modal": {
-                "title": "Video Depth Estimation / Depth Video",
-                "description": "Derive monocular temporal continuous grayscale depth video for source video. Select the ComfyUI host (channel) and corresponding workflow to execute this task.",
-                "channelLabel": "Execution Host / Channel",
-                "manageChannels": "Manage Channels",
-                "channelPlaceholder": "Select execution channel host",
-                "workflowLabel": "Depth Video Workflow",
-                "workflowPlaceholder": "Select depth video workflow",
-                "videoDetection": "Input Source Video Detection",
-                "videoReady": "{{title}} (Ready)",
-                "noVideoContent": "No video content detected",
-                "depthTip": "Note: Based on ReShot / Video Depth Anything monocular continuous depth estimation, transforms source video directly into temporal depth maps (white near, black far), stripping character appearance and style while extracting motion and depth without needing prompts or references.",
-                "hasVideo": "Target video is ready",
-                "noVideo": "No valid video detected",
-                "startDepth": "Start Extracting Depth Video",
-                "createNode": "Create Depth Estimation Node"
             }
         },
         "collabWatchMode": {

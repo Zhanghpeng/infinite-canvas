@@ -618,7 +618,24 @@ export default {
             "noVideo": "请选择包含有效视频的视频节点",
             "noChannel": "未找到可用的 ComfyUI 渠道",
             "noWorkflow": "当前渠道未配置深度视频提取工作流，请先在渠道设置中配置",
-            "convertFailed": "深度视频提取失败，请重试"
+            "convertFailed": "深度视频提取失败，请重试",
+            "modal": {
+                "title": "视频深度估计 / 深度视频",
+                "description": "为原视频派生单目时序连续灰度深度视频。请选择执行此任务的 ComfyUI 主机（渠道）及对应工作流。",
+                "channelLabel": "执行主机 / 渠道",
+                "manageChannels": "管理渠道",
+                "channelPlaceholder": "选择执行渠道主机",
+                "workflowLabel": "深度视频工作流",
+                "workflowPlaceholder": "选择深度视频工作流",
+                "videoDetection": "输入原视频检测",
+                "videoReady": "{{title}} (已就绪)",
+                "noVideoContent": "未检测到视频内容",
+                "depthTip": "说明：基于 ReShot / Video Depth Anything 单目连续深度估计，将原视频直接转换为近白远黑的时序深度图，剥离人物外貌与画风，提取运动与景深，无需输入提示词或参考图。",
+                "hasVideo": "目标视频已就绪",
+                "noVideo": "未检测到有效视频",
+                "startDepth": "开始提取深度视频",
+                "createNode": "创建深度估计节点"
+            }
         },
         "videoPlayer": {
             "play": "播放",
@@ -1441,25 +1458,6 @@ export default {
                 "noReferences": "未检测到参考图（创建后可连线）",
                 "startRefine": "开始人脸修复",
                 "createNode": "创建人脸修复节点"
-            }
-        },
-        "depthVideo": {
-            "modal": {
-                "title": "视频深度估计 / 深度视频",
-                "description": "为原视频派生单目时序连续灰度深度视频。请选择执行此任务的 ComfyUI 主机（渠道）及对应工作流。",
-                "channelLabel": "执行主机 / 渠道",
-                "manageChannels": "管理渠道",
-                "channelPlaceholder": "选择执行渠道主机",
-                "workflowLabel": "深度视频工作流",
-                "workflowPlaceholder": "选择深度视频工作流",
-                "videoDetection": "输入原视频检测",
-                "videoReady": "{{title}} (已就绪)",
-                "noVideoContent": "未检测到视频内容",
-                "depthTip": "说明：基于 ReShot / Video Depth Anything 单目连续深度估计，将原视频直接转换为近白远黑的时序深度图，剥离人物外貌与画风，提取运动与景深，无需输入提示词或参考图。",
-                "hasVideo": "目标视频已就绪",
-                "noVideo": "未检测到有效视频",
-                "startDepth": "开始提取深度视频",
-                "createNode": "创建深度估计节点"
             }
         },
         "collabWatchMode": {
