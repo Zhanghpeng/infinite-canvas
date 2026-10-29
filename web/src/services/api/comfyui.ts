@@ -100,13 +100,127 @@ export type ComfyuiBindings = {
     refMask?: string;
 };
 
+type WorkflowNodeRecord = {
+    class_type?: string;
+    inputs?: Record<string, unknown>;
+    _meta?: { title?: unknown };
+};
+
+/**
+ * _meta.title 槽位名 → class_type → inputs 键。
+ *
+ * 这里只放"这个 class_type 明确该写哪个键"的映射；表里没有的 class_type 走
+ * SLOT_FALLBACK_KEYS 的顺序猜测。导入校验与绑定的键解析共用一份，避免两边判断不一致。
+ */
+const BINDING_TITLE_TO_INPUT_SLOT: Record<string, Record<string, string>> = {
+    prompt: { CLIPTextEncode: "text", PrimitiveStringMultiline: "value", PrimitiveString: "value", TextEncodeBooguEdit: "prompt", TextEncodeQwenImageEditPlus: "prompt" },
+    width: { PrimitiveInt: "value", PrimitiveFloat: "value" },
+    height: { PrimitiveInt: "value", PrimitiveFloat: "value" },
+    seed: { KSampler: "seed", KSamplerAdvanced: "noise_seed", PrimitiveInt: "value", PrimitiveFloat: "value" },
+    ref_image: { LoadImage: "image", LoadImageMask: "image" },
+    ref_mask: { LoadImage: "image", LoadImageMask: "image" },
+    ref_video: { LoadVideo: "file", VHS_LoadVideo: "video" },
+    ref_audio: { LoadAudio: "audio" },
+    caption: { PrimitiveStringMultiline: "value", PrimitiveString: "value", CLIPTextEncode: "text" },
+    lyrics: { PrimitiveStringMultiline: "value", PrimitiveString: "value", CLIPTextEncode: "text" },
+    // 情绪描述与强度：IndexTTS 类工作流把台词/情绪抽成字符串节点，情绪只喂一句自然语言。
+    emotion: { PrimitiveStringMultiline: "value", PrimitiveString: "value" },
+    strength: { PrimitiveFloat: "value", PrimitiveInt: "value" },
+    duration: { Float: "Number", PrimitiveInt: "value", PrimitiveFloat: "value" },
+};
+
+/** 无 class_type 映射时按顺序尝试的输入键，顺序即优先级。 */
+const SLOT_FALLBACK_KEYS: Record<string, string[]> = {
+    prompt: ["value", "text", "prompt"],
+    caption: ["value", "text", "caption"],
+    lyrics: ["value", "text", "lyrics"],
+    emotion: ["value", "text", "emotion_text", "emotion"],
+    strength: ["value", "strength"],
+    width: ["value", "width"],
+    height: ["value", "height"],
+    seed: ["seed", "noise_seed", "value"],
+    duration: ["Number", "value", "duration", "seconds", "max_duration", "frames"],
+    ref_image: ["image"],
+    ref_mask: ["image"],
+    ref_video: ["file", "video"],
+    ref_audio: ["audio", "file"],
+    first_frame: ["image"],
+    last_frame: ["image"],
+};
+
+/** 参考类槽位：ref_image_01 / ref_video_02 / ref_audio_01。无编号按 01 处理，兼容早期只标 ref_audio 的流程。 */
+const REF_SLOT_PATTERN = /^(ref_image|ref_video|ref_audio)(?:_(\d{1,2}))?$/;
+
+const REF_SLOT_DEFAULT_KEY: Record<string, string> = {
+    ref_image: "image",
+    ref_video: "file",
+    ref_audio: "audio",
+};
+
+/** 是否是我们认识的槽位名（产物标记 output_* 与自定义 title 不在其列）。 */
+export function isKnownSlotTitle(rawTitle: string): boolean {
+    const title = rawTitle.trim().toLowerCase();
+    if (REF_SLOT_PATTERN.test(title)) return true;
+    return Boolean(SLOT_FALLBACK_KEYS[title]);
+}
+
+/**
+ * 解析槽位应当写进哪个 inputs 键。返回 undefined 表示"这个节点没有可写的输入"。
+ */
+export function resolveSlotInputKey(rawTitle: string, record: WorkflowNodeRecord): string | undefined {
+    const title = rawTitle.trim().toLowerCase();
+    const inputs = record.inputs || {};
+    const classType = record.class_type || "";
+    const refMatch = REF_SLOT_PATTERN.exec(title);
+    const slotName = refMatch ? refMatch[1] : title;
+
+    const mapped = BINDING_TITLE_TO_INPUT_SLOT[slotName]?.[classType];
+    if (mapped && mapped in inputs) return mapped;
+
+    for (const key of SLOT_FALLBACK_KEYS[slotName] || []) {
+        if (key in inputs) return key;
+    }
+    if (refMatch && REF_SLOT_DEFAULT_KEY[slotName] in inputs) return REF_SLOT_DEFAULT_KEY[slotName];
+    return undefined;
+}
+
+/**
+ * 把值写进槽位节点自己的 inputs。
+ *
+ * 两条铁律，都是为了把「提交成功但参数没生效」变成能看见的错误：
+ * 1. 目标键当前是数组 = 它是一条连线（`["8", 0]`）。写字符串会把连线盖掉、源节点变孤儿，
+ *    工作流照样跑完，只是那个参数永远停在旧值。这类 bug 从产物上完全看不出来。
+ * 2. 类型跟随原值。`mode.strength` 是 float，写成 `"0.85"` 会被 ComfyUI 类型校验拒掉，
+ *    而报错指向节点而不是参数，反查成本极高。
+ */
+export function writeSlot(record: WorkflowNodeRecord, slot: string, value: unknown, label = slot): void {
+    if (!record.inputs) return;
+    const current = record.inputs[slot];
+    if (Array.isArray(current)) {
+        throw new ComfyuiError(
+            `槽位「${label}」指向 ${record.class_type || "节点"} 的 ${slot}，它是一条连线，不能直接写入。槽位应标在上游的字符串/数值/文件节点上，而不是消费方。`,
+        );
+    }
+    record.inputs[slot] = coerceToOriginalType(current, value);
+}
+
+function coerceToOriginalType(current: unknown, value: unknown): unknown {
+    if (typeof current === "number") {
+        const num = Number(value);
+        return Number.isFinite(num) ? num : current;
+    }
+    if (typeof current === "boolean") return Boolean(value);
+    if (typeof current === "string") return typeof value === "string" ? value : String(value ?? "");
+    return value;
+}
+
 /**
  * Validate a workflow JSON against a specific WorkflowCategory under the strict _meta.title protocol.
  */
 export function validateComfyuiWorkflow(
     workflow: unknown,
     category: WorkflowCategory,
-): { ok: boolean; error?: string; slots?: string[] } {
+): { ok: boolean; error?: string; slots?: string[]; warnings?: string[] } {
     if (typeof workflow !== "object" || workflow === null || Array.isArray(workflow)) {
         return { ok: false, error: "工作流 JSON 必须为对象（ComfyUI API 格式）" };
     }
@@ -137,7 +251,7 @@ export function validateComfyuiWorkflow(
         "prompt", "seed", "width", "height", "duration",
         "first_frame", "last_frame", "ref_mask", "mask", "ref_mask_01",
         "output_image", "output_video", "output_text", "output_audio",
-        "caption", "lyrics",
+        "caption", "lyrics", "emotion", "strength",
     ];
 
     for (const slot of RESERVED_SINGLE_SLOTS) {
@@ -179,7 +293,7 @@ export function validateComfyuiWorkflow(
         if (hasOutputImage || hasOutputVideo || hasOutputAudio) {
             return { ok: false, error: "文本工作流不得包含 output_image、output_video 或 output_audio 标记" };
         }
-    } else if (category === "audio") {
+    } else if (category === "audio" || category === "voice") {
         if (!hasOutputAudio) {
             return { ok: false, error: "音频工作流缺少 \"output_audio\" 标记（请在 SaveAudioAdvanced 或 SaveAudio 保存节点上标记 _meta.title 为 output_audio）" };
         }
@@ -293,6 +407,17 @@ export function validateComfyuiWorkflow(
             }
             break;
 
+        case "voice":
+            // 配音必须能拿到台词：没有台词就没什么可念的，只有情绪描述跑不出东西。
+            if (!hasPrompt && !hasCaption) {
+                return { ok: false, error: "配音工作流缺少台词槽位（请把台词抽成 PrimitiveStringMultiline 并标记 _meta.title 为 prompt）" };
+            }
+            // 音色是 IndexTTS 一类模型的必需输入，缺了要么跑不动、要么只能用它写死的那个音色。
+            if (!hasRefAudio) {
+                return { ok: false, error: "配音工作流缺少参考音色槽位（请把音色参考音频节点标记为 ref_audio_01）" };
+            }
+            break;
+
         case "faceRefine":
             if (!hasRefVideo) {
                 return { ok: false, error: "视频人脸修复工作流缺少待修复视频输入槽位（必须标记 \"ref_video_01\" 槽位节点）" };
@@ -309,28 +434,44 @@ export function validateComfyuiWorkflow(
             break;
     }
 
-    return { ok: true, slots: Array.from(presentTitles) };
+    // 4. 槽位自检：三条检查正好覆盖「静默不生效」的全部路径。
+    //    槽位体系真正的价值不是命名整齐，而是标错时能说一句人话，而不是等产物不对再回头猜。
+    const warnings: string[] = [];
+    const rawNodes = workflow as Record<string, unknown>;
+    for (const [title, ids] of Object.entries(titleToNodeIds)) {
+        if (!isKnownSlotTitle(title)) continue;
+
+        const refMatch = REF_SLOT_PATTERN.exec(title);
+        if (refMatch && !refMatch[2]) {
+            warnings.push(`槽位「${title}」没有编号，按 01 处理。建议写成 ${title}_01，多参考时才说得清顺序。`);
+        }
+
+        for (const nodeId of ids) {
+            const node = rawNodes[nodeId] as WorkflowNodeRecord | undefined;
+            if (!node || typeof node !== "object") continue;
+            const key = resolveSlotInputKey(title, node);
+            if (!key) {
+                return {
+                    ok: false,
+                    error: `槽位「${title}」标在了节点 ${nodeId}（${node.class_type || "未知类型"}）上，但这个节点没有可写入的输入。请把槽位标到上游的字符串 / 数值 / 文件加载节点上（例如 PrimitiveStringMultiline.value、LoadAudio.audio）。`,
+                };
+            }
+            if (Array.isArray(node.inputs?.[key])) {
+                return {
+                    ok: false,
+                    error: `槽位「${title}」标错了位置：节点 ${nodeId}（${node.class_type}）的 ${key} 是从别的节点连过来的。请把这个槽位改标到连线那头的源节点上，否则绑定时会盖掉连线，参数改了也不生效。`,
+                };
+            }
+        }
+    }
+
+    return { ok: true, slots: Array.from(presentTitles), warnings: warnings.length ? warnings : undefined };
 }
 
 /** Generate a random safe integer seed for ComfyUI nodes (15-digit safe integer). */
 export function generateRandomSeed(): number {
     return Math.floor(Math.random() * 1_000_000_000_000_000);
 }
-
-/**
- * _meta.title → class_type → input slot for ComfyUI parameters.
- */
-const BINDING_TITLE_TO_INPUT_SLOT: Record<string, Record<string, string>> = {
-    prompt: { CLIPTextEncode: "text", PrimitiveStringMultiline: "value", PrimitiveString: "value", TextEncodeBooguEdit: "prompt", TextEncodeQwenImageEditPlus: "prompt" },
-    width: { PrimitiveInt: "value", PrimitiveFloat: "value" },
-    height: { PrimitiveInt: "value", PrimitiveFloat: "value" },
-    seed: { KSampler: "seed", KSamplerAdvanced: "noise_seed", PrimitiveInt: "value", PrimitiveFloat: "value" },
-    ref_image: { LoadImage: "image", LoadImageMask: "image" },
-    ref_mask: { LoadImage: "image", LoadImageMask: "image" },
-    caption: { PrimitiveStringMultiline: "value", PrimitiveString: "value", CLIPTextEncode: "text" },
-    lyrics: { PrimitiveStringMultiline: "value", PrimitiveString: "value", CLIPTextEncode: "text" },
-    duration: { Float: "Number", PrimitiveInt: "value", PrimitiveFloat: "value" },
-};
 
 /**
  * Deep-copy a workflow and write generation params into the nodes marked by
@@ -379,7 +520,7 @@ export function applyBindings(workflow: ComfyuiWorkflowJson, params: ComfyuiBind
             slot = BINDING_TITLE_TO_INPUT_SLOT.ref_mask[record.class_type] || "image";
             value = params.refMask;
         }
-        if (slot) record.inputs[slot] = value;
+        if (slot) writeSlot(record, slot, value, title);
     }
     // Fallback: if no node had _meta.title === "seed", find any sampler with a literal numeric seed
     if (!boundSeed && params.seed !== undefined) {
@@ -567,6 +708,36 @@ export class ComfyuiJobError extends ComfyuiError {
         this.name = "ComfyuiJobError";
         this.status = status;
     }
+}
+
+/**
+ * 把 ComfyUI 的 `status.messages` 翻成一句人话。
+ *
+ * 原始值是一整个消息数组，直接 stringify 出来是几百字符的 JSON，用户只看到一堆括号，
+ * 真正有用的信息（哪个节点、缺什么依赖、ImportError 还是显存不足）被埋在中间。
+ * 这里只挑执行期的两条突发消息出来，其余原样返回，至少不丢信息。
+ */
+export function describeExecutionFailure(messages: unknown): string {
+    if (!Array.isArray(messages)) return "";
+    for (const entry of messages) {
+        if (!Array.isArray(entry)) continue;
+        const [type, payload] = entry as [unknown, unknown];
+        if (type === "execution_interrupted") return "任务被中断";
+        if (type !== "execution_error") continue;
+
+        const info = (payload ?? {}) as Record<string, unknown>;
+        const nodeType = typeof info.node_type === "string" && info.node_type ? info.node_type : "";
+        const nodeId = typeof info.node_id === "string" || typeof info.node_id === "number" ? String(info.node_id) : "";
+        const exceptionMessage = typeof info.exception_message === "string" ? info.exception_message.trim() : "";
+        const exceptionType = typeof info.exception_type === "string" ? info.exception_type : "";
+        const detail = exceptionMessage || exceptionType || "未知错误";
+
+        // 节点类型比节点号可读，两个都给出来方便对着 ComfyUI 面板定位
+        const where = nodeType ? `${nodeType}${nodeId ? `（节点 ${nodeId}）` : ""}` : nodeId ? `节点 ${nodeId}` : "";
+        const text = detail.length > 400 ? `${detail.slice(0, 400)}…` : detail;
+        return where ? `${where}：${text}` : text;
+    }
+    return "";
 }
 
 /** Thrown when the job has not reached a terminal state within the timeout window. */
@@ -3285,7 +3456,119 @@ export type ComfyuiAudioBindings = {
     lyrics?: string;
     duration?: number;
     seed?: number;
+    /** 情绪描述（配音）。空串也要写 —— 清空情绪框必须真的清掉工作流里的旧值。 */
+    emotion?: string;
+    /** 情绪强度（配音）。跟随音色卡，落在 strength 槽位。 */
+    strength?: number;
+    /** 参考音色（配音）。必须是 ComfyUI input 目录下真实存在的文件名。 */
+    refAudio?: string;
+    /** 情绪模式（配音）。结构开关，不能当普通槽位走连线，见 applyEmotionMode。 */
+    emotionMode?: "text" | "speaker";
 };
+
+/**
+ * 情绪模式作用在这些节点上。它决定节点存在哪些子输入，所以没法像台词那样抽成
+ * 独立字符串节点用连线注入 —— 只能按 class_type 直接改。
+ */
+const EMOTION_CONTROL_CLASS_TYPES = new Set(["T8_IndexTTS25_EmotionControl"]);
+
+/**
+ * 切情绪模式，并清掉上一个模式的残留子键。
+ *
+ * ComfyUI 按"当前选中的 option"校验输入：`mode="speaker"` 时还留着 `mode.emotion_text`，
+ * 就是未定义输入，直接 400。反过来漏清会把上一句的情绪描述带进下一句。
+ * 绑定发生在每次任务的克隆副本上，所以这里删连线不会影响原始工作流。
+ */
+function applyEmotionMode(record: WorkflowNodeRecord, mode: "text" | "speaker"): void {
+    const inputs = record.inputs;
+    if (!inputs) return;
+    if (mode === "speaker") {
+        for (const key of Object.keys(inputs)) {
+            if (key.startsWith("mode.")) delete inputs[key];
+        }
+    }
+    inputs.mode = mode;
+}
+
+export function applyAudioBindings(workflow: ComfyuiWorkflowJson, params: ComfyuiAudioBindings): ComfyuiWorkflowJson {
+    const cloned = structuredClone(workflow);
+    type NodeRecord = WorkflowNodeRecord;
+    let boundSeed = false;
+
+    for (const node of Object.values(cloned)) {
+        if (typeof node !== "object" || node === null) continue;
+        const record = node as NodeRecord;
+        const rawTitle = record._meta?.title;
+        if (!record.class_type || !record.inputs) continue;
+        const title = typeof rawTitle === "string" ? rawTitle.trim().toLowerCase() : "";
+
+        if (params.emotionMode && EMOTION_CONTROL_CLASS_TYPES.has(record.class_type)) {
+            applyEmotionMode(record, params.emotionMode);
+        }
+        if (!title) continue;
+
+        let slot: string | undefined;
+        let value: unknown;
+
+        if (title === "caption" && params.caption !== undefined) {
+            slot = BINDING_TITLE_TO_INPUT_SLOT.caption?.[record.class_type] ||
+                ("value" in record.inputs ? "value" : "text" in record.inputs ? "text" : "caption" in record.inputs ? "caption" : undefined);
+            value = params.caption;
+        } else if (title === "lyrics" && params.lyrics !== undefined) {
+            slot = BINDING_TITLE_TO_INPUT_SLOT.lyrics?.[record.class_type] ||
+                ("value" in record.inputs ? "value" : "text" in record.inputs ? "text" : "lyrics" in record.inputs ? "lyrics" : undefined);
+            value = params.lyrics;
+        } else if ((title === "duration" || title === "max_duration") && params.duration !== undefined) {
+            slot = BINDING_TITLE_TO_INPUT_SLOT.duration?.[record.class_type] ||
+                ("Number" in record.inputs ? "Number" : "value" in record.inputs ? "value" : "duration" in record.inputs ? "duration" : "max_duration" in record.inputs ? "max_duration" : undefined);
+            // 绑定音频生成时长（秒）。注意：params.duration 已由上层调用包含针对 MiniMax Music 03 产物少 1 秒的 +1s 补偿值
+            value = params.duration;
+        } else if (title === "emotion" && params.emotion !== undefined) {
+            // 情绪走原值类型跟随：PrimitiveStringMultiline.value 是字符串，直接写。
+            slot = resolveSlotInputKey(title, record);
+            value = params.emotion;
+        } else if (title === "strength" && params.strength !== undefined) {
+            // 强度是 float，writeSlot 会按原值类型转成数字，写字符串会被 ComfyUI 类型校验拒掉。
+            slot = resolveSlotInputKey(title, record);
+            value = params.strength;
+        } else if (params.refAudio !== undefined && /^ref_audio(_0?1)?$/.test(title)) {
+            slot = resolveSlotInputKey(title, record);
+            value = params.refAudio;
+        } else if (title === "prompt" && params.prompt !== undefined) {
+            slot = BINDING_TITLE_TO_INPUT_SLOT.prompt[record.class_type] ||
+                ("value" in record.inputs ? "value" : "text" in record.inputs ? "text" : "prompt" in record.inputs ? "prompt" : undefined);
+            value = params.prompt || params.caption || "";
+        } else if (title === "seed" && params.seed !== undefined) {
+            slot = BINDING_TITLE_TO_INPUT_SLOT.seed[record.class_type];
+            if (!slot) {
+                if ("seed" in record.inputs) slot = "seed";
+                else if ("noise_seed" in record.inputs) slot = "noise_seed";
+                else if ("value" in record.inputs) slot = "value";
+            }
+            value = params.seed;
+            boundSeed = true;
+        }
+
+        if (slot) writeSlot(record, slot, value, title);
+    }
+
+    if (!boundSeed && params.seed !== undefined) {
+        for (const node of Object.values(cloned)) {
+            if (typeof node !== "object" || node === null) continue;
+            const record = node as NodeRecord;
+            if (!record.inputs) continue;
+            if (typeof record.inputs.seed === "number") {
+                record.inputs.seed = params.seed;
+                break;
+            } else if (typeof record.inputs.noise_seed === "number") {
+                record.inputs.noise_seed = params.seed;
+                break;
+            }
+        }
+    }
+
+    return cloned;
+}
 
 /**
  * Split prompt strictly by [caption] and [lyrics] tags.
@@ -3360,53 +3643,175 @@ export async function requestComfyuiAudio(req: ComfyuiAudioRequest): Promise<Com
     req.onProgress?.("submitted", { jobId });
 
     try {
-        const signal = req.signal;
-        if (signal?.aborted) {
-            await cancelJob(jobId, baseUrl, token);
-            throw new ComfyuiAbortedError();
-        }
-
-        const startedAt = Date.now();
-        const polling = pollJobRaw(jobId, baseUrl, token, signal, startedAt + JOB_TIMEOUT_MS, req.onProgress);
-        let waiting: Promise<PollJobResult | undefined> = polling;
-        if (signal) {
-            const aborted: Promise<never> = new Promise((_resolve, reject) => {
-                signal.addEventListener("abort", () => {
-                    void cancelJob(jobId, baseUrl, token).catch(() => undefined);
-                    reject(new ComfyuiAbortedError());
-                }, { once: true });
-            });
-            waiting = Promise.race([polling, aborted]);
-        }
-
-        const pollResult = await waiting;
-        if (!pollResult || !pollResult.outputs?.length) {
-            throw new ComfyuiError("ComfyUI 未生成音频产物");
-        }
-
-        const audioOutput = pollResult.outputs.find((out) =>
-            out.type === "audio" ||
-            out.content_type?.startsWith("audio/") ||
-            /\.(mp3|wav|ogg|flac|m4a|aac|opus)$/i.test(out.filename || "") ||
-            /\.(mp3|wav|ogg|flac|m4a|aac|opus)/i.test(out.id || "")
-        );
-        if (!audioOutput) {
-            throw new ComfyuiError("ComfyUI 任务完成但未找到音频文件产物");
-        }
-
-        const targetAssetId = audioOutput.id || (audioOutput.filename ? `/api/view?filename=${encodeURIComponent(audioOutput.filename)}&type=${encodeURIComponent(audioOutput.type || "output")}&subfolder=${encodeURIComponent(audioOutput.subfolder || "")}` : "");
-        const downloaded = await downloadAsset(targetAssetId, baseUrl, token);
-        return {
-            blob: downloaded.blob,
-            dataUrl: downloaded.dataUrl,
-            seed,
-            jobId,
-        };
+        const result = await waitForAudioJob({ jobId, baseUrl, token, signal: req.signal, onProgress: req.onProgress });
+        return { ...result, seed, jobId };
     } catch (error) {
         if (error instanceof ComfyuiTimeoutError && !error.jobId) {
             throw new ComfyuiTimeoutError(error.timeoutMs, jobId);
         }
         throw error;
+    }
+}
+
+/**
+ * 等一个音频作业跑完并取回产物。配乐与配音共用这一段：
+ * 两者只差"提交前怎么绑参数"，取产物的规则完全一样 —— 按类型/扩展名找音频，
+ * 不认 `output_audio` 标记（那个标记只给导入校验用）。
+ */
+async function waitForAudioJob(opts: { jobId: string; baseUrl: string; token?: string; signal?: AbortSignal; onProgress?: ComfyuiAudioRequest["onProgress"] }): Promise<{ blob: Blob; dataUrl: string }> {
+    const { jobId, baseUrl, token, signal, onProgress } = opts;
+    if (signal?.aborted) {
+        await cancelJob(jobId, baseUrl, token);
+        throw new ComfyuiAbortedError();
+    }
+
+    const startedAt = Date.now();
+    const polling = pollJobRaw(jobId, baseUrl, token, signal, startedAt + JOB_TIMEOUT_MS, onProgress as ((status: string, detail?: Record<string, unknown>) => void) | undefined);
+    let waiting: Promise<PollJobResult | undefined> = polling;
+    if (signal) {
+        const aborted: Promise<never> = new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => {
+                void cancelJob(jobId, baseUrl, token).catch(() => undefined);
+                reject(new ComfyuiAbortedError());
+            }, { once: true });
+        });
+        waiting = Promise.race([polling, aborted]);
+    }
+
+    const pollResult = await waiting;
+    if (!pollResult || !pollResult.outputs?.length) {
+        throw new ComfyuiError("ComfyUI 未生成音频产物");
+    }
+
+    const audioOutput = pollResult.outputs.find((out) =>
+        out.type === "audio" ||
+        out.content_type?.startsWith("audio/") ||
+        /\.(mp3|wav|ogg|flac|m4a|aac|opus)$/i.test(out.filename || "") ||
+        /\.(mp3|wav|ogg|flac|m4a|aac|opus)/i.test(out.id || "")
+    );
+    if (!audioOutput) {
+        throw new ComfyuiError("ComfyUI 任务完成但未找到音频文件产物");
+    }
+
+    const targetAssetId = audioOutput.id || (audioOutput.filename ? `/api/view?filename=${encodeURIComponent(audioOutput.filename)}&type=${encodeURIComponent(audioOutput.type || "output")}&subfolder=${encodeURIComponent(audioOutput.subfolder || "")}` : "");
+    return downloadAsset(targetAssetId, baseUrl, token);
+}
+
+export type ComfyuiVoiceRequest = {
+    config: AiConfig;
+    /** 台词。空则不生成 —— 配音没台词就没什么可念的。 */
+    prompt: string;
+    /** 情绪描述，可留空：留空时 IndexTTS 会按台词本身推断情绪。 */
+    emotion?: string;
+    /** 情绪强度，跟随音色卡。 */
+    strength?: number;
+    /** 情绪模式：text 用情绪描述，speaker 跟随音色参考。 */
+    emotionMode?: "text" | "speaker";
+    /** 参考音色：已经存在于 ComfyUI input 目录的文件名。 */
+    refAudioName: string;
+    model?: string;
+    channelId?: string;
+    workflowId?: string;
+    seed?: number;
+    signal?: AbortSignal;
+    onProgress?: (status: string, detail?: { jobId?: string }) => void;
+};
+
+export type ComfyuiVoiceResult = {
+    blob: Blob;
+    dataUrl: string;
+    seed: number;
+    jobId: string;
+};
+
+/**
+ * 配音走独立函数，不复用 `requestComfyuiAudio`。
+ *
+ * 两个东西套不得：
+ * 1. 那里对时长做 `+1s` 补偿，是给 MiniMax Music 少 1 秒打的补丁。配音的时长由台词决定，
+ *    套上去只会把 `target_duration_seconds` 写成垃圾值。
+ * 2. 那里把提示词按 `[caption]` / `[lyrics]` 拆开。配音的台词就是台词，写进 caption 槽位
+ *    等于让它去找歌词。
+ */
+export async function requestComfyuiVoice(req: ComfyuiVoiceRequest): Promise<ComfyuiVoiceResult> {
+    const rawModel = req.model || req.config.audioModel || req.config.model;
+    const channel = req.channelId
+        ? req.config.channels?.find((c) => c.id === req.channelId) || resolveModelChannel(req.config, rawModel)
+        : resolveModelChannel(req.config, rawModel);
+    const baseUrl = (channel.comfyuiProxyUrl || "").trim();
+    const token = channel.comfyuiProxyToken;
+
+    const text = (req.prompt || "").trim();
+    if (!text) throw new ComfyuiError("配音需要台词，请先填写要念的内容");
+    const refAudioName = (req.refAudioName || "").trim();
+    // 不能像视频那样"没连参考就剪掉那个节点"：speaker_audio 是生成节点的必需输入，
+    // 剪了只会变成缺输入的 400，报错还指向工作流。只能在这里把话说明白。
+    if (!refAudioName) throw new ComfyuiError("配音需要先选一个参考音色");
+
+    const workflowItem = (req.workflowId ? findWorkflow(req.config, channel.id, req.workflowId, "voice") : undefined) || getDefaultWorkflow(channel, "voice");
+    if (!workflowItem) {
+        throw new ComfyuiError("未找到可用的配音工作流，请先在渠道配置里导入一个配音工作流");
+    }
+
+    const seed = req.seed !== undefined && req.seed >= 0 ? req.seed : generateRandomSeed();
+    const boundWorkflow = applyAudioBindings(workflowItem.json, {
+        prompt: text,
+        emotion: req.emotion ?? "",
+        strength: req.strength,
+        refAudio: refAudioName,
+        emotionMode: req.emotionMode || "text",
+        seed,
+    });
+
+    const jobId = await submitJob(boundWorkflow, baseUrl, token);
+    req.onProgress?.("submitted", { jobId });
+
+    try {
+        const result = await waitForAudioJob({ jobId, baseUrl, token, signal: req.signal });
+        return { ...result, seed, jobId };
+    } catch (error) {
+        if (error instanceof ComfyuiTimeoutError && !error.jobId) {
+            throw new ComfyuiTimeoutError(error.timeoutMs, jobId);
+        }
+        throw error;
+    }
+}
+
+/**
+ * 从 `/object_info` 的 COMBO 定义里取出可选项。
+ *
+ * 这个字段的形态换过一次版本，两种都要认：
+ * - 新版本：`["COMBO", { options: ["a.mp3", ...] }]`
+ * - 旧版本：`[["a.mp3", ...], {...}]`
+ * 只认一种的后果是静默拿到 undefined —— 表现出来就是"音色文件明明传过，却每次都重传"，
+ * 或者更糟：判不出文件已丢，生成时才 FileNotFoundError。
+ */
+function readComboOptions(definition: unknown): string[] | undefined {
+    if (!Array.isArray(definition)) return undefined;
+    const meta = definition[1] as { options?: unknown } | undefined;
+    const list = Array.isArray(meta?.options) ? meta.options : Array.isArray(definition[0]) ? definition[0] : undefined;
+    if (!Array.isArray(list)) return undefined;
+    return list.filter((item): item is string => typeof item === "string");
+}
+
+/**
+ * 读出 ComfyUI input 目录里现成的音频文件名（`LoadAudio` 的可选项就是它）。
+ *
+ * 用它判断音色要不要重传，而不是在本地记一个"传过了"的标记：用户可能清了 input 目录，
+ * 或者换了台 ComfyUI。标记还在、文件没了，生成时才会 FileNotFoundError，而那个报错
+ * 指向的是工作流文件名，看起来完全不像"少传一个文件"。
+ */
+export async function listComfyuiInputAudio(baseUrl: string, token?: string): Promise<string[] | undefined> {
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    try {
+        const res = await comfyuiFetch(`${normalizeBaseUrl(baseUrl)}/object_info/LoadAudio`, { headers }, baseUrl);
+        if (!res.ok) return undefined;
+        const data = (await res.json()) as { LoadAudio?: { input?: { required?: { audio?: unknown } } } };
+        return readComboOptions(data?.LoadAudio?.input?.required?.audio);
+    } catch {
+        // 拿不到列表不等于不能生成，交给上传流程去撞真实错误。
+        return undefined;
     }
 }
 

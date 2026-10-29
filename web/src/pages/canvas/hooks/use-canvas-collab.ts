@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useCollabStore } from "@/stores/use-collab-store";
 import { getImageBlob, setImageBlob } from "@/services/image-storage";
 import { getMediaBlob, setMediaBlob } from "@/services/file-storage";
+import { isEphemeralMediaUrl } from "@/lib/storage/direct-url";
 import type { CanvasConnection, CanvasNodeData, CanvasNodeMetadata, CanvasNodeStatus } from "@/types/canvas";
 
 export async function uploadAssetToCollabServer(storageKey: string, blob: Blob) {
@@ -32,7 +33,7 @@ export async function getAnyAssetBlob(storageKey: string, contentUrl?: string): 
         if (!blob) blob = await getImageBlob(storageKey);
         if (!blob) blob = await getMediaBlob(storageKey);
     }
-    if (!blob && contentUrl && contentUrl.startsWith("blob:")) {
+    if (!blob && contentUrl && isEphemeralMediaUrl(contentUrl)) {
         try {
             const resp = await fetch(contentUrl);
             if (resp.ok) {
@@ -54,7 +55,7 @@ export function sanitizeMetadataForCollab(meta: CanvasNodeMetadata): CanvasNodeM
     let newContent = meta.content;
 
     if (meta.storageKey) {
-        if (!meta.content || meta.content.startsWith("blob:")) {
+        if (isEphemeralMediaUrl(meta.content)) {
             newContent = toCollabAssetUrl(meta.storageKey);
             hasChanges = true;
         }
@@ -63,7 +64,7 @@ export function sanitizeMetadataForCollab(meta: CanvasNodeMetadata): CanvasNodeM
     let newImages = meta.images;
     if (meta.images && meta.images.length > 0) {
         newImages = meta.images.map((img) => {
-            if (img.storageKey && (!img.content || img.content.startsWith("blob:"))) {
+            if (img.storageKey && isEphemeralMediaUrl(img.content)) {
                 hasChanges = true;
                 return { ...img, content: toCollabAssetUrl(img.storageKey) };
             }
@@ -74,7 +75,7 @@ export function sanitizeMetadataForCollab(meta: CanvasNodeMetadata): CanvasNodeM
     let newGenRefs = meta.generationReferences;
     if (meta.generationReferences && meta.generationReferences.length > 0) {
         newGenRefs = meta.generationReferences.map((ref) => {
-            if (ref.storageKey && (!ref.url || ref.url.startsWith("blob:"))) {
+            if (ref.storageKey && isEphemeralMediaUrl(ref.url)) {
                 hasChanges = true;
                 return { ...ref, url: toCollabAssetUrl(ref.storageKey) };
             }

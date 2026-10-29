@@ -21,6 +21,12 @@ export type CanvasProject = {
     backgroundMode: CanvasBackgroundMode;
     showImageInfo: boolean;
     viewport: ViewportTransform;
+    // 仅本地存储 v2 的「骨架」会带这两个字段：索引里只有元数据，图还没从磁盘读出来。
+    // lazy=true 的项目绝不写 graph，否则会把空节点覆盖掉磁盘上的真实画布。
+    lazy?: boolean;
+    // 列表页要显示节点数，但不想为了这个数字把整幅画布读出来，所以索引里带一份计数。
+    nodeCount?: number;
+    connectionCount?: number;
 };
 
 type CanvasStore = {
@@ -32,6 +38,7 @@ type CanvasStore = {
     renameProject: (id: string, title: string) => void;
     deleteProjects: (ids: string[]) => void;
     replaceProjects: (projects: CanvasProject[]) => void;
+    setProjectGraph: (id: string, graph: Pick<CanvasProject, "nodes" | "connections" | "chatSessions">) => void;
     updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) => void;
 };
 
@@ -117,9 +124,24 @@ export const useCanvasStore = create<CanvasStore>()(
                     return { projects };
                 }),
             replaceProjects: (projects) => set({ projects }),
+            // 图从磁盘读到之后调用：补全 nodes/connections/chatSessions 并摘掉 lazy。
+            // 引用必须原样塞进来（不要 deep clone），落盘侧靠引用比较判断"图有没有变"。
+            setProjectGraph: (id, graph) =>
+                set((state) => ({
+                    projects: state.projects.map((project) =>
+                        project.id === id ? { ...project, ...graph, lazy: false, nodeCount: graph.nodes.length, connectionCount: graph.connections.length } : project,
+                    ),
+                })),
             updateProject: (id, patch) =>
                 set((state) => ({
-                    projects: state.projects.map((project) => (project.id === id ? { ...project, ...patch, updatedAt: new Date().toISOString() } : project)),
+                    projects: state.projects.map((project) => {
+                        if (project.id !== id) return project;
+                        const next: CanvasProject = { ...project, ...patch, updatedAt: new Date().toISOString() };
+                        // 计数跟着图走：列表页只读索引，靠这里保持数字与画布一致。
+                        if (patch.nodes) next.nodeCount = patch.nodes.length;
+                        if (patch.connections) next.connectionCount = patch.connections.length;
+                        return next;
+                    }),
                 })),
         }),
         {

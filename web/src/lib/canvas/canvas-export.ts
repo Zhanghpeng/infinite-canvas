@@ -4,11 +4,14 @@ import i18n from "@/i18n";
 import { createZip } from "@/lib/zip";
 import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob } from "@/services/image-storage";
+import { ensureProjectGraphs } from "@/lib/storage/local-canvas-storage";
 import type { CanvasExportAsset, CanvasExportFile } from "@/types/canvas-export";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 
-export async function exportCanvasProjects(projects: CanvasProject[], fileName = i18n.t("canvas.export.defaultProjectName")) {
+export async function exportCanvasProjects(source: CanvasProject[], fileName = i18n.t("canvas.export.defaultProjectName")) {
+    // 本地存储 v2 下，没打开过的项目只有元数据，导出前必须把图补齐。
+    const projects = await ensureProjectGraphs(source);
     const zipFiles: { name: string; data: BlobPart }[] = [];
     const exportedProjects = await Promise.all(
         projects.map(async (project) => {

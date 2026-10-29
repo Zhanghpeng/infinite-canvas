@@ -19,6 +19,11 @@ const CORE_WORKFLOW_CATEGORIES: Array<{ key: WorkflowCategory; title: string; de
     { key: "omniVideo", title: "全能参考视频工作流", desc: "多模态参考生视频（必标 prompt、output_video）" },
     { key: "frameVideo", title: "首尾帧视频工作流", desc: "首尾关键帧生视频（必标 first_frame、last_frame、output_video）" },
     { key: "audio", title: "音乐与音频工作流", desc: "音乐与音频生成（必标 caption/lyrics 或 prompt、output_audio）" },
+    {
+        key: "voice",
+        title: "配音工作流",
+        desc: "台词转人声（必标 prompt 台词、ref_audio_01 音色、output_audio；可选 emotion / strength）",
+    },
 ];
 
 const TOOL_WORKFLOW_CATEGORIES: Array<{ key: WorkflowCategory; title: string; desc: string }> = [

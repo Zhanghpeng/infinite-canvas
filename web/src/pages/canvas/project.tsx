@@ -6,8 +6,10 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
-import { generateRandomSeed } from "@/services/api/comfyui";
-import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
+import { generateRandomSeed, requestComfyuiImage } from "@/services/api/comfyui";
+import { requestAudioGeneration, requestVoiceGeneration, storeGeneratedAudio } from "@/services/api/audio";
+import { ensureVoiceAudioName, resolveVoiceSourceUrl } from "@/lib/canvas/voice-audio";
+import { findVoice, findVoiceByName, voiceAudioUrl } from "@/lib/canvas/voice-library";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { getModelProfile } from "@/services/api/models";
 import { defaultConfig, findWorkflow, getDefaultComfyWorkflowItems, getDefaultWorkflow, inpaintModelOptions, resolveModelChannel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -58,6 +60,7 @@ import { CanvasSelectionToolbar } from "@/components/canvas/canvas-selection-too
 import { alignSelectedNodes, boundsOfNodes, distributeSelectedNodes, type NodeAlignMode, type NodeDistributeMode } from "@/lib/canvas/canvas-layout-actions";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useCanvasStore, type CanvasProject } from "@/stores/canvas/use-canvas-store";
+import { readProjectGraph } from "@/lib/storage/local-canvas-storage";
 import { useCollabStore } from "@/stores/use-collab-store";
 import { useCanvasCollab } from "@/pages/canvas/hooks/use-canvas-collab";
 import { CanvasCollabCursors, CanvasCollabSelectionOutlines } from "@/components/canvas/canvas-collab-cursors";
@@ -347,10 +350,12 @@ function InfiniteCanvasPage() {
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const addAssetDetailed = useAssetStore((state) => state.addAssetDetailed);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
     const openProject = useCanvasStore((state) => state.openProject);
+    const setProjectGraph = useCanvasStore((state) => state.setProjectGraph);
     const updateProject = useCanvasStore((state) => state.updateProject);
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
@@ -697,15 +702,23 @@ function InfiniteCanvasPage() {
         }
 
         const restore = async () => {
-            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
-            const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
+            // 本地存储 v2 启动时只读索引，图还没加载。打开的这个项目在这里补读自己的 graph.json，
+            // 其它没打开的项目继续保持 lazy，保存时不会被空图覆盖。
+            let current = project as CanvasProject;
+            if (current.lazy) {
+                const graph = (await readProjectGraph(projectId)) ?? { nodes: [], connections: [], chatSessions: [] };
+                setProjectGraph(projectId, graph);
+                current = { ...current, ...graph, lazy: false, nodeCount: graph.nodes.length, connectionCount: graph.connections.length };
+            }
+            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(current.nodes));
+            const restoredSessions = await hydrateAssistantImages(current.chatSessions || []);
             setNodes(restoredNodes);
-            setConnections(project.connections);
+            setConnections(current.connections);
             setChatSessions(restoredSessions);
-            setActiveChatId(project.activeChatId || null);
-            setBackgroundMode(project.backgroundMode);
-            setShowImageInfo(project.showImageInfo || false);
-            setViewport(project.viewport);
+            setActiveChatId(current.activeChatId || null);
+            setBackgroundMode(current.backgroundMode);
+            setShowImageInfo(current.showImageInfo || false);
+            setViewport(current.viewport);
             historyRef.current = { past: [], future: [] };
             if (historyCommitTimerRef.current) {
                 clearTimeout(historyCommitTimerRef.current);
@@ -713,11 +726,11 @@ function InfiniteCanvasPage() {
             }
             lastHistoryRef.current = {
                 nodes: restoredNodes,
-                connections: project.connections,
+                connections: current.connections,
                 chatSessions: restoredSessions,
-                activeChatId: project.activeChatId || null,
-                backgroundMode: project.backgroundMode,
-                showImageInfo: project.showImageInfo || false,
+                activeChatId: current.activeChatId || null,
+                backgroundMode: current.backgroundMode,
+                showImageInfo: current.showImageInfo || false,
             };
             setHistoryState({ canUndo: false, canRedo: false });
             setInterruptedBannerDismissed(false);
@@ -3297,18 +3310,28 @@ function InfiniteCanvasPage() {
         [effectiveConfig, focusNode, message, startGenerationRequest, finishGenerationRequest, t],
     );
 
+    // 收藏到资产库的统一出口：同一条内容已经在库里就只提示一句，不再叠一张重复卡片。
+    const pushAsset = useCallback(
+        (asset: Parameters<typeof addAsset>[0]) => {
+            const result = addAssetDetailed(asset);
+            if (result.duplicate) message.info(t("assets.alreadyInLibrary"));
+            else message.success(t("common.addedToAssets"));
+            return result.id;
+        },
+        [addAssetDetailed, message, t],
+    );
+
     const saveNodeAsset = useCallback(
         async (node: CanvasNodeData) => {
             if (node.type === CanvasNodeType.Text) {
                 const content = node.metadata?.content?.trim();
                 if (!content) return message.error(t("canvas.projectPage.noTextToSave"));
-                addAsset({ kind: "text", title: node.metadata?.prompt?.slice(0, 24) || t("canvas.projectPage.canvasText"), coverUrl: "", tags: [], source: "Canvas", data: { content }, metadata: { source: "canvas", nodeId: node.id } });
-                message.success(t("common.addedToAssets"));
+                pushAsset({ kind: "text", title: node.metadata?.prompt?.slice(0, 24) || t("canvas.projectPage.canvasText"), coverUrl: "", tags: [], source: "Canvas", data: { content }, metadata: { source: "canvas", nodeId: node.id } });
                 return;
             }
             if (node.type === CanvasNodeType.Video) {
                 if (!node.metadata?.content) return message.error(t("canvas.projectPage.noVideoToSave"));
-                addAsset({
+                pushAsset({
                     kind: "video",
                     title: node.metadata?.prompt?.slice(0, 24) || t("canvas.projectPage.canvasVideo"),
                     coverUrl: "",
@@ -3317,12 +3340,11 @@ function InfiniteCanvasPage() {
                     data: { url: node.metadata.content, storageKey: node.metadata.storageKey, width: node.width, height: node.height, bytes: node.metadata.bytes || 0, mimeType: node.metadata.mimeType || "video/mp4" },
                     metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt },
                 });
-                message.success(t("common.addedToAssets"));
                 return;
             }
             if (node.type === CanvasNodeType.Audio) {
                 if (!node.metadata?.content) return message.error(t("canvas.projectPage.noAudioToSave", "没有可保存的音频"));
-                addAsset({
+                pushAsset({
                     kind: "audio",
                     title: node.metadata?.prompt?.slice(0, 24) || t("canvas.projectPage.canvasAudio", "画布音频"),
                     coverUrl: "",
@@ -3337,12 +3359,11 @@ function InfiniteCanvasPage() {
                     },
                     metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt },
                 });
-                message.success(t("common.addedToAssets"));
                 return;
             }
             if (!node.metadata?.content) return message.error(t("canvas.projectPage.noImageToSave"));
             const dataUrl = node.metadata.storageKey ? "" : node.metadata.content;
-            addAsset({
+            pushAsset({
                 kind: "image",
                 title: node.metadata?.prompt?.slice(0, 24) || t("canvas.projectPage.canvasImage"),
                 coverUrl: node.metadata.content,
@@ -3358,9 +3379,8 @@ function InfiniteCanvasPage() {
                 },
                 metadata: { source: "canvas", nodeId: node.id, prompt: node.metadata?.prompt },
             });
-            message.success(t("common.addedToAssets"));
         },
-        [addAsset, message, t],
+        [message, pushAsset, t],
     );
 
     // 把画布分组里的素材整体收藏成一个「组合资产」：原子素材引用原 storageKey 入库（不复制文件），
@@ -3441,7 +3461,7 @@ function InfiniteCanvasPage() {
                     return mapped;
                 })
                 .filter((conn): conn is BundleConnection => Boolean(conn));
-            addAsset({
+            pushAsset({
                 kind: "bundle",
                 title: (group.title || t("canvas.node.group")).slice(0, 24),
                 coverUrl: "",
@@ -3450,9 +3470,8 @@ function InfiniteCanvasPage() {
                 data: { items, coverAssetId: items[0].assetId, connections: connections.length ? connections : undefined },
                 metadata: { source: "canvas", nodeId: group.id },
             });
-            message.success(t("common.addedToAssets"));
         },
-        [addAsset, message, t],
+        [addAsset, message, pushAsset, t],
     );
 
     const createImageReversePromptNodes = useCallback(
@@ -3624,7 +3643,9 @@ function InfiniteCanvasPage() {
         return {
             restore: {
                 mode: pending.plan.mode === "repaint" ? ("repaint" as const) : ("character" as const),
-                maxMs: pending.plan.maxMs,
+                targetMs: pending.plan.targetMs,
+                // 手动排过的边界原样带回：这些点是逐帧拖出来的，按自动规划重算就是把它丢掉。
+                manualCuts: pending.plan.manualCuts,
                 prompt: pending.plan.prompt,
                 crossfadeFrames: pending.plan.crossfadeFrames,
                 keepAudio: pending.plan.keepAudio,
@@ -4171,7 +4192,7 @@ function InfiniteCanvasPage() {
                     prompt: composite.metadata?.prompt || "",
                     crossfadeFrames: Math.round(((compositeMeta.crossfadeMs || 0) / 1000) * 30),
                     keepAudio: compositeMeta.keepAudio ?? true,
-                    maxMs: 0,
+                    targetMs: 0,
                 };
                 await composeVideoBatch({ source, sourceBlob, produced, plan, signal: controller.signal, sourceTitle: source.title || "", segmentColumnX: composite.position.x, existingCompositeId: composite.id });
                 message.success({ content: t("canvas.videoTimeline.toast.recomposed"), key: composeKey });
@@ -5992,6 +6013,19 @@ function InfiniteCanvasPage() {
                 }
 
                 if (mode === "audio") {
+                    // 同一个音频节点两条产线：配乐（caption/lyrics + 时长）与配音（台词 + 情绪 + 音色）。
+                    const isVoice = sourceNode?.metadata?.audioKind === "voice";
+                    const voicePatch: Partial<CanvasNodeMetadata> = isVoice
+                        ? {
+                              voiceId: sourceNode?.metadata?.voiceId,
+                              voiceName: sourceNode?.metadata?.voiceName,
+                              voiceAvatar: sourceNode?.metadata?.voiceAvatar,
+                              voiceSource: sourceNode?.metadata?.voiceSource,
+                              voiceEmoMode: sourceNode?.metadata?.voiceEmoMode,
+                              emotionText: sourceNode?.metadata?.emotionText,
+                              emotionStrength: sourceNode?.metadata?.emotionStrength,
+                          }
+                        : {};
                     const spec = NODE_DEFAULT_SIZE[CanvasNodeType.Audio];
                     const isEmptyAudioNode = sourceNode?.type === CanvasNodeType.Audio && !sourceNode.metadata?.content;
                     const audioId = isEmptyAudioNode ? nodeId : nanoid();
@@ -6014,7 +6048,8 @@ function InfiniteCanvasPage() {
                             generationMode: mode,
                             generationReferences: generationContext.generationReferences,
                             generationOriginNodeId: sourceNode?.metadata?.generationOriginNodeId || nodeId,
-                            ...buildAudioGenerationMetadata(generationConfig),
+                            ...buildAudioGenerationMetadata(generationConfig, undefined, isVoice ? "voice" : "music"),
+                            ...voicePatch,
                             images: undefined,
                             primaryImageId: undefined,
                             texts: undefined,
@@ -6045,15 +6080,41 @@ function InfiniteCanvasPage() {
                     try {
                         const duration = Number(sourceNode?.metadata?.seconds || generationConfig.audioSeconds) || 60;
                         const initialSeed = sourceNode?.metadata?.seed;
+                        // 音色文件要先进 ComfyUI 的 input 目录，`LoadAudio.audio` 只认文件名。
+                        let uploadedVoiceName: string | undefined;
+                        if (isVoice) {
+                            // 音色来源可能没显式记：agent 只知道音色名字，人类也可能从卡片换了名字。
+                            // 按 id → 名字 → 卡片音频三级回退，比要求上游一定填全更可靠。
+                            const voiceCard = findVoice(sourceNode?.metadata?.voiceId) || findVoiceByName(sourceNode?.metadata?.voiceName);
+                            const voiceSource = await resolveVoiceSourceUrl(sourceNode?.metadata?.voiceSource || voiceAudioUrl(voiceCard));
+                            if (!voiceSource) throw new Error("这个配音节点还没选参考音色，请先选一个音色再生成");
+                            uploadedVoiceName = await ensureVoiceAudioName(generationConfig, {
+                                channelId: sourceNode?.metadata?.channelId,
+                                sourceUrl: voiceSource,
+                                cachedName: sourceNode?.metadata?.voiceAudioName,
+                                signal: controller.signal,
+                            });
+                        }
                         const modelId = sourceNode?.metadata?.modelId || "audio-minimax-music-3";
-                        const result = await requestAudioGeneration(generationConfig, effectivePrompt, {
-                            signal: controller.signal,
-                            duration,
-                            seed: initialSeed,
-                            model: modelId,
-                            channelId: sourceNode?.metadata?.channelId,
-                            workflowId: sourceNode?.metadata?.workflowId,
-                        });
+                        const result = isVoice
+                            ? await requestVoiceGeneration(generationConfig, effectivePrompt, {
+                                  signal: controller.signal,
+                                  refAudioName: uploadedVoiceName as string,
+                                  emotion: sourceNode?.metadata?.emotionText,
+                                  strength: sourceNode?.metadata?.emotionStrength,
+                                  emotionMode: sourceNode?.metadata?.voiceEmoMode,
+                                  seed: initialSeed,
+                                  channelId: sourceNode?.metadata?.channelId,
+                                  workflowId: sourceNode?.metadata?.workflowId,
+                              })
+                            : await requestAudioGeneration(generationConfig, effectivePrompt, {
+                                  signal: controller.signal,
+                                  duration,
+                                  seed: initialSeed,
+                                  model: modelId,
+                                  channelId: sourceNode?.metadata?.channelId,
+                                  workflowId: sourceNode?.metadata?.workflowId,
+                              });
                         const audio = await storeGeneratedAudio(result.blob);
                         setNodes((prev) =>
                             prev.map((node) =>
@@ -6069,9 +6130,11 @@ function InfiniteCanvasPage() {
                                               modelId,
                                               channelId: sourceNode?.metadata?.channelId,
                                               workflowId: sourceNode?.metadata?.workflowId,
-                                              seconds: String(duration),
+                                              // 配音的时长由台词决定：回填实测时长，而不是把配乐那个输入秒数抄过来。
+                                              seconds: isVoice ? String(Math.max(1, Math.round((audio.durationMs || 0) / 1000))) : String(duration),
                                               seed: result.seed,
                                               jobId: result.jobId,
+                                              ...(isVoice ? { voiceAudioName: uploadedVoiceName } : {}),
                                               status: NODE_STATUS_SUCCESS,
                                           },
                                       }

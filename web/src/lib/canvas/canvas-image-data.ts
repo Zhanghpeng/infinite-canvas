@@ -168,6 +168,9 @@ function drawResizeCanvas(source: CanvasImageSource, sourceWidth: number, source
 function loadImage(dataUrl: string) {
     return new Promise<HTMLImageElement>((resolve) => {
         const image = new Image();
+        // 图片现在可能是本地服务的直链（跨源），不声明 crossOrigin 会让 canvas 被污染，
+        // 之后 toDataURL/getImageData 直接抛 SecurityError。blob:/data: 下该属性无副作用。
+        image.crossOrigin = "anonymous";
         image.onload = () => resolve(image);
         image.src = dataUrl;
     });

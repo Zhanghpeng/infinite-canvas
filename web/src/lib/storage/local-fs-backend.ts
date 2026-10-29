@@ -21,7 +21,8 @@ export class LocalFsBackend implements StorageBackend {
             read: (path) => readWorkspaceFile(baseUrl, token, path),
             write: (path, data) => writeWorkspaceFile(baseUrl, token, path, data),
             remove: (path) => deleteWorkspaceFile(baseUrl, token, path),
-            list: async (dir) => (await listWorkspaceFiles(baseUrl, token, dir)).map((entry) => ({ path: entry.path, directory: entry.type === "directory" })),
+            // 这条链路只用文件名（上层 PathEntry 不带 size），所以不让服务端逐个 stat。
+            list: async (dir) => (await listWorkspaceFiles(baseUrl, token, dir, { withStat: false })).map((entry) => ({ path: entry.path, directory: entry.type === "directory" })),
             move: (from, to) => renameWorkspaceFile(baseUrl, token, from, to),
         };
         this.blobs = createBlobStore(this.io);
@@ -97,8 +98,27 @@ export class LocalFsBackend implements StorageBackend {
         return await this.readBlob(scope, key);
     }
 
+    // 媒体直链：让浏览器自己流式加载（支持 Range，可 seek），而不是把整份字节读进 JS 堆。
+    // 视频节点最受益：一个 200MB 的成片以前要整份 blob 化才能播放。
+    async mediaUrl(scope: StorageScope, key: string): Promise<string | null> {
+        if (isJsonScope(scope) || !this.token) return null;
+        const path = await this.blobs.filePath(scope, key);
+        if (!path) return null;
+        const base = this.baseUrl.endsWith("/") ? this.baseUrl : `${this.baseUrl}/`;
+        const target = new URL("file", base);
+        target.searchParams.set("path", path);
+        // <video>/<audio> 无法带自定义请求头，token 只能走 query（服务端两种都认）。
+        target.searchParams.set("token", this.token);
+        return target.toString();
+    }
+
     async setBlob(scope: StorageScope, key: string, blob: Blob): Promise<void> {
         await this.writeBlob(scope, key, blob);
+    }
+
+    async hasBlob(scope: StorageScope, key: string): Promise<boolean> {
+        if (isJsonScope(scope)) return (await this.io.read(scopeFilePath(scope, key))) !== null;
+        return await this.blobs.has(scope, key);
     }
 
     async removeBlob(scope: StorageScope, key: string): Promise<void> {

@@ -15,6 +15,7 @@ import frameVideoBf16TurboJson from "@/assets/workflows/video_minimax_h3_frame_b
 import frameVideoBf1620StepJson from "@/assets/workflows/video_minimax_h3_frame_bf16_20step_api.json";
 import qwenImage21Json from "@/assets/workflows/qwen_image_21_api.json";
 import audioMinimaxMusic3Json from "@/assets/workflows/audio_minimax_music_3_api.json";
+import audioIndextts25VoiceJson from "@/assets/workflows/audio_indextts25_voice_api.json";
 import videoH3FaceRefineJson from "@/assets/workflows/video_h3_face_refine_api.json";
 import videoDepthReshotJson from "@/assets/workflows/video_depth_reshot_api.json";
 
@@ -131,6 +132,12 @@ export const DEFAULT_BUILTIN_COMFYUI_AUDIO_WORKFLOW: ComfyuiWorkflow = {
     createdAt: 0,
     isBuiltin: true,
 };
+export const DEFAULT_BUILTIN_COMFYUI_VOICE_WORKFLOW: ComfyuiWorkflow = {
+    name: "IndexTTS 2.5 配音（情绪文本）",
+    json: audioIndextts25VoiceJson as Record<string, unknown>,
+    createdAt: 0,
+    isBuiltin: true,
+};
 
 // Aliases for unified ComfyUI workflows
 export const DEFAULT_COMFYUI_T2I_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_QWEN_IMAGE_21_WORKFLOW;
@@ -142,6 +149,7 @@ export const DEFAULT_COMFYUI_VIDEO_PDMD_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_VIDEO
 export const DEFAULT_COMFYUI_FRAME_VIDEO_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_WORKFLOW;
 export const DEFAULT_COMFYUI_FRAME_VIDEO_PDMD_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_PDMD_WORKFLOW;
 export const DEFAULT_COMFYUI_AUDIO_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_AUDIO_WORKFLOW;
+export const DEFAULT_COMFYUI_VOICE_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_VOICE_WORKFLOW;
 export const DEFAULT_COMFYUI_FACE_REFINE_WORKFLOW = DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW;
 
 /**
@@ -201,6 +209,7 @@ export type ComfyuiWorkflowBundle = {
     video: ComfyuiWorkflow;
     frameVideo: ComfyuiWorkflow;
     audio: ComfyuiWorkflow;
+    voice: ComfyuiWorkflow;
     faceRefine?: ComfyuiWorkflow;
     depthVideo?: ComfyuiWorkflow;
 };
@@ -213,6 +222,7 @@ export const DEFAULT_BUILTIN_COMFYUI_WORKFLOWS: ComfyuiWorkflowBundle = {
     video: DEFAULT_BUILTIN_COMFYUI_VIDEO_WORKFLOW,
     frameVideo: DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_WORKFLOW,
     audio: DEFAULT_BUILTIN_COMFYUI_AUDIO_WORKFLOW,
+    voice: DEFAULT_BUILTIN_COMFYUI_VOICE_WORKFLOW,
     faceRefine: DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW,
     depthVideo: DEFAULT_BUILTIN_COMFYUI_DEPTH_VIDEO_WORKFLOW,
 };
@@ -345,6 +355,16 @@ export function getDefaultComfyWorkflowItems(channel?: { id?: string; name?: str
             isBuiltin: true,
             isDefault: true,
             description: "MiniMax Music 03 扩散音乐大模型 (支持最长 5 分钟完整歌曲与纯伴奏)",
+        },
+        {
+            id: `${prefix}-voice-indextts25-emotion-text`,
+            name: "IndexTTS 2.5 配音（情绪文本）",
+            category: "voice",
+            json: DEFAULT_BUILTIN_COMFYUI_VOICE_WORKFLOW.json,
+            createdAt: 0,
+            isBuiltin: true,
+            isDefault: true,
+            description: "IndexTTS 2.5 零样本音色克隆配音，按一句自然语言描述控制情绪（必标 prompt、ref_audio_01、output_audio）",
         },
         {
             id: `${prefix}-tool-face-refine-h3`,

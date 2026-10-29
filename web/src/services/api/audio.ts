@@ -5,7 +5,7 @@ import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, nor
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
-import { requestComfyuiAudio } from "./comfyui";
+import { requestComfyuiAudio, requestComfyuiVoice } from "./comfyui";
 
 type RequestOptions = { signal?: AbortSignal };
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
@@ -44,6 +44,46 @@ export async function requestAudioGeneration(
         seed: options?.seed,
         workflowId: options?.workflowId,
         signal: options?.signal,
+    });
+    return { blob: res.blob, seed: res.seed, jobId: res.jobId };
+}
+
+export type VoiceRequestOptions = {
+    signal?: AbortSignal;
+    /** 参考音色在 ComfyUI input 目录里的文件名（已确认存在）。 */
+    refAudioName: string;
+    /** 情绪描述，可空。 */
+    emotion?: string;
+    /** 情绪强度，跟随音色卡。 */
+    strength?: number;
+    /** text 用情绪描述，speaker 跟随音色参考。 */
+    emotionMode?: "text" | "speaker";
+    channelId?: string;
+    workflowId?: string;
+    model?: string;
+    seed?: number;
+};
+
+/**
+ * 配音生成。
+ *
+ * 和配乐分开走：配乐有"时长"这个输入参数，配音没有（时长由台词决定）。
+ * 把两者塞进一个函数就得在内部判断"这次要不要加 1 秒""这句是要当歌词还是当台词"，
+ * 判断错的表现是产物能出但内容不对 —— 这类错最难查。
+ */
+export async function requestVoiceGeneration(config: AiConfig, prompt: string, options: VoiceRequestOptions): Promise<{ blob: Blob; seed: number; jobId: string }> {
+    const res = await requestComfyuiVoice({
+        config,
+        prompt,
+        emotion: options.emotion,
+        strength: options.strength,
+        emotionMode: options.emotionMode,
+        refAudioName: options.refAudioName,
+        channelId: options.channelId,
+        workflowId: options.workflowId,
+        model: options.model,
+        seed: options.seed,
+        signal: options.signal,
     });
     return { blob: res.blob, seed: res.seed, jobId: res.jobId };
 }

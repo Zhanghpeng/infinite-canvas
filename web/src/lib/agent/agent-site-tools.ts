@@ -292,8 +292,9 @@ async function addAsset(input: SiteToolInput) {
     if (kind === "text") {
         const content = String(input.content || "").trim();
         if (!content) throw new Error(siteText("textContentRequired"));
-        const id = store.addAsset({ kind: "text", title, coverUrl: "", tags, source, note, data: { content } });
-        return { ok: true, id, kind: "text" };
+        const result = store.addAssetDetailed({ kind: "text", title, coverUrl: "", tags, source, note, data: { content } });
+        // duplicate 让 Agent 知道自己没有造出第二份重复素材，可以据此换个标题或改用已有条目。
+        return { ok: true, id: result.id, kind: "text", duplicate: result.duplicate };
     }
     if (kind === "image") {
         const imageUrl = String(input.imageUrl || "").trim();
@@ -304,8 +305,8 @@ async function addAsset(input: SiteToolInput) {
         } catch {
             throw new Error(siteText("imageReadFailed"));
         }
-        const id = store.addAsset({ kind: "image", title, coverUrl: stored.url, tags, source, note, data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType } });
-        return { ok: true, id, kind: "image" };
+        const result = store.addAssetDetailed({ kind: "image", title, coverUrl: stored.url, tags, source, note, data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType } });
+        return { ok: true, id: result.id, kind: "image", duplicate: result.duplicate };
     }
     throw new Error(siteText("assetKindUnsupported"));
 }

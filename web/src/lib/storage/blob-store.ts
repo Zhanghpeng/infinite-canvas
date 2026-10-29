@@ -52,20 +52,27 @@ export function mimeForFileName(fileName: string): string {
 
 function withMime(blob: Blob, path: string): Blob {
     if (blob.type && blob.type !== "application/octet-stream") return blob;
-    return new Blob([blob], { type: mimeForFileName(path) });
+    // 用 slice 而不是 new Blob([blob])：目录句柄(FSA) 拿到的 File 只是磁盘文件的句柄，
+    // slice 会保留这层引用，浏览器按需读取；而 new Blob([blob]) 会把整份内容物化进内存，
+    // 打开一个有很多视频的画布时这一步就是几百 MB 的白读。
+    return blob.slice(0, blob.size, mimeForFileName(path));
 }
 
 export function createBlobStore(io: PathIo) {
     // 列表缓存按「目录」缓存：同一个 scope 可能同时分布在全局目录与各项目目录下。
-    const listingCache = new Map<string, string[]>();
+    // 缓存的是 Promise 而不是结果：打开画布时几十个媒体是并发解析的，
+    // 若只缓存已完成的结果，第一批请求会同时 miss，把一个目录列举放大成几十次列目录请求。
+    const listingCache = new Map<string, Promise<string[]>>();
 
     async function fileNames(dir: string): Promise<string[]> {
-        const cached = listingCache.get(dir);
-        if (cached) return cached;
-        const entries = await io.list(dir);
-        const names = entries.filter((entry) => !entry.directory).map((entry) => entry.path);
-        listingCache.set(dir, names);
-        return names;
+        let pending = listingCache.get(dir);
+        if (!pending) {
+            pending = io.list(dir).then((entries) => entries.filter((entry) => !entry.directory).map((entry) => entry.path));
+            // 失败不要留在缓存里，否则这个目录会一直读不到东西。
+            pending.catch(() => listingCache.delete(dir));
+            listingCache.set(dir, pending);
+        }
+        return await pending;
     }
 
     // 按 key 主干 + "." 前缀定位既有文件（扩展名未知，故用前缀匹配）。
@@ -80,6 +87,17 @@ export function createBlobStore(io: PathIo) {
         // 目录可能分布在多处（全局 + 各项目），整体失效最省事也最安全。
         invalidate(_scope: StorageScope) {
             listingCache.clear();
+        },
+
+        // 定位一个 key 在磁盘上的相对路径（文件名带动态扩展名，所以必须查目录）。
+        // 直链与读字节都靠它，区别只在于之后是交给浏览器流式加载还是自己读。
+        async filePath(scope: StorageScope, key: string): Promise<string | null> {
+            return await locate(scope, key);
+        },
+
+        // 只查目录、不读字节：用来判断"这个内容是不是已经在盘上了"。
+        async has(scope: StorageScope, key: string): Promise<boolean> {
+            return (await locate(scope, key)) !== null;
         },
 
         async getBlob(scope: StorageScope, key: string): Promise<Blob | null> {

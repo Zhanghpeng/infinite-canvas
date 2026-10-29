@@ -42,6 +42,7 @@ export default function AssetsPage() {
     const assetInputRef = useRef<HTMLInputElement>(null);
     const assets = useAssetStore((state) => state.assets);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const addAssetDetailed = useAssetStore((state) => state.addAssetDetailed);
     const updateAsset = useAssetStore((state) => state.updateAsset);
     const removeAsset = useAssetStore((state) => state.removeAsset);
     const removeAssets = useAssetStore((state) => state.removeAssets);
@@ -125,33 +126,40 @@ export default function AssetsPage() {
             metadata: editingAsset?.metadata || { source: "manual" },
         };
 
+        let duplicate = false;
+        const commit = (asset: Parameters<typeof addAsset>[0]) => {
+            if (editingAsset) {
+                updateAsset(editingAsset.id, asset);
+                return;
+            }
+            duplicate = addAssetDetailed(asset).duplicate;
+        };
+
         if (values.kind === "text") {
-            const asset = { ...base, kind: "text" as const, data: { content: (values.content || "").trim() } };
-            editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset);
+            commit({ ...base, kind: "text" as const, data: { content: (values.content || "").trim() } });
         } else if (values.kind === "video") {
             if (!videoDraft) {
                 message.error(t("assets.noVideoSelected"));
                 return;
             }
-            const asset = { ...base, kind: "video" as const, data: videoDraft };
-            editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset);
+            commit({ ...base, kind: "video" as const, data: videoDraft });
         } else if (values.kind === "audio") {
             if (!audioDraft) {
                 message.error(t("assets.noAudioSelected"));
                 return;
             }
-            const asset = { ...base, kind: "audio" as const, data: audioDraft };
-            editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset);
+            commit({ ...base, kind: "audio" as const, data: audioDraft });
         } else {
             if (!imageDraft) {
                 message.error(t("assets.selectImage"));
                 return;
             }
-            const asset = { ...base, kind: "image" as const, data: imageDraft };
-            editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset);
+            commit({ ...base, kind: "image" as const, data: imageDraft });
         }
 
-        message.success(editingAsset ? t("assets.updated") : t("assets.saved"));
+        if (editingAsset) message.success(t("assets.updated"));
+        else if (duplicate) message.info(t("assets.alreadyInLibrary"));
+        else message.success(t("assets.saved"));
         setIsAssetOpen(false);
     };
 
@@ -208,20 +216,28 @@ export default function AssetsPage() {
         try {
             const importedAssets = await readAssetPackage(file);
             const idMap = new Map<string, string>();
+            // 导入重复的包很常见（换台机器再导一次、或者从别人那里拿到自己已有的素材）：
+            // 命中已有条目时复用它，新建的才计数 —— 否则库里的卡片会随着导入次数一起翻倍。
+            let created = 0;
             // 先导入原子资产，记录 oldId → newId；再导入组合，把条目重映射到新 id。
             importedAssets
                 .filter((asset) => asset.kind !== "bundle")
                 .forEach((asset) => {
                     const { id, createdAt, updatedAt, ...rest } = asset;
-                    idMap.set(id, addAsset(rest as Parameters<typeof addAsset>[0]));
+                    const result = addAssetDetailed(rest as Parameters<typeof addAsset>[0]);
+                    if (!result.duplicate) created += 1;
+                    idMap.set(id, result.id);
                 });
             importedAssets
                 .filter((asset): asset is BundleAsset => asset.kind === "bundle")
                 .forEach((bundle) => {
                     const { id, createdAt, updatedAt, ...rest } = bundle;
-                    addAsset(remapBundleIds(rest as BundleAsset, idMap) as Parameters<typeof addAsset>[0]);
+                    const result = addAssetDetailed(remapBundleIds(rest as BundleAsset, idMap) as Parameters<typeof addAsset>[0]);
+                    if (!result.duplicate) created += 1;
                 });
-            message.success(t("assets.imported", { count: importedAssets.length }));
+            const skipped = importedAssets.length - created;
+            if (skipped > 0) message.info(t("assets.importedWithDuplicates", { created, skipped }));
+            else message.success(t("assets.imported", { count: importedAssets.length }));
         } catch {
             message.error(t("assets.importFailed"));
         } finally {
@@ -243,7 +259,7 @@ export default function AssetsPage() {
 
     const packSelectedIntoBundle = () => {
         if (!selectedAssetIds.length) return;
-        addAsset({
+        const result = addAssetDetailed({
             kind: "bundle",
             title: t("assets.bundleDefaultTitle"),
             coverUrl: "",
@@ -252,7 +268,9 @@ export default function AssetsPage() {
             data: { items: buildBundleItems(selectedAssetIds), coverAssetId: selectedAssetIds[0] },
         });
         setSelectedAssetIds([]);
-        message.success(t("assets.saved"));
+        // 同一批成员反复打包没有意义，命中就说明库里有现成的。
+        if (result.duplicate) message.info(t("assets.alreadyInLibrary"));
+        else message.success(t("assets.saved"));
     };
 
     const addSelectedToBundle = (bundle: BundleAsset) => {

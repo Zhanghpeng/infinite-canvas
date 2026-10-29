@@ -168,6 +168,11 @@ export class FsaBackend implements StorageBackend {
         await this.writeBlob(scope, key, blob);
     }
 
+    async hasBlob(scope: StorageScope, key: string): Promise<boolean> {
+        if (isJsonScope(scope)) return (await this.readPath(scopeFilePath(scope, key))) !== null;
+        return await this.blobs.has(scope, key);
+    }
+
     async removeBlob(scope: StorageScope, key: string): Promise<void> {
         await this.removeEntry(scope, key);
     }

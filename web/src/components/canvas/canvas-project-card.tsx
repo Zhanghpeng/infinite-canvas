@@ -56,7 +56,7 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
                     >
                         <h2 className="truncate text-xl font-semibold">{project.title}</h2>
                         <p className="mt-3 text-sm leading-6 text-stone-600 dark:text-stone-400">
-                            {t("canvas.project.stats", { nodes: project.nodes.length, connections: project.connections.length })}
+                            {t("canvas.project.stats", { nodes: project.nodeCount ?? project.nodes.length, connections: project.connectionCount ?? project.connections.length })}
                         </p>
                     </button>
                 )}

@@ -114,23 +114,98 @@ function updateManifest(root, patch) {
     return next;
 }
 
-async function listEntries(dir, recursive = false) {
+async function listEntries(dir, recursive = false, withStat = true) {
     const entries = [];
     const walk = async (current, prefix) => {
         const dirents = await fs.promises.readdir(current, { withFileTypes: true });
-        for (const dirent of dirents) {
+        // 文件 stat 并行发起：图片/媒体目录动辄上千个文件，串行 stat 会把这个接口拖到秒级，
+        // 而它是「按 key 定位文件」的前置步骤，慢一次就连带所有媒体加载一起变慢。
+        // stat=false 时整个目录列举只走一次 readdir（调用方只要文件名时不必为每个文件读元数据）。
+        const files = dirents.filter((dirent) => !dirent.isDirectory());
+        const dirs = dirents.filter((dirent) => dirent.isDirectory());
+        dirs.forEach((dirent) => {
             const rel = prefix ? `${prefix}/${dirent.name}` : dirent.name;
-            if (dirent.isDirectory()) {
-                if (recursive) await walk(path.join(current, dirent.name), rel);
-                else entries.push({ path: rel, type: "directory" });
-            } else {
-                const stat = await fs.promises.stat(path.join(current, dirent.name));
-                entries.push({ path: rel, type: "file", size: stat.size, mtime: stat.mtimeMs });
+            if (!recursive) entries.push({ path: rel, type: "directory" });
+        });
+        const stats = withStat
+            ? await Promise.all(
+                  files.map(async (dirent) => {
+                      try {
+                          return await fs.promises.stat(path.join(current, dirent.name));
+                      } catch {
+                          return null;
+                      }
+                  }),
+              )
+            : files.map(() => null);
+        files.forEach((dirent, index) => {
+            const rel = prefix ? `${prefix}/${dirent.name}` : dirent.name;
+            if (!withStat) {
+                entries.push({ path: rel, type: "file" });
+                return;
             }
+            const stat = stats[index];
+            if (!stat) return;
+            entries.push({ path: rel, type: "file", size: stat.size, mtime: stat.mtimeMs });
+        });
+        if (recursive) {
+            for (const dirent of dirs) await walk(path.join(current, dirent.name), prefix ? `${prefix}/${dirent.name}` : dirent.name);
         }
     };
     await walk(dir, "");
     return entries;
+}
+
+// 媒体文件必须带真实 Content-Type：<img>/<video>/<audio> 收到 application/octet-stream 会拒绝解码。
+// 这也是「媒体走直链而不是读成 blob」的前提。白名单之外一律回落 octet-stream。
+const CONTENT_TYPE_BY_EXT = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    webp: "image/webp",
+    gif: "image/gif",
+    avif: "image/avif",
+    bmp: "image/bmp",
+    svg: "image/svg+xml",
+    mp4: "video/mp4",
+    webm: "video/webm",
+    mov: "video/quicktime",
+    m4v: "video/mp4",
+    mp3: "audio/mpeg",
+    wav: "audio/wav",
+    ogg: "audio/ogg",
+    m4a: "audio/mp4",
+    aac: "audio/aac",
+    flac: "audio/flac",
+    json: "application/json",
+    txt: "text/plain; charset=utf-8",
+};
+
+function contentTypeFor(file) {
+    const ext = path.extname(file).slice(1).toLowerCase();
+    return CONTENT_TYPE_BY_EXT[ext] || "application/octet-stream";
+}
+
+// 单区间 Range 解析。视频/音频元素靠它做 seek 与分段加载；
+// 不支持 Range 时浏览器会退化成整文件下载，正是这次要消掉的浪费。
+function parseRange(header, size) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(String(header || "").trim());
+    if (!match) return null;
+    const [, rawStart, rawEnd] = match;
+    if (rawStart === "" && rawEnd === "") return null;
+    let start;
+    let end;
+    if (rawStart === "") {
+        const suffix = Number(rawEnd);
+        if (!Number.isFinite(suffix) || suffix <= 0) return { invalid: true };
+        start = Math.max(0, size - suffix);
+        end = size - 1;
+    } else {
+        start = Number(rawStart);
+        end = rawEnd === "" ? size - 1 : Number(rawEnd);
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) return { invalid: true };
+    return { start, end: Math.min(end, size - 1) };
 }
 
 function createApp(config) {
@@ -197,20 +272,61 @@ function createApp(config) {
         try {
             const dir = resolveInside(root, req.query.dir || "");
             if (!fs.existsSync(dir)) return res.json({ ok: true, entries: [] });
-            const entries = await listEntries(dir, req.query.recursive === "true");
+            const entries = await listEntries(dir, req.query.recursive === "true", req.query.stat !== "false");
             res.json({ ok: true, entries });
         } catch (error) {
             res.status(error.status || 500).json({ error: error.message });
         }
     });
 
-    app.get("/file", (req, res) => {
+    app.get("/file", async (req, res) => {
         try {
             const file = resolveInside(root, req.query.path);
-            if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) return res.status(404).json({ error: "file not found" });
-            res.setHeader("Content-Type", "application/octet-stream");
-            fs.createReadStream(file).pipe(res);
+            let stat;
+            try {
+                stat = await fs.promises.stat(file);
+            } catch {
+                return res.status(404).json({ error: "file not found" });
+            }
+            if (stat.isDirectory()) return res.status(404).json({ error: "file not found" });
+
+            // ETag 用「大小 + mtime」：同一 storageKey 被重新生会覆盖同名文件，
+            // 内容寻址式的 immutable 缓存会把旧内容锁死，所以只做协商缓存（命中即 304，不读盘）。
+            const etag = `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+            const contentType = contentTypeFor(file);
+            res.setHeader("Content-Type", contentType);
+            res.setHeader("ETag", etag);
+            res.setHeader("Last-Modified", stat.mtime.toUTCString());
+            // 覆盖全局限流用的 no-store：媒体文件允许浏览器缓存，刷新后命中 304 而不是重读几十 MB。
+            res.setHeader("Cache-Control", "private, max-age=0, must-revalidate");
+            res.setHeader("Accept-Ranges", "bytes");
+
+            if (req.headers["if-none-match"] === etag) return res.status(304).end();
+
+            const size = stat.size;
+            let start = 0;
+            let end = size - 1;
+            let status = 200;
+            const range = parseRange(req.headers.range, size);
+            if (range?.invalid) {
+                res.setHeader("Content-Range", `bytes */${size}`);
+                return res.status(416).json({ error: "range not satisfiable" });
+            }
+            if (range) {
+                start = range.start;
+                end = range.end;
+                status = 206;
+                res.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
+            }
+            res.status(status);
+            res.setHeader("Content-Length", String(size === 0 ? 0 : end - start + 1));
+            if (size === 0) return res.end();
+            // 头已经手工设好，pipeline 失败时不能再写 JSON 错误（会二次写头）。
+            const stream = fs.createReadStream(file, { start, end });
+            stream.on("error", () => res.destroy());
+            stream.pipe(res);
         } catch (error) {
+            if (res.headersSent) return res.destroy();
             res.status(error.status || 500).json({ error: error.message });
         }
     });

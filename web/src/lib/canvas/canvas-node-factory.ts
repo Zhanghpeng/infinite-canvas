@@ -61,10 +61,11 @@ export function buildImageGenerationMetadata(type: CanvasImageGenerationType, co
     };
 }
 
-export function buildAudioGenerationMetadata(config: AiConfig, seed?: number): CanvasNodeMetadata {
+export function buildAudioGenerationMetadata(config: AiConfig, seed?: number, audioKind: "music" | "voice" = "music"): CanvasNodeMetadata {
     return {
         model: config.model,
-        seconds: config.audioSeconds || "60",
+        // 配音的时长由台词决定。给它填一个秒数，用户会以为那个数字真的在控制时长。
+        ...(audioKind === "voice" ? { audioKind } : { seconds: config.audioSeconds || "60" }),
         ...(seed !== undefined ? { seed } : {}),
     };
 }

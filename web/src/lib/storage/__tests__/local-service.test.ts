@@ -1,8 +1,10 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { getStorage, setStorageBackend } from "@/lib/storage";
+import { fingerprintBlob } from "@/lib/storage/content-fingerprint";
 import { LocalFsBackend } from "@/lib/storage/local-fs-backend";
-import { createLocalCanvasStorage, projectFile, readWorkspaceIndex } from "@/lib/storage/local-canvas-storage";
+import { createLocalCanvasStorage, graphFile, projectFile, readWorkspaceIndex } from "@/lib/storage/local-canvas-storage";
+import { encodeKey } from "@/lib/storage/storage-layout";
 
 // 本地服务（local-workspace）的集成测试。
 //
@@ -77,7 +79,29 @@ describe.skipIf(!enabled)("LocalFsBackend（需要本地服务）", () => {
         await backend.removeBlob("image_files", key);
     });
 
-    it("画布持久化写成一项目一文件 + 工作区索引", async () => {
+    it("内容指纹当键：同内容只落一份，hasBlob 查得到", async () => {
+        setStorageBackend(backend);
+        const blob = new Blob([`same-bytes-${RUN}`], { type: "image/png" });
+        // 同一份内容算两次必须得到同一个键 —— 这是"重复收藏不膨胀"的前提。
+        const key = `image:${await fingerprintBlob(blob)}`;
+        expect(`image:${await fingerprintBlob(blob)}`).toBe(key);
+        expect(await backend.hasBlob("image_files", key)).toBe(false);
+
+        await backend.setBlob("image_files", key, blob);
+        expect(await backend.hasBlob("image_files", key)).toBe(true);
+        // 再写一次同一个键：盘上仍然只有一个文件。
+        await backend.setBlob("image_files", key, blob);
+
+        const stem = encodeKey(key);
+        const matched = (await backend.listPath("assets/images")).filter((entry) => !entry.directory && entry.path.startsWith(`${stem}.`));
+        expect(matched).toHaveLength(1);
+        expect(await (await backend.getBlob("image_files", key))?.text()).toBe(`same-bytes-${RUN}`);
+
+        await backend.removeBlob("image_files", key);
+        expect(await backend.hasBlob("image_files", key)).toBe(false);
+    });
+
+    it("画布持久化成「索引 + 项目图文件」两层", async () => {
         setStorageBackend(backend);
         const storage = createLocalCanvasStorage();
         const project = { id: `proj-${RUN}`, title: "集成测试", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), nodes: [], connections: [], viewport: { x: 0, y: 0, scale: 1 } };
@@ -86,9 +110,13 @@ describe.skipIf(!enabled)("LocalFsBackend（需要本地服务）", () => {
         // setItem 有 400ms 去抖，等它落盘。
         await new Promise((resolve) => setTimeout(resolve, 900));
 
-        const raw = await readText(projectFile(project.id));
-        expect(raw).toContain("集成测试");
-        expect((await readWorkspaceIndex())?.projects.some((item) => item.id === project.id)).toBe(true);
+        // v2：图落在 graph.json，元数据落在索引里；不再写 v1 的 project.json。
+        const raw = await readText(graphFile(project.id));
+        expect(raw).not.toBeNull();
+        expect(await readText(projectFile(project.id))).toBeNull();
+        const index = await readWorkspaceIndex();
+        expect(index?.version).toBe(2);
+        expect(index?.projects.find((item) => item.id === project.id)?.title).toBe("集成测试");
 
         const hydrated = await storage.getItem("canvas");
         expect(hydrated?.state.projects.map((item) => item.id)).toContain(project.id);
