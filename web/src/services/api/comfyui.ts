@@ -457,6 +457,9 @@ export function validateComfyuiWorkflow(
                 };
             }
             if (Array.isArray(node.inputs?.[key])) {
+                // GetVideoComponents 这类桥接节点的参考槽位天生就标在连线上（它本来就是解包上游视频的组件），
+                // 属于全能参考视频的标准结构，不是标错位置，不能在这里拦。
+                if (node.class_type === "GetVideoComponents") continue;
                 return {
                     ok: false,
                     error: `槽位「${title}」标错了位置：节点 ${nodeId}（${node.class_type}）的 ${key} 是从别的节点连过来的。请把这个槽位改标到连线那头的源节点上，否则绑定时会盖掉连线，参数改了也不生效。`,
