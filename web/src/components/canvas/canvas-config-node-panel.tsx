@@ -206,7 +206,8 @@ function InputChip({ label, value, style }: { label: string; value: string; styl
 }
 
 function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: CanvasGenerationMode): AiConfig {
-    const rawModel = node.metadata?.model;
+    // 配置节点同样可能带 modelId（克隆/派生过来的），不能只认旧的 model 字段
+    const rawModel = node.metadata?.modelId || node.metadata?.model;
     const model = resolveModelForCapability(globalConfig, rawModel, mode);
     const isFrame = model.toLowerCase().includes("frame") || model.includes("首尾帧");
     const isOmni = model.toLowerCase().endsWith("comfyui video") || model.toLowerCase().includes("omni");
@@ -222,6 +223,8 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
 
     return {
         ...globalConfig,
+        channelId: node.metadata?.channelId || globalConfig.channelId,
+        workflowId: node.metadata?.workflowId,
         model,
         videoModel: mode === "video" ? model : globalConfig.videoModel,
         imageModel: mode === "image" ? model : globalConfig.imageModel,

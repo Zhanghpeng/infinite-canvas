@@ -1286,6 +1286,15 @@ export default {
             "move": "移动",
             "interact": "交互"
         },
+        "executionWorkflow": {
+            "label": "执行流",
+            "pinned": "节点指定",
+            "model": "模型默认",
+            "channel": "渠道绑定",
+            "channelDefault": "渠道默认",
+            "clear": "改回跟随模型",
+            "pinnedHint": "这条工作流由节点指定，换模型不会改变它。点右侧 × 改回跟随模型。"
+        },
         "promptPanel": {
             "video": "描述要生成的视频内容",
             "audio": "[caption]\n输入音乐风格、流派、配器描述...\n\n[lyrics]\n歌词内容与曲式标签...",

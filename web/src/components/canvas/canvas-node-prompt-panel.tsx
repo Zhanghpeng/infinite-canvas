@@ -29,6 +29,7 @@ import { uploadMediaFile } from "@/services/file-storage";
 import { CanvasNodeType, type CanvasGenerationIntent, type CanvasGenerationMode, type CanvasNodeData, type CanvasNodeMetadata } from "@/types/canvas";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasVoicePicker } from "./canvas-voice-picker";
+import { CanvasExecutionWorkflowBadge } from "./canvas-execution-workflow-badge";
 import { CanvasNodeReferenceBar } from "./canvas-node-reference-bar";
 import { CanvasVideoSegmentReference } from "./canvas-video-segment-reference";
 
@@ -630,6 +631,7 @@ export function CanvasNodePromptPanel({
                             />
                         </>
                     )}
+                    <CanvasExecutionWorkflowBadge node={node} mode={mode} imageCount={connectedResources.images} onClearPinned={() => onConfigChange(node.id, { workflowId: undefined })} />
                 </div>
                 {isOptimizingPrompt ? (
                     <Button type="primary" danger className="ml-auto !h-10 shrink-0 !rounded-full !px-3" onClick={() => onCancelOptimizePrompt?.()} aria-label={t("canvas.promptAssistant.cancel")}>
@@ -823,6 +825,10 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
 
     return {
         ...globalConfig,
+        // 面板里的渠道/工作流必须与执行侧同源：节点钉了别的渠道、或钉了工作流时，
+        // 这里若继续沿用全局值，界面显示的主机与真实执行的主机就是两个。
+        channelId: node.metadata?.channelId || globalConfig.channelId,
+        workflowId: node.metadata?.workflowId,
         model,
         videoModel: mode === "video" ? model : globalConfig.videoModel,
         imageModel: mode === "image" ? model : globalConfig.imageModel,

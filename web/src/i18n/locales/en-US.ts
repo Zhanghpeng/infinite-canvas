@@ -1286,6 +1286,15 @@ export default {
             "move": "Move",
             "interact": "Interact"
         },
+        "executionWorkflow": {
+            "label": "Workflow",
+            "pinned": "Pinned",
+            "model": "Model default",
+            "channel": "Channel binding",
+            "channelDefault": "Channel default",
+            "clear": "Follow model instead",
+            "pinnedHint": "This workflow is pinned on the node, so changing the model will not affect it. Click × to follow the model instead."
+        },
         "promptPanel": {
             "video": "Describe the video you want to generate",
             "audio": "[caption]\nEnter music style, genre, instrumentation...\n\n[lyrics]\nLyrics and song structure tags...",
