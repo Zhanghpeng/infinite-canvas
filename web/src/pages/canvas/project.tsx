@@ -55,6 +55,7 @@ import { CanvasNodePromptPanel, type CanvasNodeGenerationMode } from "@/componen
 import { CanvasToolbar } from "@/components/canvas/canvas-toolbar";
 import { AssetPickerModal, type BundleEntryPayload, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { CanvasSidePanel } from "@/components/canvas/canvas-side-panel";
+import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { CanvasZoomControls } from "@/components/canvas/canvas-zoom-controls";
 import { CanvasSelectionToolbar } from "@/components/canvas/canvas-selection-toolbar";
 import { alignSelectedNodes, boundsOfNodes, distributeSelectedNodes, type NodeAlignMode, type NodeDistributeMode } from "@/lib/canvas/canvas-layout-actions";
@@ -81,7 +82,9 @@ import {
     calculateGroupBoundsForNodes,
     captureEnclosedNodesIntoGroup,
     findContainingGroupId,
+    findBesidePosition,
     findGroupDropTarget,
+    findStaggeredPosition,
     fitGroupToEnclosedChildren,
     getAllInvalidConnectionIds,
     getConnectionRejectionDetail,
@@ -5210,18 +5213,40 @@ function InfiniteCanvasPage() {
     );
 
     const insertAssistantImage = useCallback(
-        async (image: CanvasAssistantImage, targetPosition?: Position) => {
-            const resolvedUrl = image.storageKey ? await resolveImageUrl(image.storageKey, image.dataUrl) : image.dataUrl;
-            const storedImage = image.storageKey ? { url: resolvedUrl, storageKey: image.storageKey, width: 1, height: 1, bytes: 0, mimeType: "image/png" } : await uploadImage(image.dataUrl);
+        async (image: CanvasAssistantImage, targetPosition?: Position, besideNodeId?: string) => {
+            const storedImage = image.storageKey
+                ? { url: await resolveImageUrl(image.storageKey, image.dataUrl), storageKey: image.storageKey, width: 1, height: 1, bytes: 0, mimeType: "image/png" }
+                : await uploadImage(image.dataUrl);
+            // 一律用上传/解出来的地址显示：storageKey 走本地直链，新上传走 objectURL。
+            // 早前这里回落成原始 URL（素材库是外部 CDN 直链），画布上的图会依赖外网，离线就空图。
+            const resolvedUrl = storedImage.url;
             const meta = storedImage.width === 1 && storedImage.height === 1 ? await readImageMeta(storedImage.url) : storedImage;
             const config = fitNodeSize(meta.width, meta.height);
             const center = targetPosition ?? screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
             const id = `image-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            // 没给落点时沿右下阶梯错开，并夹在当前视口内，避免连点几张素材全叠在正中或跑到屏幕外。
+            const rect = containerRef.current?.getBoundingClientRect();
+            // 侧栏是浮在画布上的 overlay，容器 rect 从屏幕左边起算：不扣掉它，落位会被侧栏盖住半张图。
+            const panelState = useCanvasSidePanelStore.getState();
+            const panelInset = panelState.panelOpen ? panelState.width + 1 : 0;
+            const visible = rect
+                ? (() => {
+                      const topLeft = screenToCanvas(rect.left + panelInset, rect.top);
+                      const bottomRight = screenToCanvas(rect.right, rect.bottom);
+                      return { left: topLeft.x, top: topLeft.y, right: bottomRight.x, bottom: bottomRight.y };
+                  })()
+                : undefined;
+            const anchor = besideNodeId ? nodesRef.current.find((item) => item.id === besideNodeId) : undefined;
+            const position = targetPosition
+                ? { x: center.x - config.width / 2, y: center.y - config.height / 2 }
+                : anchor
+                  ? findBesidePosition(anchor, config, nodesRef.current, { visible })
+                  : findStaggeredPosition(nodesRef.current, config, center, { visible });
             const node: CanvasNodeData = {
                 id,
                 type: CanvasNodeType.Image,
                 title: image.prompt.slice(0, 32) || "Generated Image",
-                position: { x: center.x - config.width / 2, y: center.y - config.height / 2 },
+                position,
                 width: config.width,
                 height: config.height,
                 metadata: { ...imageMetadata({ ...storedImage, url: resolvedUrl, width: meta.width, height: meta.height }), prompt: image.prompt },
@@ -5231,6 +5256,7 @@ function InfiniteCanvasPage() {
             setSelectedNodeIds(new Set([id]));
             setSelectedConnectionId(null);
             setDialogNodeId(id);
+            return { id, node };
         },
         [screenToCanvas, size.height, size.width],
     );
@@ -5453,11 +5479,27 @@ function InfiniteCanvasPage() {
                 setSelectedConnectionId(null);
                 setDialogNodeId(id);
             } else {
-                await insertAssistantImage({ id: `asset-${Date.now()}`, prompt: payload.title, dataUrl: payload.dataUrl, storageKey: payload.storageKey }, targetPosition);
+                try {
+                    const inserted = await insertAssistantImage({ id: `asset-${Date.now()}`, prompt: payload.title, dataUrl: payload.dataUrl, storageKey: payload.storageKey }, targetPosition, payload.asReferenceTo);
+                    // 素材库的「插入为参考图」：落成图片节点后直接连到当前选中节点，省掉手动连线。
+                    // 连线必须走 normalizeConnection，否则会绕过配额/重复/非法目标校验，画布上出现红线或超额参考。
+                    const referenceTarget = payload.asReferenceTo;
+                    if (referenceTarget && inserted.id !== referenceTarget) {
+                        const normalized = normalizeConnection(inserted.id, referenceTarget, [...nodesRef.current, inserted.node], "source", connectionsRef.current);
+                        if (normalized) {
+                            setConnections((prev) => [...prev, { id: nanoid(), ...normalized, kind: "input" }]);
+                        } else {
+                            message.warning(t("canvas.systemLibrary.referenceRejected"));
+                        }
+                    }
+                } catch (error) {
+                    console.error("Failed to insert library asset:", error);
+                    message.error(t("canvas.systemLibrary.insertFailed"));
+                }
             }
             setAssetPickerOpen(false);
         },
-        [insertAssetBundle, insertAssistantImage, insertAssistantText, screenToCanvas, size.height, size.width],
+        [insertAssetBundle, insertAssistantImage, insertAssistantText, message, screenToCanvas, size.height, size.width, t],
     );
 
     const handleDrop = useCallback(

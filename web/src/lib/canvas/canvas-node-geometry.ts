@@ -15,6 +15,111 @@ export function nodeBounds(nodes: CanvasNodeData[]) {
     );
 }
 
+/**
+ * 参考图落位：优先贴到目标节点左侧，其次右侧、上方。
+ *
+ * 「插入为参考图」如果仍按居中插入，新图会正好盖住目标节点，用户看不到
+ * "参考图 → 主体"这层关系，还得手动拖开。左侧是连线输入端，符合从左往右的阅读习惯。
+ */
+export function findBesidePosition(
+    anchor: CanvasNodeData,
+    size: { width: number; height: number },
+    nodes: CanvasNodeData[],
+    options: { gutter?: number; visible?: { left: number; top: number; right: number; bottom: number } } = {},
+) {
+    const { gutter = 80, visible } = options;
+    const centeredY = anchor.position.y + anchor.height / 2 - size.height / 2;
+    const centeredX = anchor.position.x + anchor.width / 2 - size.width / 2;
+    const candidates = [
+        { x: anchor.position.x - size.width - gutter, y: centeredY },
+        { x: anchor.position.x + anchor.width + gutter, y: centeredY },
+        { x: centeredX, y: anchor.position.y - size.height - gutter },
+        { x: centeredX, y: anchor.position.y + anchor.height + gutter },
+    ];
+    const blocks = nodes.filter((node) => node.type !== CanvasNodeType.Group);
+    const overlaps = (position: { x: number; y: number }) =>
+        blocks.some(
+            (node) =>
+                position.x < node.position.x + node.width &&
+                position.x + size.width > node.position.x &&
+                position.y < node.position.y + node.height &&
+                position.y + size.height > node.position.y,
+        );
+    const clamp = (position: { x: number; y: number }) => {
+        if (!visible) return position;
+        const margin = 16;
+        return {
+            x: Math.min(Math.max(position.x, visible.left + margin), Math.max(visible.left + margin, visible.right - size.width - margin)),
+            y: Math.min(Math.max(position.y, visible.top + margin), Math.max(visible.top + margin, visible.bottom - size.height - margin)),
+        };
+    };
+    // 先按"不压住任何节点"选好方位，再夹进视口；
+    // 夹进来反而压住目标（视口太窄时常见）就宁可保留原方位，让侧栏盖一点也不能盖住主体。
+    const seen = candidates.find((candidate) => !overlaps(candidate));
+    if (!seen) return clamp(candidates[0]);
+    const clamped = clamp(seen);
+    return overlaps(clamped) ? seen : clamped;
+}
+
+/**
+ * 落位：给新建节点找一块不压住别人的地方。
+ *
+ * 素材库插入不给坐标时都落在视口正中，连点三张会叠成一摞，用户看不出插了几张。策略分三档：
+ *   1. 右侧还有空位 → 横向排开（同一行放得下就一路往右）
+ *   2. 下方还有空位 → 另起一行
+ *   3. 视口被占满 → 沿右下阶梯错开 48px，并夹在视口内，至少让标题栏露出来
+ * 分组节点不算占位（它只是视觉容器）。
+ */
+export function findStaggeredPosition(
+    nodes: CanvasNodeData[],
+    size: { width: number; height: number },
+    center: { x: number; y: number },
+    options: { gutter?: number; maxSteps?: number; visible?: { left: number; top: number; right: number; bottom: number } } = {},
+) {
+    const { gutter = 16, maxSteps = 6, visible } = options;
+    const margin = 16;
+    const base = { x: center.x - size.width / 2, y: center.y - size.height / 2 };
+    const blocks = nodes.filter((node) => node.type !== CanvasNodeType.Group);
+    const overlaps = (position: { x: number; y: number }) =>
+        blocks.some(
+            (node) =>
+                position.x < node.position.x + node.width &&
+                position.x + size.width > node.position.x &&
+                position.y < node.position.y + node.height &&
+                position.y + size.height > node.position.y,
+        );
+    // 要求"露出一块能看见的部分"，不是完整包含：素材图常常比视口还高，
+    // 按完整包含判定会把所有候选否掉；但只按 1px 相交又会把节点摆到屏幕外。
+    const inside = (position: { x: number; y: number }) => {
+        if (!visible) return true;
+        const overlapWidth = Math.min(position.x + size.width, visible.right) - Math.max(position.x, visible.left);
+        const overlapHeight = Math.min(position.y + size.height, visible.bottom) - Math.max(position.y, visible.top);
+        return overlapWidth >= Math.min(240, size.width) && overlapHeight >= Math.min(120, size.height);
+    };
+
+    const candidates: Array<{ x: number; y: number }> = [base];
+    for (let step = 1; step <= maxSteps; step += 1) {
+        candidates.push({ x: base.x + step * (size.width + gutter), y: base.y });
+    }
+    for (let step = 1; step <= maxSteps; step += 1) {
+        candidates.push({ x: base.x, y: base.y + step * (size.height + gutter) });
+    }
+
+    const clamp = (position: { x: number; y: number }) => {
+        if (!visible) return position;
+        const minX = visible.left + margin;
+        const minY = visible.top + margin;
+        const maxX = Math.max(minX, visible.right - size.width - margin);
+        const maxY = Math.max(minY, visible.bottom - size.height - margin);
+        return { x: Math.min(Math.max(position.x, minX), maxX), y: Math.min(Math.max(position.y, minY), maxY) };
+    };
+
+    const found = candidates.find((candidate) => !overlaps(candidate) && inside(candidate));
+    if (found) return found;
+    // 视口放不下第二张时，退回 48px 错位：至少能看到又插了一张，也能直接拖开。
+    return clamp({ x: base.x + 48, y: base.y + 48 });
+}
+
 export function findGroupDropTarget(movedIds: Set<string>, nodes: CanvasNodeData[]) {
     if (nodes.some((node) => movedIds.has(node.id) && node.type === CanvasNodeType.Group)) return null;
     const movingNodes = nodes.filter((node) => movedIds.has(node.id) && node.type !== CanvasNodeType.Group);

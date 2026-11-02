@@ -919,6 +919,52 @@ export default {
                 "group": "分组"
             }
         },
+        "systemLibrary": {
+            "libraries": {
+                "costume": "服饰",
+                "pose": "姿势",
+                "portrait": "脸型",
+                "anime": "二次元"
+            },
+            "search": "搜索名称、关键词、编号",
+            "styleReal": "写实",
+            "styleAnime": "二次元画风",
+            "depth": "深度图",
+            "count": "命中 {{count}} 项",
+            "scopeAll": "全部",
+            "scopeFavorite": "收藏",
+            "scopeRecent": "最近",
+            "favorite": "收藏",
+            "unfavorite": "取消收藏",
+            "copyTerms": "复制英文关键词",
+            "copied": "已复制英文关键词",
+            "copyFailed": "复制失败",
+            "insertReference": "连到选中节点作为参考图",
+            "noReferenceTarget": "先选中一个节点，再插入参考图",
+            "referenceRejected": "这张图连不过去：目标节点不支持参考图，或参考位已满",
+            "insertFailed": "素材下载失败，检查网络后重试",
+            "empty": "没有匹配结果，试试更短的关键词",
+            "emptyFavorite": "这个图库还没有收藏，卡片右上角点星标",
+            "emptyRecent": "这个图库还没用过，插入过的会出现在这里",
+            "clear": "清空条件",
+            "loadFailed": "图库索引加载失败",
+            "retry": "重试",
+            "more": "更多",
+            "less": "收起",
+            "facet": {
+                "season": "季节",
+                "outfit": "品类",
+                "color": "颜色",
+                "material": "材质",
+                "cut": "版型",
+                "accessory": "配件",
+                "face": "类型",
+                "length": "发长",
+                "kind": "类型",
+                "category": "分类",
+                "series": "体系"
+            }
+        },
         "promptAssistant": {
             "title": "提示词助手",
             "entryHint": "用本地 ComfyUI 文本工作流或本地 Agent 改写这段提示词",

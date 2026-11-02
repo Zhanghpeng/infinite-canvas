@@ -919,6 +919,52 @@ export default {
                 "group": "Group"
             }
         },
+        "systemLibrary": {
+            "libraries": {
+                "costume": "Outfits",
+                "pose": "Poses",
+                "portrait": "Faces",
+                "anime": "Anime"
+            },
+            "search": "Search name, keyword or ID",
+            "styleReal": "Realistic",
+            "styleAnime": "Anime style",
+            "depth": "Depth map",
+            "count": "{{count}} items",
+            "scopeAll": "All",
+            "scopeFavorite": "Saved",
+            "scopeRecent": "Recent",
+            "favorite": "Save",
+            "unfavorite": "Remove from saved",
+            "copyTerms": "Copy English keywords",
+            "copied": "English keywords copied",
+            "copyFailed": "Copy failed",
+            "insertReference": "Link to the selected node as reference",
+            "noReferenceTarget": "Select a node first, then insert as reference",
+            "referenceRejected": "Can't link this image: the target node takes no reference images, or its slots are full",
+            "insertFailed": "Couldn't download the asset. Check your network and retry.",
+            "empty": "No match. Try a shorter keyword.",
+            "emptyFavorite": "Nothing saved in this library yet. Use the star on a card.",
+            "emptyRecent": "Nothing used from this library yet.",
+            "clear": "Clear filters",
+            "loadFailed": "Failed to load the library index",
+            "retry": "Retry",
+            "more": "More",
+            "less": "Less",
+            "facet": {
+                "season": "Season",
+                "outfit": "Type",
+                "color": "Color",
+                "material": "Material",
+                "cut": "Silhouette",
+                "accessory": "Accessories",
+                "face": "Kind",
+                "length": "Hair length",
+                "kind": "Kind",
+                "category": "Category",
+                "series": "Series"
+            }
+        },
         "promptAssistant": {
             "title": "Prompt assistant",
             "entryHint": "Rewrite this prompt with your local ComfyUI text workflow or a local agent",

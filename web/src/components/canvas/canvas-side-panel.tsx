@@ -21,7 +21,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 
 import { toBundleEntries, type InsertAssetPayload } from "./asset-picker-modal";
-import { ALL_POSES, POSE_ANGLE_LABELS, POSE_SERIES_LIST, getPoseImageUrl, type PoseAngleKey, type PoseItem } from "@/lib/canvas/pose-presets";
+import { SystemLibraryPanel } from "./system-library-panel";
 
 const PANEL_MOTION_SECONDS = CANVAS_SIDE_PANEL_MOTION_MS / 1000;
 const PANEL_EASE = [0.22, 1, 0.36, 1] as const;
@@ -64,6 +64,17 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
     const panelClosing = useCanvasSidePanelStore((state) => state.panelClosing);
     const setWidth = useCanvasSidePanelStore((state) => state.setWidth);
     const [resizing, setResizing] = useState(false);
+
+    // 素材库的「插入并连成参考图」只在有合法目标时开放：
+    // 分组/配置节点不能收参考边，多选时也说不清该连谁，一律当没有目标。
+    const referenceTargetId = useMemo(() => {
+        if (selectedNodeIds.size !== 1) return null;
+        const id = [...selectedNodeIds][0];
+        const node = nodes.find((item) => item.id === id);
+        if (!node) return null;
+        if (node.type === CanvasNodeType.Group || node.type === CanvasNodeType.Config) return null;
+        return id;
+    }, [nodes, selectedNodeIds]);
 
     const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
         event.preventDefault();
@@ -112,7 +123,7 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
                     {tab === "canvas" ? (
                         <CanvasNodesTab nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={onFocusNode} onPreviewNode={onPreviewNode} onTitleChange={onTitleChange} projectTitle={projectTitle} theme={theme} />
                     ) : tab === "assets" ? (
-                        <CanvasAssetsTab onInsert={onInsertAsset} theme={theme} />
+                        <CanvasAssetsTab onInsert={onInsertAsset} theme={theme} selectedNodeId={referenceTargetId} />
                     ) : (
                         <CanvasPromptsTab onInsert={onInsertAsset} theme={theme} />
                     )}
@@ -449,7 +460,15 @@ function buildInsertPayload(asset: Asset, assetsById: Map<string, Asset>): Inser
     return null;
 }
 
-const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetPayload) => void; theme: CanvasTheme }) {
+const CanvasAssetsTab = memo(function CanvasAssetsTab({
+    onInsert,
+    theme,
+    selectedNodeId,
+}: {
+    onInsert: (payload: InsertAssetPayload) => void;
+    theme: CanvasTheme;
+    selectedNodeId: string | null;
+}) {
     const { t } = useTranslation();
     const [assetSource, setAssetSource] = useState<"system" | "user">("system");
 
@@ -469,7 +488,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
             </div>
             <div className="min-h-0 flex-1 overflow-hidden">
                 {assetSource === "system" ? (
-                    <SystemPosesSection onInsert={onInsert} theme={theme} />
+                    <SystemLibraryPanel onInsert={onInsert} theme={theme} selectedNodeId={selectedNodeId} />
                 ) : (
                     <UserAssetsSection onInsert={onInsert} theme={theme} />
                 )}
@@ -477,218 +496,6 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
         </div>
     );
 });
-
-function SystemPosesSection({ onInsert, theme }: { onInsert: (payload: InsertAssetPayload) => void; theme: CanvasTheme }) {
-    const { t } = useTranslation();
-    const [selectedSeries, setSelectedSeries] = useState<string>("full_single");
-    const [selectedCategory, setSelectedCategory] = useState<string>("全部");
-    const [keyword, setKeyword] = useState<string>("");
-
-    const activeSeriesMeta = useMemo(
-        () => POSE_SERIES_LIST.find((s) => s.id === selectedSeries) || POSE_SERIES_LIST[0],
-        [selectedSeries],
-    );
-
-    const filteredPoses = useMemo(() => {
-        const query = keyword.trim().toLowerCase();
-        return ALL_POSES.filter((item) => {
-            if (item.series !== selectedSeries) return false;
-            if (selectedCategory !== "全部" && item.category !== selectedCategory) return false;
-            if (!query) return true;
-            return [item.name, item.id, item.category].some((text) => text.toLowerCase().includes(query));
-        });
-    }, [keyword, selectedCategory, selectedSeries]);
-
-    return (
-        <div className="flex h-full flex-col">
-            {/* 搜索框 */}
-            <div className="px-3 pb-2">
-                <Input
-                    size="small"
-                    allowClear
-                    prefix={<Search className="size-3.5 text-stone-400" />}
-                    placeholder={t("canvas.sidePanel.searchPoses")}
-                    value={keyword}
-                    onChange={(e) => setKeyword(e.target.value)}
-                />
-            </div>
-
-            {/* 系列选择器 */}
-            <div className="px-3 pb-2">
-                <Segmented
-                    size="small"
-                    block
-                    options={POSE_SERIES_LIST.map((series) => ({
-                        label: `${series.name.replace("全身独奏·", "").replace("独奏", "")} (${series.count})`,
-                        value: series.id,
-                    }))}
-                    value={selectedSeries}
-                    onChange={(val) => {
-                        setSelectedSeries(String(val));
-                        setSelectedCategory("全部");
-                    }}
-                />
-            </div>
-
-            {/* 姿态分类标签横向滚竿 */}
-            {activeSeriesMeta?.categories?.length ? (
-                <div className="thin-scrollbar flex gap-1.5 overflow-x-auto px-3 pb-2">
-                    {activeSeriesMeta.categories.map((cat) => (
-                        <Tag.CheckableTag
-                            key={cat}
-                            checked={selectedCategory === cat}
-                            className={cn("prompt-filter-tag shrink-0", selectedCategory === cat && "is-active")}
-                            onChange={() => setSelectedCategory(cat)}
-                        >
-                            {cat}
-                        </Tag.CheckableTag>
-                    ))}
-                </div>
-            ) : null}
-
-            {/* 双列姿态卡片 */}
-            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-                {filteredPoses.length ? (
-                    <div className="grid grid-cols-2 gap-2 px-1 pb-2 pt-1">
-                        {filteredPoses.map((pose) => (
-                            <PoseSideCard key={pose.id} pose={pose} theme={theme} onInsert={onInsert} />
-                        ))}
-                    </div>
-                ) : (
-                    <Empty
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        description={t("canvas.sidePanel.noMatchingPoses")}
-                        className="pt-16"
-                    />
-                )}
-            </div>
-        </div>
-    );
-}
-
-function PoseSideCard({
-    pose,
-    theme,
-    onInsert,
-}: {
-    pose: PoseItem;
-    theme: CanvasTheme;
-    onInsert: (payload: InsertAssetPayload) => void;
-}) {
-    const { t } = useTranslation();
-    const defaultAngle: PoseAngleKey = pose.angles.includes("front") ? "front" : pose.angles[0] || "front";
-    const [activeAngle, setActiveAngle] = useState<PoseAngleKey>(defaultAngle);
-
-    useEffect(() => {
-        if (!pose.angles.includes(activeAngle)) {
-            setActiveAngle(defaultAngle);
-        }
-    }, [activeAngle, defaultAngle, pose.angles]);
-
-    const activeImageUrl = getPoseImageUrl(pose.id, activeAngle);
-    const activeLabel = POSE_ANGLE_LABELS[activeAngle] || activeAngle;
-    const payload: InsertAssetPayload = {
-        kind: "image",
-        dataUrl: activeImageUrl,
-        title: `${pose.name} (${activeLabel})`,
-    };
-
-    const handleDragStart = (e: React.DragEvent) => {
-        e.dataTransfer.setData("application/infinite-canvas-asset", JSON.stringify(payload));
-        e.dataTransfer.effectAllowed = "copy";
-    };
-
-    const getShortLabel = (angle: PoseAngleKey) => {
-        switch (angle) {
-            case "front": return "正";
-            case "side": return "侧";
-            case "diag": return "斜";
-            case "high": return "俯";
-            case "low": return "仰";
-            default: return angle;
-        }
-    };
-
-    return (
-        <div
-            draggable
-            onDragStart={handleDragStart}
-            className="group relative flex cursor-grab flex-col overflow-hidden rounded-xl border transition duration-200 hover:-translate-y-0.5 hover:shadow-lg active:cursor-grabbing"
-            style={{ borderColor: theme.node.stroke, background: theme.node.panel }}
-            title={t("canvas.sidePanel.dragOrClickToInsert")}
-        >
-            {/* 图片预览区域 */}
-            <div className="relative aspect-[3/4] w-full overflow-hidden bg-black/5 dark:bg-white/5">
-                <img
-                    src={activeImageUrl}
-                    alt={`${pose.name} - ${activeLabel}`}
-                    loading="lazy"
-                    className="size-full object-contain p-1 transition duration-200 group-hover:scale-105"
-                />
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition duration-200 group-hover:opacity-100">
-                    <button
-                        type="button"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onInsert(payload);
-                        }}
-                        className="pointer-events-auto grid size-8 place-items-center rounded-full bg-white/90 text-stone-700 shadow-sm backdrop-blur transition hover:bg-white hover:text-stone-900 dark:bg-black/60 dark:text-stone-100 dark:hover:bg-black/80"
-                        aria-label={t("canvas.sidePanel.inserted")}
-                        title={t("canvas.sidePanel.inserted")}
-                    >
-                        <Plus className="size-4" />
-                    </button>
-                </div>
-            </div>
-
-            {/* 卡片信息与机位微调芯片 */}
-            <div className="flex flex-1 flex-col justify-between p-1.5">
-                <div>
-                    <Tooltip title={pose.name}>
-                        <div className="line-clamp-1 text-[11px] font-medium" style={{ color: theme.node.text }}>
-                            {pose.name}
-                        </div>
-                    </Tooltip>
-                    {pose.category ? (
-                        <div className="text-[10px] opacity-50">
-                            {pose.category}
-                        </div>
-                    ) : null}
-                </div>
-
-                {/* 机位切换小芯片 */}
-                <div
-                    className="mt-1 flex items-center gap-0.5"
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
-                >
-                    {pose.angles.map((angle) => {
-                        const isSelected = activeAngle === angle;
-                        return (
-                            <Tooltip key={angle} title={POSE_ANGLE_LABELS[angle]}>
-                                <button
-                                    type="button"
-                                    className={cn(
-                                        "flex-1 rounded py-0.5 text-center text-[10px] font-medium transition",
-                                        isSelected
-                                            ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
-                                            : "bg-black/5 text-stone-600 hover:bg-black/10 dark:bg-white/10 dark:text-stone-300 dark:hover:bg-white/20",
-                                    )}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setActiveAngle(angle);
-                                    }}
-                                >
-                                    {getShortLabel(angle)}
-                                </button>
-                            </Tooltip>
-                        );
-                    })}
-                </div>
-            </div>
-        </div>
-    );
-}
 
 function UserAssetsSection({ onInsert, theme }: { onInsert: (payload: InsertAssetPayload) => void; theme: CanvasTheme }) {
     const { message } = App.useApp();

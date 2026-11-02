@@ -21,7 +21,10 @@ export type LeafAssetPayload =
     | { kind: "audio"; url: string; title: string; storageKey?: string; durationMs?: number };
 
 export type BundleEntryPayload = { assetId: string; slot: BundleSlot; payload: LeafAssetPayload; position?: { x: number; y: number }; size?: { width: number; height: number } };
-export type InsertAssetPayload = LeafAssetPayload | { kind: "bundle"; title: string; entries: BundleEntryPayload[]; connections?: BundleConnection[] };
+export type InsertAssetPayload = (LeafAssetPayload | { kind: "bundle"; title: string; entries: BundleEntryPayload[]; connections?: BundleConnection[] }) & {
+    /** 指定画布节点 id 时，插入的图片会直接连成该节点的参考图。 */
+    asReferenceTo?: string;
+};
 
 /** 把单个原子资产转成插入载荷；组合/未知类型返回 null。 */
 export function toLeafPayload(asset: Asset): LeafAssetPayload | null {
