@@ -333,7 +333,7 @@ export function CanvasNodeWorkflowPicker({
                 disabled={disabled}
                 // 固定宽度：antd 的 Cascader 宽度由内容撑，内容里带 truncate 就会一路缩到
                 // 「系…」「Qw…」。渠道与工作流名必须各自有确定的空间。
-                className="!h-10 !w-[240px] shrink-0"
+                className="!h-10 !w-[268px] shrink-0"
                 styles={{
                     root: {
                         background: "transparent",
@@ -345,10 +345,11 @@ export function CanvasNodeWorkflowPicker({
                 // 那时 antd 会渲染成空白，而执行侧照样会跑它 —— 显示的必须是我们算出来的那一条。
                 displayRender={() => (
                     <div className="flex w-full min-w-0 items-center gap-1.5 text-xs">
-                        <Server className="size-3.5 shrink-0 text-blue-500 opacity-80" />
-                        {/* 只有一个渠道时渠道名是纯噪声（它永远不变），省下的宽度全给工作流名 */}
+                        {/* 渠道名与主机图标只在多渠道时才有信息量：单渠道下它永远不变，
+                            省下的宽度全给工作流名（视频流名普遍长到 30 字符以上） */}
                         {channels.length > 1 ? (
                             <>
+                                <Server className="size-3.5 shrink-0 text-blue-500 opacity-80" />
                                 <span className="max-w-[56px] shrink-0 truncate font-medium opacity-85">{activeChannel.name || "ComfyUI"}</span>
                                 <span className="shrink-0 opacity-30">/</span>
                             </>
