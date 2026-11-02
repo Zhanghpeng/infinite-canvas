@@ -3,6 +3,7 @@ import localforage from "localforage";
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { findWorkflow, getDefaultWorkflow, modelOptionName, resolveModelChannel, resolveModelRequestConfig, type AiConfig, type ChannelModel, type WorkflowCategory } from "@/stores/use-config-store";
+import { resolveExecutionWorkflow } from "@/lib/canvas/workflow-resolution";
 import {
     DEFAULT_COMFYUI_FRAME_VIDEO_WORKFLOW,
     DEFAULT_COMFYUI_I2I_WORKFLOW,
@@ -2081,11 +2082,6 @@ export async function requestComfyuiImage(req: ComfyuiImageRequest): Promise<Com
         const category: WorkflowCategory = req.category || (isI2i ? "i2i" : "t2i");
         const channelId = req.channelId || req.config.channelId || channel.id;
         const workflowId = req.workflowId || req.config.workflowId;
-        const targetWorkflowItem = workflowId
-            ? findWorkflow(req.config, channelId, workflowId, category)
-            : Array.isArray(channel.workflows)
-              ? getDefaultWorkflow(channel, category)
-              : undefined;
         const channelWorkflow = isI2i
             ? (channelModel && isI2iWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
               channel.comfyuiI2iWorkflow ||
@@ -2094,21 +2090,27 @@ export async function requestComfyuiImage(req: ComfyuiImageRequest): Promise<Com
               channel.comfyuiT2iWorkflow ||
               channel.models.find((m) => isT2iWorkflowModel(m))?.comfyuiWorkflow;
 
-        const modelProfile = getModelProfile(req.model || targetWorkflowItem?.id || targetWorkflowItem?.name || rawModel);
+        // 渠道里存着工作流列表时，原来的兜底是「该分类的第一个流」，且多数渠道没有
+        // isDefault 标记 —— 于是列表第一条（t2i 是 Z-Image-Turbo）会把模型档案顶掉，
+        // 选 Qwen 也照样跑 Z-Image。优先级统一由 resolveExecutionWorkflow 决定：
+        // 显式 pin → 模型档案 → 渠道绑定的流 → 渠道默认流。
+        const resolved = resolveExecutionWorkflow({
+            config: req.config,
+            channel,
+            channelId,
+            workflowId,
+            modelId: rawModel,
+            category,
+            channelWorkflow,
+        });
+        const modelProfile = resolved?.modelProfile ?? getModelProfile(req.model || rawModel);
         if (modelProfile) {
             validateModelExecution(modelProfile, {
                 imagesCount: references.length,
                 size: req.size,
             });
         }
-        const profileWorkflow = modelProfile ? getWorkflowForModelProfile(modelProfile.id) : undefined;
-        const workflow = targetWorkflowItem
-            ? { json: targetWorkflowItem.json }
-            : channelWorkflow
-            ? { json: channelWorkflow.json }
-            : profileWorkflow
-            ? { json: profileWorkflow.json }
-            : undefined;
+        const workflow = resolved ? { json: resolved.json } : undefined;
         if (!workflow) throw new ComfyuiNoWorkflowError(i18n.t("comfyui.noWorkflow", { model: requestModel }));
         const baseUrl = (channel.comfyuiProxyUrl || "").trim();
         const token = channel.comfyuiProxyToken;
@@ -2249,21 +2251,20 @@ export async function requestComfyuiInpaint(req: ComfyuiInpaintRequest): Promise
         const channelModel = channel.models.find((model) => model.name === requestModel);
         const channelId = req.channelId || req.config.channelId || channel.id;
         const workflowId = req.workflowId || req.config.workflowId;
-        const targetWorkflowItem = workflowId
-            ? findWorkflow(req.config, channelId, workflowId, "inpaint")
-            : Array.isArray(channel.workflows)
-              ? getDefaultWorkflow(channel, "inpaint")
-              : undefined;
-        const modelProfile = getModelProfile(req.model || targetWorkflowItem?.id || targetWorkflowItem?.name || rawModel || "inpaint");
-        const profileWorkflow = modelProfile ? getWorkflowForModelProfile(modelProfile.id) : undefined;
-        const inpaintWorkflow =
-            targetWorkflowItem
-                ? { json: targetWorkflowItem.json }
-                : profileWorkflow
-                ? { json: profileWorkflow.json }
-                : (channelModel && isInpaintWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
-                  channel.comfyuiInpaintWorkflow ||
-                  channel.models.find((m) => isInpaintWorkflowModel(m))?.comfyuiWorkflow;
+        const resolved = resolveExecutionWorkflow({
+            config: req.config,
+            channel,
+            channelId,
+            workflowId,
+            modelId: rawModel,
+            category: "inpaint",
+            channelWorkflow:
+                (channelModel && isInpaintWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
+                channel.comfyuiInpaintWorkflow ||
+                channel.models.find((m) => isInpaintWorkflowModel(m))?.comfyuiWorkflow,
+        });
+        const modelProfile = resolved?.modelProfile ?? getModelProfile(req.model || rawModel || "inpaint");
+        const inpaintWorkflow = resolved ? { json: resolved.json } : undefined;
         if (!inpaintWorkflow) {
             throw new ComfyuiNoWorkflowError(i18n.t("comfyui.noInpaintWorkflow"));
         }
@@ -2666,17 +2667,19 @@ export async function requestComfyuiText(req: ComfyuiTextRequest): Promise<{ tex
         const channelModel = channel.models.find((model) => model.name === requestModel);
         const channelId = req.channelId || req.config.channelId || channel.id;
         const workflowId = req.workflowId || req.config.workflowId;
-        const targetWorkflowItem = workflowId
-            ? findWorkflow(req.config, channelId, workflowId, "text")
-            : Array.isArray(channel.workflows)
-              ? getDefaultWorkflow(channel, "text")
-              : undefined;
-        const textWorkflow =
-            targetWorkflowItem
-                ? { json: targetWorkflowItem.json }
-                : (channelModel && isTextWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
-                  channel.comfyuiTextWorkflow ||
-                  channel.models.find((m) => isTextWorkflowModel(m))?.comfyuiWorkflow;
+        const resolved = resolveExecutionWorkflow({
+            config: req.config,
+            channel,
+            channelId,
+            workflowId,
+            modelId: rawModel,
+            category: "text",
+            channelWorkflow:
+                (channelModel && isTextWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
+                channel.comfyuiTextWorkflow ||
+                channel.models.find((m) => isTextWorkflowModel(m))?.comfyuiWorkflow,
+        });
+        const textWorkflow = resolved ? { json: resolved.json } : undefined;
 
         if (!textWorkflow) {
             throw new ComfyuiNoWorkflowError(i18n.t("comfyui.noTextWorkflow"));
@@ -3228,13 +3231,11 @@ export async function submitComfyuiVideoJob(req: ComfyuiVideoRequest): Promise<{
     const initialVideoMode = req.videoMode || (req.config.videoMode === "frame" ? "frame" : "omni");
     const channelId = req.channelId || req.config.channelId || channel.id;
     const workflowId = req.workflowId || req.config.workflowId;
-    const targetWorkflowItem = workflowId
-        ? findWorkflow(req.config, channelId, workflowId)
-        : Array.isArray(channel.workflows)
-          ? getDefaultWorkflow(channel, initialVideoMode === "frame" ? "frameVideo" : "omniVideo")
-          : undefined;
-    const modelProfile = getModelProfile(req.model || targetWorkflowItem?.id || targetWorkflowItem?.name || rawModel || initialVideoMode);
-    const isFrameWorkflow = targetWorkflowItem?.category === "frameVideo";
+    // 视频的 pin 可能指向 depthVideo / faceRefine 这类专用流，查找时不能按
+    // omniVideo / frameVideo 过滤，否则专用流会被判为「不存在」而退回普通视频流。
+    const pinnedItem = workflowId ? findWorkflow(req.config, channelId, workflowId) : undefined;
+    const modelProfile = getModelProfile(req.model || pinnedItem?.id || pinnedItem?.name || rawModel || initialVideoMode);
+    const isFrameWorkflow = pinnedItem?.category === "frameVideo";
     const isFrameMode = modelProfile?.category === "frameVideo" || isFrameWorkflow || initialVideoMode === "frame";
     const videoMode = isFrameMode ? "frame" : "omni";
     if (modelProfile) {
@@ -3247,25 +3248,29 @@ export async function submitComfyuiVideoJob(req: ComfyuiVideoRequest): Promise<{
         });
     }
 
-    const profileWorkflow = modelProfile ? getWorkflowForModelProfile(modelProfile.id) : undefined;
-    const videoWorkflow =
-        targetWorkflowItem
-            ? { json: targetWorkflowItem.json }
-            : profileWorkflow
-            ? { json: profileWorkflow.json }
-            : videoMode === "frame"
-            ? (channelModel && isFrameVideoWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
-              channel.comfyuiFrameVideoWorkflow ||
-              channel.models.find((m) => isFrameVideoWorkflowModel(m))?.comfyuiWorkflow ||
-              DEFAULT_COMFYUI_FRAME_VIDEO_WORKFLOW
-            : (channelModel && isOmniVideoWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
-              channel.comfyuiVideoWorkflow ||
-              channel.models.find((m) => isOmniVideoWorkflowModel(m))?.comfyuiWorkflow ||
-              DEFAULT_COMFYUI_VIDEO_WORKFLOW;
-
-    if (!videoWorkflow) {
-        throw new ComfyuiNoWorkflowError(i18n.t(videoMode === "frame" ? "comfyui.noFrameVideoWorkflow" : "comfyui.noVideoWorkflow"));
-    }
+    // 与图像/文本同一套优先级：显式 pin → 模型档案 → 渠道绑定的流 → 渠道默认流。
+    // 原来「渠道该分类的第一个流」排在模型前面，渠道里存着工作流列表（多数没有
+    // isDefault 标记）时，列表第一条会把刚选的模型顶掉。
+    const resolved = resolveExecutionWorkflow({
+        config: req.config,
+        channel,
+        channelId,
+        workflowId,
+        modelId: req.model || rawModel || initialVideoMode,
+        pinCategory: null,
+        category: videoMode === "frame" ? "frameVideo" : "omniVideo",
+        channelWorkflow:
+            videoMode === "frame"
+                ? (channelModel && isFrameVideoWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
+                  channel.comfyuiFrameVideoWorkflow ||
+                  channel.models.find((m) => isFrameVideoWorkflowModel(m))?.comfyuiWorkflow
+                : (channelModel && isOmniVideoWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
+                  channel.comfyuiVideoWorkflow ||
+                  channel.models.find((m) => isOmniVideoWorkflowModel(m))?.comfyuiWorkflow,
+    });
+    const videoWorkflow = resolved
+        ? { json: resolved.json }
+        : { json: (videoMode === "frame" ? DEFAULT_COMFYUI_FRAME_VIDEO_WORKFLOW : DEFAULT_COMFYUI_VIDEO_WORKFLOW).json };
 
     const baseUrl = (channel.comfyuiProxyUrl || "").trim();
     const token = channel.comfyuiProxyToken;

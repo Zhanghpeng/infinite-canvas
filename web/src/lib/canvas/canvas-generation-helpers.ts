@@ -140,7 +140,10 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
     const rawModel = node?.metadata?.modelId || node?.metadata?.model;
     const model = resolveModelForCapability(config, rawModel, mode);
     const channelId = node?.metadata?.channelId || config.channelId;
-    const workflowId = node?.metadata?.workflowId || config.workflowId;
+    // 只有节点自己钉住的工作流才作数。节点已经用模型选择器表达意图时，不能再回落到
+    // 全局 `config.workflowId`：那个值属于「上一次在配置里选中的流」，与节点当前渠道、
+    // 当前模型毫无关系，回落等于让节点的模型选择静默失效。
+    const workflowId = node?.metadata?.workflowId || (rawModel ? undefined : config.workflowId);
     let videoMode = node?.metadata?.videoMode;
     if (mode === "video" && node?.metadata?.modelId) {
         videoMode = node.metadata.modelId.includes("frame") ? "frame" : "omni";
