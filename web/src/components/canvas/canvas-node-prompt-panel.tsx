@@ -480,6 +480,10 @@ export function CanvasNodePromptPanel({
                                         channelId: nextChannelId,
                                         modelId: nextModelId,
                                         videoMode: nextVideoMode,
+                                        // 与图像节点一致：执行侧 findWorkflow 是「有 workflowId 就用它」，
+                                        // 优先级高于模型自带的流；换渠道/换模型后旧 pin 必须一起作废，
+                                        // 否则刚选的主机和模型都不生效，跑的还是上一个渠道的旧工作流。
+                                        workflowId: undefined,
                                     });
                                 }}
                             />
@@ -547,6 +551,8 @@ export function CanvasNodePromptPanel({
                                             onConfigChange(node.id, {
                                                 channelId: nextChannelId,
                                                 modelId: nextModelId,
+                                                // 换渠道/换模型后旧的工作流 pin 作废，避免执行侧继续优先用旧流。
+                                                workflowId: undefined,
                                             });
                                         }}
                                     />
@@ -573,6 +579,8 @@ export function CanvasNodePromptPanel({
                                     onConfigChange(node.id, {
                                         channelId: nextChannelId,
                                         modelId: nextModelId,
+                                        // 换渠道/换模型后旧的工作流 pin 作废，避免执行侧继续优先用旧流。
+                                        workflowId: undefined,
                                     });
                                 }}
                             />
