@@ -448,6 +448,10 @@ export function CanvasNodePromptPanel({
                                     onConfigChange(node.id, {
                                         channelId: nextChannelId,
                                         modelId: nextModelId,
+                                        // 换模型/换渠道时把节点上钉着的旧工作流一起清掉：执行侧 findWorkflow
+                                        // 是「有 workflowId 就用它」，优先级高于模型自带的流；图像节点也没有别处
+                                        // 能看到这条旧 pin，留着只会让刚选的模型静默不生效。
+                                        workflowId: undefined,
                                     });
                                 }}
                             />
