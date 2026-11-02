@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { buildGenerationConfig } from "@/lib/canvas/canvas-generation-helpers";
-import { resolveExecutionWorkflow } from "@/lib/canvas/workflow-resolution";
+import { resolveConfiguredDefaultWorkflow, resolveExecutionWorkflow, resolveProfileForWorkflowItem } from "@/lib/canvas/workflow-resolution";
 import { getWorkflowForModelProfile } from "@/services/api/comfyui-default-workflows";
+import { getModelProfile } from "@/services/api/models";
 import { createModelChannel, defaultConfig, getChannelWorkflows, getDefaultComfyWorkflowItems, getDefaultWorkflow, type AiConfig, type ComfyWorkflowItem } from "@/stores/use-config-store";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 
@@ -136,6 +137,106 @@ describe("resolveExecutionWorkflow 的优先级", () => {
 
         expect(resolved?.source).toBe("model");
         expect(resolved?.json).toBe(getWorkflowForModelProfile("image-qwen-2.1")!.json);
+    });
+});
+
+describe("图像节点：配置里的默认流要真的作用到节点上", () => {
+    function withDefaultT2i(): ComfyWorkflowItem[] {
+        return realisticWorkflows().map((wf) => ({
+            ...wf,
+            isDefault: wf.category === "t2i" && wf.name.includes("Qwen-Image-2.1 文生图"),
+        }));
+    }
+
+    it("标了 isDefault 的那条压过模型档案", () => {
+        const config = makeConfig(withDefaultT2i());
+        const channel = config.channels[0];
+        const configured = resolveConfiguredDefaultWorkflow(channel, "t2i")!;
+        expect(configured.name).toBe("Qwen-Image-2.1 文生图");
+
+        const resolved = resolveExecutionWorkflow({
+            config,
+            channel,
+            channelId: "c1",
+            modelId: "image-z-turbo",
+            category: "t2i",
+            respectChannelDefault: true,
+        });
+
+        expect(resolved?.source).toBe("channel-default");
+        expect(resolved?.id).toBe(configured.id);
+        // 档案跟着流走：跑的既然是 Qwen 的流，就不能再用 Z-Image 的绑定规则去改它
+        expect(resolved?.modelProfile?.id).toBe("image-qwen-2.1");
+    });
+
+    it("没有任何 isDefault 标记时仍然走模型档案，不会被 list[0] 顶掉", () => {
+        const config = makeConfig(realisticWorkflows());
+        const channel = config.channels[0];
+        expect(resolveConfiguredDefaultWorkflow(channel, "t2i")).toBeUndefined();
+
+        const resolved = resolveExecutionWorkflow({
+            config,
+            channel,
+            channelId: "c1",
+            modelId: "image-qwen-2.1",
+            category: "t2i",
+            respectChannelDefault: true,
+        });
+
+        expect(resolved?.source).toBe("model");
+    });
+
+    it("不传 respectChannelDefault 时（视频/文本）行为不变", () => {
+        const config = makeConfig(withDefaultT2i());
+        const resolved = resolveExecutionWorkflow({
+            config,
+            channel: config.channels[0],
+            channelId: "c1",
+            modelId: "image-z-turbo",
+            category: "t2i",
+        });
+
+        expect(resolved?.source).toBe("model");
+        expect(resolved?.modelProfile?.id).toBe("image-z-turbo");
+    });
+
+    it("pin 到 Z-Image 的流时档案跟着变成 Z-Image", () => {
+        const config = makeConfig(withDefaultT2i());
+        const zImage = getChannelWorkflows(config.channels[0], "t2i").find((wf) => wf.id.includes("z-image"))!;
+
+        const resolved = resolveExecutionWorkflow({
+            config,
+            channel: config.channels[0],
+            channelId: "c1",
+            modelId: "image-qwen-2.1",
+            workflowId: zImage.id,
+            category: "t2i",
+            respectChannelDefault: true,
+        });
+
+        expect(resolved?.source).toBe("pinned");
+        expect(resolved?.modelProfile?.id).toBe("image-z-turbo");
+    });
+});
+
+describe("resolveProfileForWorkflowItem：从工作流反推绑定规则", () => {
+    it("按名字识别线上那几条自定义流", () => {
+        expect(resolveProfileForWorkflowItem({ id: "y_2RHZvoU4SKLzJCoGKvl", name: "qwen_image_21_文生图", category: "t2i" })?.id).toBe("image-qwen-2.1");
+        expect(resolveProfileForWorkflowItem({ id: "-bX2LGJ_c6LGW4oJ7luAf", name: "qwenimage2.1参考图6-9宫格", category: "i2i" })?.id).toBe("image-qwen-2.1");
+        expect(resolveProfileForWorkflowItem({ id: "yL50Le6T6gyekGyZOdnIu", name: "qwenimage2.1局部图像编辑", category: "inpaint" })?.id).toBe("image-qwen-inpaint");
+        expect(resolveProfileForWorkflowItem({ id: "builtin-i2i-flux2-dev", name: "Flux2.Dev 图生图", category: "i2i" })?.id).toBe("image-flux2-dev");
+        expect(resolveProfileForWorkflowItem({ id: "builtin-t2i-z-image-turbo", name: "Z-Image-Turbo 文生图", category: "t2i" })?.id).toBe("image-z-turbo");
+    });
+
+    it("完全认不出来的图像流按分类给最宽松的档案，不用零参考图的档案误杀", () => {
+        expect(resolveProfileForWorkflowItem({ id: "custom-1", name: "我的自定义流", category: "i2i" })?.id).toBe("image-qwen-2.1");
+        expect(resolveProfileForWorkflowItem({ id: "custom-2", name: "我的自定义重绘", category: "inpaint" })?.id).toBe("image-qwen-inpaint");
+    });
+
+    it("非图像分类不猜，保持调用方传入的档案", () => {
+        const fallback = getModelProfile("omni-video-minimax-h3-fp8-4step-pdmd");
+        expect(resolveProfileForWorkflowItem({ id: "custom-3", name: "我的视频流", category: "omniVideo" }, fallback)).toBe(fallback);
+        expect(resolveProfileForWorkflowItem({ id: "custom-4", name: "我的视频流", category: "omniVideo" })).toBeUndefined();
     });
 });
 

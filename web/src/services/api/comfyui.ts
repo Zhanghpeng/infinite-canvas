@@ -2147,6 +2147,9 @@ export async function requestComfyuiImage(req: ComfyuiImageRequest): Promise<Com
             workflowId,
             modelId: rawModel,
             category,
+            // 图像节点的二级下拉直接列该渠道的工作流，配置里标为默认的那条必须真的作用到节点上，
+            // 否则「界面列的是配置里的流、执行跑的是模型档案」再次分叉。
+            respectChannelDefault: true,
             channelWorkflow,
         });
         const modelProfile = resolved?.modelProfile ?? getModelProfile(req.model || rawModel);
@@ -2304,6 +2307,7 @@ export async function requestComfyuiInpaint(req: ComfyuiInpaintRequest): Promise
             workflowId,
             modelId: rawModel,
             category: "inpaint",
+            respectChannelDefault: true,
             channelWorkflow: resolveChannelBoundWorkflow(channel, requestModel, "inpaint"),
         });
         const modelProfile = resolved?.modelProfile ?? getModelProfile(req.model || rawModel || "inpaint");

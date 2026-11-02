@@ -12,6 +12,7 @@ import { TextModelPicker } from "@/components/text-model-picker";
 import { decodeChannelModel, defaultConfig, encodeChannelModel, findWorkflow, getDefaultWorkflow, isModelSupportedByHost, resolveModelChannel, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { BUILTIN_VIDEO_WORKFLOW_MODELS, evaluateModelAvailability, getModelProfile, imageQwen21Profile, textQwen35Profile } from "@/services/api/models";
 import { getNodeResourceCounts } from "@/lib/canvas/canvas-node-geometry";
+import { resolveExecutionWorkflow } from "@/lib/canvas/workflow-resolution";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { ChannelWorkflowPicker } from "@/components/channel-workflow-picker";
@@ -145,8 +146,21 @@ export function CanvasNodePromptPanel({
     const imageModelAvailability = useMemo(() => {
         if (mode !== "image") return { isAvailable: true, reasons: [] };
         const effectiveModelId = node.metadata?.modelId || config.imageModel || "image-qwen-2.1";
-        const profile = getModelProfile(effectiveModelId) || imageQwen21Profile;
         const activeChannel = globalConfig.channels.find((c) => c.id === (node.metadata?.channelId || globalConfig.channelId)) || globalConfig.channels[0];
+        // 用「实际会跑的那条工作流」反推档案来判可用性：节点现在选的是工作流，档案是跟着流
+        // 推导出来的，还拿旧的 modelId 判断会出现「界面说不可用、执行其实没问题」的分叉。
+        const resolved = activeChannel
+            ? resolveExecutionWorkflow({
+                  config,
+                  channel: activeChannel,
+                  channelId: activeChannel.id,
+                  workflowId: node.metadata?.workflowId,
+                  modelId: effectiveModelId,
+                  category: connectedResources.images > 0 ? "i2i" : "t2i",
+                  respectChannelDefault: true,
+              })
+            : undefined;
+        const profile = resolved?.modelProfile || getModelProfile(effectiveModelId) || imageQwen21Profile;
         return evaluateModelAvailability({
             targetModel: profile,
             connectedImages: connectedResources.images,
@@ -155,7 +169,7 @@ export function CanvasNodePromptPanel({
             promptText: prompt,
             activeChannel,
         });
-    }, [mode, node.metadata?.modelId, config.imageModel, node.metadata?.channelId, globalConfig.channels, globalConfig.channelId, connectedResources, prompt]);
+    }, [mode, node.metadata?.modelId, node.metadata?.workflowId, config, config.imageModel, node.metadata?.channelId, globalConfig.channels, globalConfig.channelId, connectedResources, prompt]);
 
     const textModelAvailability = useMemo(() => {
         if (mode !== "text") return { isAvailable: true, reasons: [] };
@@ -441,18 +455,19 @@ export function CanvasNodePromptPanel({
                             <ImageModelPicker
                                 channelId={node.metadata?.channelId || config.channelId}
                                 modelId={node.metadata?.modelId || config.imageModel || "image-qwen-2.1"}
+                                workflowId={node.metadata?.workflowId}
                                 connectedImages={connectedResources.images}
                                 connectedVideos={connectedResources.videos}
                                 connectedAudios={connectedResources.audios}
                                 promptText={prompt}
-                                onChange={(nextChannelId, nextModelId) => {
+                                onChange={(nextChannelId, nextModelId, _profile, workflow) => {
                                     onConfigChange(node.id, {
                                         channelId: nextChannelId,
                                         modelId: nextModelId,
-                                        // 换模型/换渠道时把节点上钉着的旧工作流一起清掉：执行侧 findWorkflow
-                                        // 是「有 workflowId 就用它」，优先级高于模型自带的流；图像节点也没有别处
-                                        // 能看到这条旧 pin，留着只会让刚选的模型静默不生效。
-                                        workflowId: undefined,
+                                        // 二级选中的就是该渠道配置里的那一条工作流，直接钉住；不选（清掉）
+                                        // 就跟随配置里标为默认的那条。modelId 由工作流反推，保证绑定规则
+                                        // 和这条流对得上。
+                                        workflowId: workflow?.id,
                                     });
                                 }}
                             />
@@ -631,7 +646,11 @@ export function CanvasNodePromptPanel({
                             />
                         </>
                     )}
-                    <CanvasExecutionWorkflowBadge node={node} mode={mode} imageCount={connectedResources.images} onClearPinned={() => onConfigChange(node.id, { workflowId: undefined })} />
+                    {/* 图像节点的选择器二级已经是工作流名本身，再挂一枚徽标就是把同一个名字说两遍；
+                         解除钉住的入口也跟着挪进了选择器（右侧回转图标）。 */}
+                    {mode === "image" ? null : (
+                        <CanvasExecutionWorkflowBadge node={node} mode={mode} imageCount={connectedResources.images} onClearPinned={() => onConfigChange(node.id, { workflowId: undefined })} />
+                    )}
                 </div>
                 {isOptimizingPrompt ? (
                     <Button type="primary" danger className="ml-auto !h-10 shrink-0 !rounded-full !px-3" onClick={() => onCancelOptimizePrompt?.()} aria-label={t("canvas.promptAssistant.cancel")}>

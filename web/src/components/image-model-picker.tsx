@@ -1,28 +1,23 @@
 import { Cascader, Tooltip } from "antd";
-import { AlertTriangle, HelpCircle, Image, Layers, Paintbrush, Server, Zap } from "lucide-react";
+import { AlertTriangle, HelpCircle, RotateCcw, Server, Workflow } from "lucide-react";
 import { useEffect, useMemo } from "react";
 
-import {
-    BUILTIN_IMAGE_WORKFLOW_MODELS,
-    evaluateModelAvailability,
-    getModelProfile,
-    imageQwen21Profile,
-    type WorkflowModelProfile,
-} from "@/services/api/models";
+import { evaluateModelAvailability, getModelProfile, imageQwen21Profile, type ModelAvailability, type WorkflowModelProfile } from "@/services/api/models";
+import { getChannelWorkflows, useEffectiveConfig, type ComfyWorkflowItem, type ModelChannel, type WorkflowCategory } from "@/stores/use-config-store";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
-import { useEffectiveConfig } from "@/stores/use-config-store";
-import {
-    isChannelAvailable,
-    resolveModelWhenSwitchingChannel,
-    summarizeChannelAvailability,
-    type ChannelAvailabilityContext,
-} from "@/lib/canvas/model-picker-channels";
+import { isChannelAvailable, type ChannelAvailabilityContext } from "@/lib/canvas/model-picker-channels";
+import { resolveExecutionWorkflow, resolveProfileForWorkflowItem } from "@/lib/canvas/workflow-resolution";
 
 export type ImageModelPickerProps = {
     channelId?: string;
     modelId?: string;
-    onChange: (channelId: string, modelId: string, profile: WorkflowModelProfile) => void;
+    /**
+     * 节点上钉住的工作流。不传表示「跟随配置」：执行侧会用该渠道该分类里被标为
+     * 默认的那条流。
+     */
+    workflowId?: string;
+    onChange: (channelId: string, modelId: string, profile: WorkflowModelProfile, workflow?: ComfyWorkflowItem) => void;
     className?: string;
     disabled?: boolean;
     connectedImages?: number;
@@ -31,23 +26,42 @@ export type ImageModelPickerProps = {
     promptText?: string;
 };
 
-function getModelIcon(modelId: string) {
-    switch (modelId) {
-        case "image-z-turbo":
-            return <Zap className="size-3.5 shrink-0 text-amber-500" />;
-        case "image-flux2-dev":
-            return <Image className="size-3.5 shrink-0 text-blue-500" />;
-        case "image-qwen-inpaint":
-            return <Paintbrush className="size-3.5 shrink-0 text-purple-500" />;
-        case "image-qwen-2.1":
-        default:
-            return <Layers className="size-3.5 shrink-0 text-emerald-500" />;
-    }
-}
+type WorkflowEntry = {
+    item: ComfyWorkflowItem;
+    profile: WorkflowModelProfile;
+    availability: ModelAvailability;
+};
 
+type ChannelSummary = {
+    channel: ModelChannel;
+    entries: WorkflowEntry[];
+    selectableCount: number;
+};
+
+const FALLBACK_CHANNEL: ModelChannel = {
+    id: "builtin",
+    name: "系统内置 ComfyUI",
+    baseUrl: "http://127.0.0.1:8188",
+    apiKey: "",
+    apiFormat: "comfyui",
+    models: [],
+};
+
+/**
+ * 图像节点的「渠道 → 工作流」两级选择。
+ *
+ * 二级原来是一份写死的全局模型清单（`BUILTIN_IMAGE_WORKFLOW_MODELS`），跟渠道毫无关系：
+ * 三个渠道展开都是同样四条模型，配置里那些自定义流（6-9 宫格、图像编辑…）永远选不到，
+ * 名字也和配置里的对不上 —— 看起来像联动，实际只是在换一级高亮。
+ *
+ * 现在二级直接取该渠道该分类的工作流，选中即钉住（`metadata.workflowId`）；没钉住就跟随
+ * 配置里标为默认的那条。展示值由 `resolveExecutionWorkflow` 算出，与执行侧同一个函数，
+ * 所以「看到的」和「实际跑的」不可能再分叉。
+ */
 export function ImageModelPicker({
     channelId,
     modelId,
+    workflowId,
     onChange,
     className = "",
     disabled = false,
@@ -59,36 +73,65 @@ export function ImageModelPicker({
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const config = useEffectiveConfig();
 
-    const channels = useMemo(() => {
-        return (config.channels && config.channels.length > 0)
-            ? config.channels
-            : [{ id: "builtin", name: "系统内置 ComfyUI", baseUrl: "http://127.0.0.1:8188", apiKey: "", apiFormat: "comfyui" as const, models: [] }];
-    }, [config.channels]);
+    const channels = useMemo(() => (config.channels && config.channels.length > 0 ? config.channels : [FALLBACK_CHANNEL]), [config.channels]);
 
     const activeChannel = useMemo(() => {
         return (channelId ? channels.find((c) => c.id === channelId) : null) || channels[0];
     }, [channels, channelId]);
 
-    const activeProfile = useMemo(() => {
-        return getModelProfile(modelId) || imageQwen21Profile;
-    }, [modelId]);
+    // 分类跟着连线走：接了参考图就是图生图，否则文生图。执行侧 requestComfyuiImage 也是
+    // 用 references 数量判的，两边必须同一口径，否则列出来的流和执行选中的流不是一批。
+    const category: WorkflowCategory = connectedImages > 0 ? "i2i" : "t2i";
 
     const availabilityContext = useMemo<ChannelAvailabilityContext>(
         () => ({ connectedImages, connectedVideos, connectedAudios, promptText }),
         [connectedImages, connectedVideos, connectedAudios, promptText],
     );
 
-    // 渠道级和模型级共用同一份可用性结果：列表里「这个渠道有几个能选」必须和展开后看到的置灰情况一致。
-    const channelSummaries = useMemo(
-        () => channels.map((channel) => summarizeChannelAvailability(channel, BUILTIN_IMAGE_WORKFLOW_MODELS, availabilityContext)),
-        [channels, availabilityContext],
-    );
+    const channelSummaries = useMemo<ChannelSummary[]>(() => {
+        return channels.map((channel) => {
+            const entries: WorkflowEntry[] = getChannelWorkflows(channel, category).map((item) => {
+                const profile = resolveProfileForWorkflowItem(item) || getModelProfile(modelId) || imageQwen21Profile;
+                return {
+                    item,
+                    profile,
+                    availability: evaluateModelAvailability({ targetModel: profile, ...availabilityContext, activeChannel: channel }),
+                };
+            });
+            return {
+                channel,
+                entries,
+                selectableCount: entries.filter((entry) => entry.availability.isSelectable).length,
+            };
+        });
+    }, [channels, category, availabilityContext, modelId]);
 
-    // 只有存在别的可切换渠道时才置灰「一个模型都用不了」的渠道；全渠道都不可用时仍允许切换，
-    // 否则用户会被锁死在当前渠道，连换个主机自救都做不到。
+    // 所有渠道都不可用时不再置灰，否则用户被锁死在当前渠道，连换主机自救都做不到。
     const hasSelectableChannel = channelSummaries.some((summary) => summary.selectableCount > 0);
 
-    // 级联递进选项：第一级为 API 提供商 (算力主机)，hover 展开第二级为模型
+    // 演示值与执行值同源：pin → 配置默认 → 模型档案 → 渠道绑定 → 渠道默认。
+    const resolved = useMemo(
+        () =>
+            resolveExecutionWorkflow({
+                config,
+                channel: activeChannel,
+                channelId: activeChannel.id,
+                workflowId,
+                modelId,
+                category,
+                respectChannelDefault: true,
+            }),
+        [config, activeChannel, workflowId, modelId, category],
+    );
+
+    const activeProfile = resolved?.modelProfile || getModelProfile(modelId) || imageQwen21Profile;
+    const activeSummary = channelSummaries.find((summary) => summary.channel.id === activeChannel.id);
+    const activeEntry = activeSummary?.entries.find((entry) => entry.item.id === resolved?.id);
+
+    const cascaderValue = useMemo(() => {
+        return activeEntry ? [activeChannel.id, activeEntry.item.id] : [activeChannel.id];
+    }, [activeChannel.id, activeEntry]);
+
     const options = useMemo(() => {
         return channelSummaries.map((summary) => ({
             value: summary.channel.id,
@@ -99,25 +142,25 @@ export function ImageModelPicker({
                     <span className="font-medium text-xs truncate max-w-[140px]">{summary.channel.name || "ComfyUI 主机"}</span>
                     <span
                         className={`ml-auto shrink-0 text-[10px] tabular-nums ${summary.selectableCount === 0 ? "text-rose-500" : "text-stone-400"}`}
-                        title={`${summary.selectableCount}/${summary.total} 个模型可切换`}
+                        title={`${summary.selectableCount}/${summary.entries.length} 条工作流可切换`}
                     >
-                        {summary.selectableCount}/{summary.total}
+                        {summary.selectableCount}/{summary.entries.length}
                     </span>
                 </div>
             ),
-            rawName: summary.channel.name,
-            children: summary.entries.map(({ model, availability }) => {
+            children: summary.entries.map(({ item, availability }) => {
                 const isBlocked = !availability.isSelectable;
                 const needsInputs = availability.isSelectable && !availability.isAvailable;
 
                 return {
-                    value: model.id,
+                    value: item.id,
                     disabled: isBlocked,
                     label: (
-                        <div className={`flex items-center justify-between gap-2 py-0.5 min-w-[200px] ${isBlocked ? "opacity-60" : ""}`}>
+                        <div className={`flex items-center justify-between gap-2 py-0.5 min-w-[220px] ${isBlocked ? "opacity-60" : ""}`}>
                             <div className="flex items-center gap-1.5 truncate">
-                                {getModelIcon(model.id)}
-                                <span className="font-medium text-xs truncate">{model.name}</span>
+                                <Workflow className="size-3.5 shrink-0 text-blue-500" />
+                                <span className="font-medium text-xs truncate">{item.name}</span>
+                                {item.isDefault ? <span className="shrink-0 text-[10px] text-stone-400">·默认</span> : null}
                             </div>
                             {isBlocked ? (
                                 <Tooltip
@@ -166,41 +209,34 @@ export function ImageModelPicker({
                             ) : null}
                         </div>
                     ),
-                    model,
-                    availability,
                 };
             }),
         }));
     }, [channelSummaries, hasSelectableChannel]);
 
-    // 当前渠道下真正对得上的模型。传进来的 modelId 可能已不属于该渠道（换了渠道，或旧存档里是
-    // builtin:: 编码串），显示层回落到该渠道第一个可选模型，避免下拉显示成空白。
-    const effectiveProfile = useMemo(() => {
-        const summary = channelSummaries.find((item) => item.channel.id === activeChannel.id);
-        const present = summary?.entries.find((entry) => entry.model.id === activeProfile.id);
-        return present?.model || summary?.firstSelectable || summary?.entries[0]?.model || activeProfile;
-    }, [channelSummaries, activeChannel, activeProfile]);
-
-    const cascaderValue = useMemo(() => {
-        return [activeChannel.id, effectiveProfile.id];
-    }, [activeChannel.id, effectiveProfile.id]);
-
     const handleCascaderChange = (value: (string | number)[]) => {
         if (!value || value.length === 0) return;
         const selectedChannelId = String(value[0]);
         const channel = channels.find((item) => item.id === selectedChannelId) || activeChannel;
+        const summary = channelSummaries.find((item) => item.channel.id === channel.id);
 
-        // 只点了渠道那一级（changeOnSelect）：保留当前模型——同一个模型常见于多台主机，换主机不该顺手换模型；
-        // 该模型在新渠道用不了，才退回新渠道第一个可选模型。
+        // 只点到渠道那一级（changeOnSelect）：同一个工作流在多台主机上都有就保留，
+        // 没有就跟随新渠道的默认流——换主机不该顺手把已经挑好的工作流换掉。
         if (value.length < 2) {
-            const nextProfile = resolveModelWhenSwitchingChannel(channel, BUILTIN_IMAGE_WORKFLOW_MODELS, availabilityContext, effectiveProfile.id);
-            if (!nextProfile) return;
-            onChange(channel.id, nextProfile.id, nextProfile);
+            const keep = summary?.entries.find((entry) => entry.item.id === resolved?.id);
+            if (keep) {
+                onChange(channel.id, keep.profile.id, keep.profile, keep.item);
+                return;
+            }
+            const next = resolveExecutionWorkflow({ config, channel, channelId: channel.id, modelId, category, respectChannelDefault: true });
+            if (!next) return;
+            onChange(channel.id, next.modelProfile?.id || activeProfile.id, next.modelProfile || activeProfile, undefined);
             return;
         }
 
-        const found = getModelProfile(String(value[1])) || activeProfile;
-        onChange(channel.id, found.id, found);
+        const picked = summary?.entries.find((entry) => entry.item.id === String(value[1]));
+        if (!picked) return;
+        onChange(channel.id, picked.profile.id, picked.profile, picked.item);
     };
 
     // 节点上钉着的渠道被删除后，选择器会静默显示第一个渠道，而执行侧拿到的还是那个失效 id：
@@ -209,55 +245,58 @@ export function ImageModelPicker({
         if (!channelId || isChannelAvailable(channels, channelId)) return;
         const fallback = channelSummaries[0];
         if (!fallback) return;
-        const profile = fallback.firstSelectable || fallback.entries[0]?.model;
-        if (!profile) return;
-        onChange(fallback.channel.id, profile.id, profile);
+        const target = fallback.entries.find((entry) => entry.availability.isSelectable) || fallback.entries[0];
+        if (!target) return;
+        onChange(fallback.channel.id, target.profile.id, target.profile, undefined);
     }, [channelId, channels, channelSummaries, onChange]);
 
     const activeAvailability = useMemo(() => {
         return evaluateModelAvailability({
-            targetModel: effectiveProfile,
-            connectedImages,
-            connectedVideos,
-            connectedAudios,
-            promptText,
+            targetModel: activeEntry?.profile || activeProfile,
+            ...availabilityContext,
             activeChannel,
         });
-    }, [effectiveProfile, connectedImages, connectedVideos, connectedAudios, promptText, activeChannel]);
+    }, [activeEntry, activeProfile, availabilityContext, activeChannel]);
+
+    const handleClearPin = () => {
+        onChange(activeChannel.id, activeProfile.id, activeProfile, undefined);
+    };
 
     return (
-        <Cascader
-            value={cascaderValue}
-            options={options}
-            onChange={handleCascaderChange}
-            expandTrigger="hover"
-            // 允许只选到渠道那一级：换主机不该强制用户把模型再点一遍。
-            changeOnSelect
-            allowClear={false}
-            disabled={disabled}
-            className={`!h-10 min-w-0 !max-w-[280px] ${className}`}
-            styles={{
-                root: {
-                    background: "transparent",
-                    color: theme.node.text,
-                    height: "40px",
-                },
-            }}
-            displayRender={(_labels, selectedOptions) => {
-                const channelOpt = selectedOptions?.[0] as { rawName?: string } | undefined;
-                const modelOpt = selectedOptions?.[1] as { value?: string } | undefined;
-                const profile = getModelProfile(String(modelOpt?.value)) || effectiveProfile;
-                const channelName = channelOpt?.rawName || activeChannel?.name || "ComfyUI";
-
-                return (
-                    <div className="flex items-center gap-1.5 truncate text-xs">
+        <div className={`flex min-w-0 items-center gap-1 ${className}`}>
+            <Cascader
+                value={cascaderValue}
+                options={options}
+                onChange={handleCascaderChange}
+                expandTrigger="hover"
+                // 允许只选到渠道那一级：换主机不该强制用户把工作流再点一遍。
+                changeOnSelect
+                allowClear={false}
+                disabled={disabled}
+                // 固定宽度：antd 的 Cascader 宽度由内容撑，内容里带 truncate 就会一路缩到
+                // 「系…」「Qw…」。渠道与工作流名必须各自有确定的空间。
+                className="!h-10 !w-[240px] shrink-0"
+                styles={{
+                    root: {
+                        background: "transparent",
+                        color: theme.node.text,
+                        height: "40px",
+                    },
+                }}
+                // 不用 antd 解析出来的 label：工作流可能不在当前渠道列表里（例如配置被改过），
+                // 那时 antd 会渲染成空白，而执行侧照样会跑它 —— 显示的必须是我们算出来的那一条。
+                displayRender={() => (
+                    <div className="flex w-full min-w-0 items-center gap-1.5 text-xs">
                         <Server className="size-3.5 shrink-0 text-blue-500 opacity-80" />
-                        <span className="truncate max-w-[80px] font-medium opacity-85">
-                            {channelName}
-                        </span>
-                        <span className="opacity-30">/</span>
-                        {getModelIcon(profile.id)}
-                        <span className="truncate font-medium">{profile.name}</span>
+                        {/* 只有一个渠道时渠道名是纯噪声（它永远不变），省下的宽度全给工作流名 */}
+                        {channels.length > 1 ? (
+                            <>
+                                <span className="max-w-[56px] shrink-0 truncate font-medium opacity-85">{activeChannel.name || "ComfyUI"}</span>
+                                <span className="shrink-0 opacity-30">/</span>
+                            </>
+                        ) : null}
+                        <Workflow className="size-3.5 shrink-0 text-blue-500 opacity-80" />
+                        <span className="min-w-0 flex-1 truncate font-medium">{resolved?.name || "未配置工作流"}</span>
                         {!activeAvailability.isAvailable && (
                             <Tooltip
                                 title={
@@ -279,8 +318,24 @@ export function ImageModelPicker({
                             </Tooltip>
                         )}
                     </div>
-                );
-            }}
-        />
+                )}
+            />
+            {workflowId ? (
+                <Tooltip title="改回跟随配置里的默认工作流">
+                    <button
+                        type="button"
+                        className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full opacity-50 transition-opacity hover:opacity-90"
+                        style={{ color: theme.node.text }}
+                        aria-label="改回跟随配置里的默认工作流"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            handleClearPin();
+                        }}
+                    >
+                        <RotateCcw className="size-3" />
+                    </button>
+                </Tooltip>
+            ) : null}
+        </div>
     );
 }
