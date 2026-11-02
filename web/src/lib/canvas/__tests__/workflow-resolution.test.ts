@@ -233,10 +233,55 @@ describe("resolveProfileForWorkflowItem：从工作流反推绑定规则", () =>
         expect(resolveProfileForWorkflowItem({ id: "custom-2", name: "我的自定义重绘", category: "inpaint" })?.id).toBe("image-qwen-inpaint");
     });
 
-    it("非图像分类不猜，保持调用方传入的档案", () => {
+    it("视频/音频/文本按分类反推档案：首尾帧与全能不能共用一套配额", () => {
+        const omni = resolveProfileForWorkflowItem({ id: "custom-3", name: "我的全能视频流", category: "omniVideo" });
+        const frame = resolveProfileForWorkflowItem({ id: "custom-4", name: "我的首尾帧流", category: "frameVideo" });
+
+        expect(omni?.category).toBe("omniVideo");
+        expect(frame?.category).toBe("frameVideo");
+        expect(omni?.id).not.toBe(frame?.id);
+        // 首尾帧档案只吃 2 张参考图，全能更多 —— 拿错档案会把合法参数判成超限
+        expect(frame?.capabilityConfig.references.maxImages).toBe(2);
+
+        expect(resolveProfileForWorkflowItem({ id: "custom-5", name: "我的音频流", category: "audio" })?.capability).toBe("audio");
+        expect(resolveProfileForWorkflowItem({ id: "custom-6", name: "我的文本流", category: "text" })?.capability).toBe("text");
+    });
+
+    it("分类里没有对应的档案家族时保持调用方传入的档案", () => {
         const fallback = getModelProfile("omni-video-minimax-h3-fp8-4step-pdmd");
-        expect(resolveProfileForWorkflowItem({ id: "custom-3", name: "我的视频流", category: "omniVideo" }, fallback)).toBe(fallback);
-        expect(resolveProfileForWorkflowItem({ id: "custom-4", name: "我的视频流", category: "omniVideo" })).toBeUndefined();
+        expect(resolveProfileForWorkflowItem({ id: "custom-7", name: "人脸修复", category: "faceRefine" }, fallback)).toBe(fallback);
+    });
+});
+
+describe("视频节点的可用工作流清单", () => {
+    it("配置里的全能/首尾帧/人脸修复流全部进得了节点的二级列表，且每条都能反推出档案", () => {
+        const config = makeConfig(realisticWorkflows());
+        const channel = config.channels[0];
+        const listed = getChannelWorkflows(channel, ["omniVideo", "frameVideo", "faceRefine"]);
+
+        // 三类都要在：原来节点二级是写死的 4 条视频模型，配置里这些流一条都看不到
+        expect(listed.some((wf) => wf.category === "omniVideo")).toBe(true);
+        expect(listed.some((wf) => wf.category === "frameVideo")).toBe(true);
+        expect(listed.some((wf) => wf.category === "faceRefine")).toBe(true);
+
+        // 反推不出档案的行会被选择器整行丢掉 —— 那等于又把自定义流藏起来
+        const fallback = getModelProfile("omni-video-minimax-h3-fp8-4step-pdmd");
+        for (const item of listed) {
+            expect(resolveProfileForWorkflowItem(item, fallback)).toBeDefined();
+        }
+    });
+
+    it("视频的三类流按传入顺序排：全能 → 首尾帧 → 人脸修复", () => {
+        const config = makeConfig(realisticWorkflows());
+        const order = ["omniVideo", "frameVideo", "faceRefine"];
+        const sorted = [...getChannelWorkflows(config.channels[0], order as never)].sort((a, b) => order.indexOf(a.category) - order.indexOf(b.category));
+
+        const firstFrameIndex = sorted.findIndex((wf) => wf.category === "frameVideo");
+        const firstFaceIndex = sorted.findIndex((wf) => wf.category === "faceRefine");
+        const lastOmniIndex = sorted.map((wf) => wf.category).lastIndexOf("omniVideo");
+
+        expect(lastOmniIndex).toBeLessThan(firstFrameIndex);
+        expect(firstFrameIndex).toBeLessThan(firstFaceIndex);
     });
 });
 
@@ -264,5 +309,36 @@ describe("buildGenerationConfig 的 workflowId 来源", () => {
         const node = makeImageNode({});
 
         expect(buildGenerationConfig(config, node, "image").workflowId).toBe("c1-t2i-qwen-image-21");
+    });
+});
+
+describe("视频节点的 videoMode 跟随所选工作流", () => {
+    function makeVideoNode(metadata: Record<string, unknown>): CanvasNodeData {
+        return { id: "v1", type: CanvasNodeType.Video, position: { x: 0, y: 0 }, width: 100, height: 100, metadata } as unknown as CanvasNodeData;
+    }
+
+    it("钉住首尾帧流时 videoMode 变成 frame，即使节点上还留着全能的 modelId", () => {
+        const config = makeConfig(realisticWorkflows());
+        const frameWf = getChannelWorkflows(config.channels[0], "frameVideo")[0]!;
+        const node = makeVideoNode({ workflowId: frameWf.id, modelId: "omni-video-minimax-h3-fp8-4step-pdmd", videoMode: "omni" });
+
+        // 首尾帧流与全能流的输入结构完全不同，模式必须跟着流走
+        expect(buildGenerationConfig(config, node, "video").videoMode).toBe("frame");
+    });
+
+    it("钉住全能流时 videoMode 保持 omni", () => {
+        const config = makeConfig(realisticWorkflows());
+        const omniWf = getChannelWorkflows(config.channels[0], "omniVideo")[0]!;
+        const node = makeVideoNode({ workflowId: omniWf.id, modelId: "frame-video-minimax-h3-fp8-4step-pdmd", videoMode: "frame" });
+
+        expect(buildGenerationConfig(config, node, "video").videoMode).toBe("omni");
+    });
+
+    it("没有钉住工作流时，尊重节点上显式选择的模式（不再被 modelId 覆盖）", () => {
+        const config = makeConfig(realisticWorkflows());
+        // 老实现是「只要有 modelId 就按 id 里的 frame 字样推」，会把用户手动切的模式吃掉
+        const node = makeVideoNode({ videoMode: "frame", modelId: "omni-video-minimax-h3-fp8-4step-pdmd" });
+
+        expect(buildGenerationConfig(config, node, "video").videoMode).toBe("frame");
     });
 });

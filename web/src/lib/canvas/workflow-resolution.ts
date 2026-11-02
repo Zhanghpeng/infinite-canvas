@@ -197,6 +197,12 @@ export function resolveProfileForWorkflowItem(
         return item.category === "inpaint" ? imageQwenInpaintProfile : imageQwen21Profile;
     }
 
+    // 视频/音频/文本：分类本身就决定了档案家族。首尾帧与全能视频的参考图、时长配额
+    // 完全不同，用错档案会在 validateModelExecution 里把合法参数判成超限（或反过来
+    // 放过超限参数），所以这里按分类取档案而不是沿用节点上旧的 modelId。
+    const byCategory = getModelProfile(item.category);
+    if (byCategory) return byCategory;
+
     return fallback;
 }
 

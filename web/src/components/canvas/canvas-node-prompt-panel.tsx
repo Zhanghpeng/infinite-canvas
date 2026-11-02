@@ -131,8 +131,24 @@ export function CanvasNodePromptPanel({
     const videoModelAvailability = useMemo(() => {
         if (mode !== "video") return { isAvailable: true, reasons: [] };
         const effectiveModelId = node.metadata?.modelId || (node.metadata?.videoMode === "frame" || config.videoMode === "frame" ? "frame-video-minimax-h3-fp8-4step-pdmd" : "omni-video-minimax-h3-fp8-4step-pdmd");
-        const profile = getModelProfile(effectiveModelId) || BUILTIN_VIDEO_WORKFLOW_MODELS[0];
         const activeChannel = globalConfig.channels.find((c) => c.id === (node.metadata?.channelId || globalConfig.channelId)) || globalConfig.channels[0];
+        // 与图像节点同一套：先算出「实际会跑的那条流」，再用它反推的档案判可用性。
+        // 节点现在选的是工作流，档案是跟流走的；还拿旧 modelId 判断会出现「界面说不可用、
+        // 执行其实没问题」（或反过来）的分叉。
+        const resolved = activeChannel
+            ? resolveExecutionWorkflow({
+                  config: globalConfig,
+                  channel: activeChannel,
+                  channelId: activeChannel.id,
+                  workflowId: node.metadata?.workflowId,
+                  modelId: effectiveModelId,
+                  category: node.metadata?.videoMode === "frame" || config.videoMode === "frame" ? "frameVideo" : "omniVideo",
+                  // 视频的 pin 可能指向深度视频/人脸修复这类专用流，不能按分类过滤
+                  pinCategory: null,
+                  respectChannelDefault: true,
+              })
+            : undefined;
+        const profile = resolved?.modelProfile || getModelProfile(effectiveModelId) || BUILTIN_VIDEO_WORKFLOW_MODELS[0];
         return evaluateModelAvailability({
             targetModel: profile,
             connectedImages: connectedResources.images,
@@ -141,7 +157,7 @@ export function CanvasNodePromptPanel({
             promptText: prompt,
             activeChannel,
         });
-    }, [mode, node.metadata?.modelId, node.metadata?.videoMode, node.metadata?.channelId, config.videoMode, globalConfig.channels, globalConfig.channelId, connectedResources, prompt]);
+    }, [mode, node.metadata?.modelId, node.metadata?.workflowId, node.metadata?.videoMode, node.metadata?.channelId, config.videoMode, globalConfig, globalConfig.channelId, connectedResources, prompt]);
 
     const imageModelAvailability = useMemo(() => {
         if (mode !== "image") return { isAvailable: true, reasons: [] };
@@ -176,8 +192,19 @@ export function CanvasNodePromptPanel({
     const textModelAvailability = useMemo(() => {
         if (mode !== "text") return { isAvailable: true, reasons: [] };
         const effectiveModelId = node.metadata?.modelId || "text-qwen-35";
-        const profile = getModelProfile(effectiveModelId) || textQwen35Profile;
         const activeChannel = globalConfig.channels.find((c) => c.id === (node.metadata?.channelId || globalConfig.channelId)) || globalConfig.channels[0];
+        const resolved = activeChannel
+            ? resolveExecutionWorkflow({
+                  config: globalConfig,
+                  channel: activeChannel,
+                  channelId: activeChannel.id,
+                  workflowId: node.metadata?.workflowId,
+                  modelId: effectiveModelId,
+                  category: "text",
+                  respectChannelDefault: true,
+              })
+            : undefined;
+        const profile = resolved?.modelProfile || getModelProfile(effectiveModelId) || textQwen35Profile;
         return evaluateModelAvailability({
             targetModel: profile,
             connectedImages: connectedResources.images,
@@ -186,7 +213,7 @@ export function CanvasNodePromptPanel({
             promptText: prompt,
             activeChannel,
         });
-    }, [mode, node.metadata?.modelId, node.metadata?.channelId, globalConfig.channels, globalConfig.channelId, connectedResources, prompt]);
+    }, [mode, node.metadata?.modelId, node.metadata?.workflowId, node.metadata?.channelId, globalConfig, globalConfig.channelId, connectedResources, prompt]);
 
     const isCurrentModelAvailable = mode === "video"
         ? videoModelAvailability.isAvailable
@@ -488,20 +515,29 @@ export function CanvasNodePromptPanel({
                             <VideoModelPicker
                                 channelId={node.metadata?.channelId || config.channelId}
                                 modelId={node.metadata?.modelId || (node.metadata?.videoMode === "frame" || config.videoMode === "frame" ? "frame-video-minimax-h3-fp8-4step-pdmd" : "omni-video-minimax-h3-fp8-4step-pdmd")}
+                                workflowId={node.metadata?.workflowId}
                                 connectedImages={connectedResources.images}
                                 connectedVideos={connectedResources.videos}
                                 connectedAudios={connectedResources.audios}
                                 promptText={prompt}
-                                onChange={(nextChannelId, nextModelId, profile) => {
-                                    const nextVideoMode = profile.category === "frameVideo" ? "frame" : "omni";
+                                onChange={(nextChannelId, nextModelId, profile, workflow) => {
+                                    // 视频模式跟着「选中的那条流」走：首尾帧流 → frame，全能流 → omni。
+                                    // 同一渠道里这两类流的输入结构完全不同，用错会把首尾帧当参考图送进去。
+                                    const nextVideoMode =
+                                        workflow?.category === "frameVideo"
+                                            ? "frame"
+                                            : workflow?.category === "omniVideo"
+                                              ? "omni"
+                                              : profile.category === "frameVideo"
+                                                ? "frame"
+                                                : "omni";
                                     onConfigChange(node.id, {
                                         channelId: nextChannelId,
                                         modelId: nextModelId,
                                         videoMode: nextVideoMode,
-                                        // 与图像节点一致：执行侧 findWorkflow 是「有 workflowId 就用它」，
-                                        // 优先级高于模型自带的流；换渠道/换模型后旧 pin 必须一起作废，
-                                        // 否则刚选的主机和模型都不生效，跑的还是上一个渠道的旧工作流。
-                                        workflowId: undefined,
+                                        // 二级选中的就是该渠道配置里的那一条流，直接钉住；没选（或点了回转）
+                                        // 就跟随配置里标为默认的那条。
+                                        workflowId: workflow?.id,
                                     });
                                 }}
                             />
@@ -561,16 +597,16 @@ export function CanvasNodePromptPanel({
                                     <AudioModelPicker
                                         channelId={node.metadata?.channelId || config.channelId}
                                         modelId={node.metadata?.modelId || "audio-minimax-music-3"}
+                                        workflowId={node.metadata?.workflowId}
                                         connectedImages={connectedResources.images}
                                         connectedVideos={connectedResources.videos}
                                         connectedAudios={connectedResources.audios}
                                         promptText={prompt}
-                                        onChange={(nextChannelId, nextModelId) => {
+                                        onChange={(nextChannelId, nextModelId, _profile, workflow) => {
                                             onConfigChange(node.id, {
                                                 channelId: nextChannelId,
                                                 modelId: nextModelId,
-                                                // 换渠道/换模型后旧的工作流 pin 作废，避免执行侧继续优先用旧流。
-                                                workflowId: undefined,
+                                                workflowId: workflow?.id,
                                             });
                                         }}
                                     />
@@ -589,16 +625,16 @@ export function CanvasNodePromptPanel({
                             <TextModelPicker
                                 channelId={node.metadata?.channelId || config.channelId}
                                 modelId={node.metadata?.modelId || "text-qwen-35"}
+                                workflowId={node.metadata?.workflowId}
                                 connectedImages={connectedResources.images}
                                 connectedVideos={connectedResources.videos}
                                 connectedAudios={connectedResources.audios}
                                 promptText={prompt}
-                                onChange={(nextChannelId, nextModelId) => {
+                                onChange={(nextChannelId, nextModelId, _profile, workflow) => {
                                     onConfigChange(node.id, {
                                         channelId: nextChannelId,
                                         modelId: nextModelId,
-                                        // 换渠道/换模型后旧的工作流 pin 作废，避免执行侧继续优先用旧流。
-                                        workflowId: undefined,
+                                        workflowId: workflow?.id,
                                     });
                                 }}
                             />
@@ -648,11 +684,9 @@ export function CanvasNodePromptPanel({
                             />
                         </>
                     )}
-                    {/* 图像节点的选择器二级已经是工作流名本身，再挂一枚徽标就是把同一个名字说两遍；
-                         解除钉住的入口也跟着挪进了选择器（右侧回转图标）。 */}
-                    {mode === "image" ? null : (
-                        <CanvasExecutionWorkflowBadge node={node} mode={mode} imageCount={connectedResources.images} onClearPinned={() => onConfigChange(node.id, { workflowId: undefined })} />
-                    )}
+                    {/* 四个节点的选择器二级已经是工作流名本身，徽标只保留「是否跟随配置默认」
+                         这一个状态信号，不再重复流名；解除钉住的入口在选择器右侧回转图标。 */}
+                    <CanvasExecutionWorkflowBadge node={node} mode={mode} imageCount={connectedResources.images} />
                 </div>
                 {isOptimizingPrompt ? (
                     <Button type="primary" danger className="ml-auto !h-10 shrink-0 !rounded-full !px-3" onClick={() => onCancelOptimizePrompt?.()} aria-label={t("canvas.promptAssistant.cancel")}>

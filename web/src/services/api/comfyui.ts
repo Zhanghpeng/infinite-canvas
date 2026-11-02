@@ -2721,6 +2721,8 @@ export async function requestComfyuiText(req: ComfyuiTextRequest): Promise<{ tex
             workflowId,
             modelId: rawModel,
             category: "text",
+            // 文本节点二级同样列该渠道配置里的流（含自定义反推提示词），默认标记要生效。
+            respectChannelDefault: true,
             channelWorkflow: resolveChannelBoundWorkflow(channel, requestModel, "text"),
         });
         const textWorkflow = resolved ? { json: resolved.json } : undefined;
@@ -3303,6 +3305,8 @@ export async function submitComfyuiVideoJob(req: ComfyuiVideoRequest): Promise<{
         modelId: req.model || rawModel || initialVideoMode,
         pinCategory: null,
         category: videoMode === "frame" ? "frameVideo" : "omniVideo",
+        // 视频节点二级列的就是该渠道配置里的流，配置里标为默认的那条必须真的作用到节点上。
+        respectChannelDefault: true,
         channelWorkflow: resolveChannelBoundWorkflow(channel, requestModel, videoMode === "frame" ? "frameVideo" : "omniVideo"),
     });
     const videoWorkflow = resolved
@@ -3650,35 +3654,36 @@ export async function requestComfyuiAudio(req: ComfyuiAudioRequest): Promise<Com
 
     const modelProfile = getModelProfile(rawModel || "audio-minimax-music-3");
 
-    let workflowItem = req.workflowId ? findWorkflow(req.config, channel.id, req.workflowId, "audio") : undefined;
-    if (!workflowItem && modelProfile) {
-        workflowItem = getWorkflowForModelProfile(modelProfile.id);
-    }
-    if (!workflowItem) workflowItem = getDefaultWorkflow(channel, "audio");
-    if (!workflowItem && channel.comfyuiAudioWorkflow) {
-        workflowItem = {
-            id: `${channel.id}-audio-workflow`,
-            name: channel.comfyuiAudioWorkflow.name,
-            category: "audio",
-            json: channel.comfyuiAudioWorkflow.json,
-            createdAt: channel.comfyuiAudioWorkflow.createdAt,
-            isBuiltin: channel.comfyuiAudioWorkflow.isBuiltin,
-        };
-    }
-    if (!workflowItem) {
+    // 与图像/视频/文本同一套优先级：显式 pin → 配置里标为默认的流 → 模型档案 → 渠道绑定 →
+    // 渠道列表首项。原来这里是「pin → 模型档案 → getDefaultWorkflow」，缺了「配置里的默认流」
+    // 这一档，且 getDefaultWorkflow 在没有 isDefault 时会取列表首项 —— 两者都会让配置页里
+    // 的默认标记对节点不生效。
+    const resolved = resolveExecutionWorkflow({
+        config: req.config,
+        channel,
+        channelId: channel.id,
+        workflowId: req.workflowId || req.config.workflowId,
+        modelId: rawModel || "audio-minimax-music-3",
+        category: "audio",
+        respectChannelDefault: true,
+        channelWorkflow: channel.comfyuiAudioWorkflow,
+        channelWorkflowName: channel.comfyuiAudioWorkflow?.name,
+    });
+    if (!resolved) {
         throw new ComfyuiError("未找到可用的 ComfyUI 音频工作流");
     }
 
     const seed = req.seed !== undefined && req.seed >= 0 ? req.seed : generateRandomSeed();
     const duration = req.duration ?? (Number(req.config.audioSeconds) || 60);
 
-    const profileToUse = modelProfile || getModelProfile("audio-minimax-music-3")!;
+    // 档案跟着流走：选了自定义配乐流时仍用音频档案的绑定规则，不沿用节点上别的能力档案
+    const profileToUse = resolved.modelProfile || modelProfile || getModelProfile("audio-minimax-music-3")!;
     validateModelExecution(profileToUse, {
         prompt: req.prompt,
         duration,
     });
 
-    const boundWorkflow = dispatchComfyuiModelWorkflow(profileToUse, workflowItem.json, {
+    const boundWorkflow = dispatchComfyuiModelWorkflow(profileToUse, resolved.json, {
         prompt: req.prompt,
         duration,
         seed,

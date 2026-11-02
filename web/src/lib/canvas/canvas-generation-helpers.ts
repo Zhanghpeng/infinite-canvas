@@ -145,16 +145,17 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
     // 当前模型毫无关系，回落等于让节点的模型选择静默失效。
     const workflowId = node?.metadata?.workflowId || (rawModel ? undefined : config.workflowId);
     let videoMode = node?.metadata?.videoMode;
-    if (mode === "video" && node?.metadata?.modelId) {
+    // 视频模式的决定顺序：节点上钉住的那条流的分类 > 显式 videoMode > 模型 id 里的 frame 字样
+    // > 全局设置。原来只要有 modelId 就无条件按 id 推，把用户手动切的模式（首尾帧开关）覆盖掉；
+    // 而节点直接选流之后，流的分类才是最准的信号 —— 首尾帧流与全能流的输入结构完全不同，
+    // 送错一边会把首尾帧当参考图塞进去。
+    const pinnedWorkflow = mode === "video" && workflowId ? findWorkflow(config, channelId, workflowId) : undefined;
+    if (mode === "video" && pinnedWorkflow) {
+        if (pinnedWorkflow.category === "frameVideo") videoMode = "frame";
+        else if (pinnedWorkflow.category === "omniVideo" || pinnedWorkflow.category === "faceRefine") videoMode = "omni";
+    }
+    if (mode === "video" && !videoMode && node?.metadata?.modelId) {
         videoMode = node.metadata.modelId.includes("frame") ? "frame" : "omni";
-    }
-    if (mode === "video" && workflowId && !videoMode) {
-        const wf = findWorkflow(config, channelId, workflowId);
-        if (wf?.category === "frameVideo") videoMode = "frame";
-        else if (wf?.category === "omniVideo" || wf?.category === "faceRefine") videoMode = "omni";
-    }
-    if (videoMode === "frame" && (workflowId ? findWorkflow(config, channelId, workflowId)?.category === "faceRefine" : false)) {
-        videoMode = "omni";
     }
     if (!videoMode) {
         videoMode = config.videoMode || defaultConfig.videoMode || "omni";
