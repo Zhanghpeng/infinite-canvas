@@ -151,7 +151,9 @@ export function CanvasNodePromptPanel({
         // 推导出来的，还拿旧的 modelId 判断会出现「界面说不可用、执行其实没问题」的分叉。
         const resolved = activeChannel
             ? resolveExecutionWorkflow({
-                  config,
+                  // 解析只用到 config.channels（走 findWorkflow），用全局配置即可：buildNodeConfig
+                  // 每次渲染都是新对象，把它塞进依赖会让这个 useMemo 白算。
+                  config: globalConfig,
                   channel: activeChannel,
                   channelId: activeChannel.id,
                   workflowId: node.metadata?.workflowId,
@@ -169,7 +171,7 @@ export function CanvasNodePromptPanel({
             promptText: prompt,
             activeChannel,
         });
-    }, [mode, node.metadata?.modelId, node.metadata?.workflowId, config, config.imageModel, node.metadata?.channelId, globalConfig.channels, globalConfig.channelId, connectedResources, prompt]);
+    }, [mode, node.metadata?.modelId, node.metadata?.workflowId, config.imageModel, node.metadata?.channelId, globalConfig, globalConfig.channelId, connectedResources, prompt]);
 
     const textModelAvailability = useMemo(() => {
         if (mode !== "text") return { isAvailable: true, reasons: [] };
