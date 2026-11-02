@@ -851,7 +851,10 @@ export function findWorkflow(config: AiConfig, channelId?: string, workflowId?: 
     if (workflowId) {
         const found = list.find((wf) => wf.id === workflowId);
         if (found) return found;
-        const defaultFallback = getDefaultComfyWorkflowItems(channel).find((wf) => wf.id === workflowId);
+        // 兜底必须留在同一分类内。跨分类兜底会把 id 相同的「文生图」硬套给带参考图的请求：
+        // 这类流程没有参考图槽位，绑定阶段会把参考图静默丢掉，出图和参考毫无关系又不报错。
+        const matchesCategory = (wf: ComfyWorkflowItem) => !category || (Array.isArray(category) ? category.includes(wf.category) : wf.category === category);
+        const defaultFallback = getDefaultComfyWorkflowItems(channel).find((wf) => wf.id === workflowId && matchesCategory(wf));
         if (defaultFallback) return defaultFallback;
     }
     if (category) {
