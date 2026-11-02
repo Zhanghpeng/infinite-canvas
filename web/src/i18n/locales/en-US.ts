@@ -1293,6 +1293,7 @@ export default {
             "channel": "Channel binding",
             "channelDefault": "Channel default",
             "clear": "Follow model instead",
+            "matchesModel": "Same as the selected model's workflow",
             "pinnedHint": "This workflow is pinned on the node, so changing the model will not affect it. Click × to follow the model instead."
         },
         "promptPanel": {

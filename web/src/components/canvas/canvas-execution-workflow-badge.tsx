@@ -4,8 +4,10 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { buildGenerationConfig } from "@/lib/canvas/canvas-generation-helpers";
 import { resolveExecutionWorkflow, type ExecutionWorkflowSource } from "@/lib/canvas/workflow-resolution";
-import { resolveModelChannel, useEffectiveConfig, type WorkflowCategory } from "@/stores/use-config-store";
+import { resolveChannelBoundWorkflow } from "@/services/api/comfyui";
+import { modelOptionName, resolveModelChannel, useEffectiveConfig, type WorkflowCategory } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { CanvasNodeData } from "@/types/canvas";
 
@@ -29,72 +31,95 @@ const SOURCE_LABEL_KEY: Record<ExecutionWorkflowSource, string> = {
 /**
  * 节点「实际会跑哪条工作流」。
  *
- * 节点上原本只能看到模型，看不到这条模型最终落到哪条流上 —— 选 Qwen 却跑 Z-Image
- * 这类错配完全不可见。这里用与执行侧同一个解析函数（resolveExecutionWorkflow）
- * 展示结果与来源，来源为「节点指定」时给出一键解除，避免残留 pin 静默压掉模型。
+ * 选 Qwen 却跑 Z-Image 这类错配在界面上完全不可见，所以这里把执行结果摊开：
+ *
+ * - **跟随模型时只留一个图标**：绝大多数节点都是「执行流 = 所选模型的自带流」，把工作流名
+ *   再抄一遍既占位置又和左侧选择器重复，还会把渠道/模型挤成「系…」「Qw…」。悬停能看到
+ *   完整信息，不悬停也不误导。
+ * - **只有真正偏离时才展开成胶囊**（节点指定 / 渠道绑定 / 渠道默认）：这才是用户需要
+ *   知道、且需要能动手处理的三种情况。
+ *
+ * 判断用的输入必须与执行侧完全相同：模型走 buildGenerationConfig（含旧版 `metadata.model`
+ * 与按能力回退），渠道绑定流走 resolveChannelBoundWorkflow。徽标自己另写一套判断，就会
+ * 变成「界面说一套、实际跑一套」——正是它要解决的那个问题。
  */
 export function CanvasExecutionWorkflowBadge({ node, mode, imageCount, onClearPinned }: CanvasExecutionWorkflowBadgeProps) {
     const { t } = useTranslation();
     const config = useEffectiveConfig();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const audioKind = node.metadata?.audioKind === "voice" ? "voice" : "music";
-    const videoMode = node.metadata?.videoMode === "frame" || config.videoMode === "frame" ? "frame" : "omni";
 
-    const modelId = useMemo(() => {
-        if (mode === "image") return node.metadata?.modelId || config.imageModel || "image-qwen-2.1";
-        if (mode === "video") return node.metadata?.modelId || (videoMode === "frame" ? "frame-video-minimax-h3-fp8-4step-pdmd" : "omni-video-minimax-h3-fp8-4step-pdmd");
-        if (mode === "text") return node.metadata?.modelId || config.textModel || "text-qwen-35";
-        // 配音走工作流 + 音色卡，没有模型选择
-        return audioKind === "voice" ? undefined : node.metadata?.modelId || "audio-minimax-music-3";
-    }, [mode, node.metadata?.modelId, videoMode, config.imageModel, config.textModel, audioKind]);
+    // 配音走「工作流 + 音色卡」，选择器里已经直接显示工作流名，这里再挂一枚徽标只会重复。
+    const isVoiceNode = mode === "audio" && node.metadata?.audioKind === "voice";
 
-    const category: WorkflowCategory =
-        mode === "image" ? (imageCount > 0 ? "i2i" : "t2i") : mode === "video" ? (videoMode === "frame" ? "frameVideo" : "omniVideo") : mode === "audio" ? (audioKind === "voice" ? "voice" : "audio") : "text";
+    const built = useMemo(() => buildGenerationConfig(config, node, mode), [config, node, mode]);
 
-    const channel = useMemo(() => {
-        const explicit = config.channels?.find((item) => item.id === (node.metadata?.channelId || config.channelId));
-        return explicit || resolveModelChannel(config, modelId || config.model);
-    }, [config, node.metadata?.channelId, modelId]);
+    const modelId = mode === "image" ? built.imageModel : mode === "video" ? built.videoModel : mode === "text" ? built.textModel : built.audioModel;
+    const requestModel = modelOptionName(modelId || "");
+    const videoMode = built.videoMode === "frame" ? "frame" : "omni";
+
+    const category: WorkflowCategory = mode === "image" ? (imageCount > 0 ? "i2i" : "t2i") : mode === "video" ? (videoMode === "frame" ? "frameVideo" : "omniVideo") : mode === "audio" ? "audio" : "text";
+
+    const channel = useMemo(() => resolveModelChannel(built, requestModel || built.model || config.model), [built, requestModel, config.model]);
 
     const resolved = useMemo(() => {
-        if (!channel) return undefined;
+        if (!channel || channel.apiFormat !== "comfyui") return undefined;
         return resolveExecutionWorkflow({
-            config,
+            config: built,
             channel,
-            channelId: channel.id,
-            workflowId: node.metadata?.workflowId,
-            modelId,
+            channelId: built.channelId || channel.id,
+            workflowId: built.workflowId,
+            modelId: requestModel,
             category,
             // 视频节点的 pin 可能指向 depthVideo / faceRefine 这类专用流，不能按分类过滤
             pinCategory: mode === "video" ? null : undefined,
+            // 音频请求本身不看渠道绑定的流（只有 pin → 模型档案 → 渠道流列表），不要在此多算一层
+            channelWorkflow: mode === "audio" ? undefined : resolveChannelBoundWorkflow(channel, requestModel, category),
         });
-    }, [config, channel, node.metadata?.workflowId, modelId, category, mode]);
+    }, [built, channel, requestModel, category, mode]);
 
-    if (!channel || channel.apiFormat !== "comfyui" || !resolved) return null;
+    if (isVoiceNode || !channel || !resolved) return null;
 
     const isPinned = resolved.source === "pinned";
+    const sourceLabel = t(SOURCE_LABEL_KEY[resolved.source]);
+
+    const tooltip = (
+        <div className="space-y-1 text-xs">
+            <div className="font-semibold">
+                {t("canvas.executionWorkflow.label")}：{resolved.name}
+            </div>
+            <div className="opacity-80">
+                {channel.name} · {sourceLabel}
+            </div>
+            {resolved.source === "model" ? <div className="opacity-70">{t("canvas.executionWorkflow.matchesModel")}</div> : null}
+            {isPinned ? <div className="text-amber-300">{t("canvas.executionWorkflow.pinnedHint")}</div> : null}
+        </div>
+    );
+
+    // 跟随模型 = 没有偏差可看，只留一个可悬停的图标，不占横向空间。
+    if (resolved.source === "model") {
+        return (
+            <Tooltip title={tooltip}>
+                <button
+                    type="button"
+                    className="inline-flex size-8 shrink-0 cursor-help items-center justify-center rounded-full opacity-40 transition-opacity hover:opacity-80"
+                    style={{ color: theme.node.text }}
+                    aria-label={`${t("canvas.executionWorkflow.label")}：${resolved.name}`}
+                >
+                    <Workflow className="size-3.5" />
+                </button>
+            </Tooltip>
+        );
+    }
 
     return (
-        <Tooltip
-            title={
-                <div className="space-y-1 text-xs">
-                    <div className="font-semibold">
-                        {t("canvas.executionWorkflow.label")}：{resolved.name}
-                    </div>
-                    <div className="opacity-80">
-                        {channel.name} · {t(SOURCE_LABEL_KEY[resolved.source])}
-                    </div>
-                    {isPinned ? <div className="text-amber-300">{t("canvas.executionWorkflow.pinnedHint")}</div> : null}
-                </div>
-            }
-        >
+        <Tooltip title={tooltip}>
             <div
-                className="inline-flex h-10 min-w-0 max-w-[220px] shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs"
+                className="inline-flex h-10 min-w-0 max-w-[180px] shrink items-center gap-1.5 rounded-full border px-2.5 text-xs"
                 style={{ background: theme.node.fill, borderColor: isPinned ? "#f59e0b" : theme.node.stroke, color: theme.node.text }}
             >
-                <Workflow className="size-3.5 shrink-0 opacity-70" />
-                <span className="truncate">{resolved.name}</span>
-                <span className="shrink-0 opacity-60">{t(SOURCE_LABEL_KEY[resolved.source])}</span>
+                <Workflow className="size-3.5 shrink-0" style={{ color: isPinned ? "#f59e0b" : undefined }} />
+                <span className="min-w-0 truncate">{resolved.name}</span>
+                <span className="shrink-0 text-[10px] opacity-60">{sourceLabel}</span>
                 {isPinned ? (
                     <button
                         type="button"

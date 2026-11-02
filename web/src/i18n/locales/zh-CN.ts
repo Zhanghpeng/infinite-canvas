@@ -1293,6 +1293,7 @@ export default {
             "channel": "渠道绑定",
             "channelDefault": "渠道默认",
             "clear": "改回跟随模型",
+            "matchesModel": "与所选模型自带的流一致",
             "pinnedHint": "这条工作流由节点指定，换模型不会改变它。点右侧 × 改回跟随模型。"
         },
         "promptPanel": {

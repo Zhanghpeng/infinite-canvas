@@ -2,7 +2,7 @@ import localforage from "localforage";
 
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
-import { findWorkflow, getDefaultWorkflow, modelOptionName, resolveModelChannel, resolveModelRequestConfig, type AiConfig, type ChannelModel, type WorkflowCategory } from "@/stores/use-config-store";
+import { findWorkflow, getDefaultWorkflow, modelOptionName, resolveModelChannel, resolveModelRequestConfig, type AiConfig, type ChannelModel, type ComfyuiWorkflow, type ModelChannel, type WorkflowCategory } from "@/stores/use-config-store";
 import { resolveExecutionWorkflow } from "@/lib/canvas/workflow-resolution";
 import {
     DEFAULT_COMFYUI_FRAME_VIDEO_WORKFLOW,
@@ -2046,6 +2046,57 @@ function isOmniVideoWorkflowModel(m?: ChannelModel): boolean {
     return m.name === "ComfyUI Video" || m.capability === "video" || name.includes("video") || m.name.includes("视频");
 }
 
+/**
+ * 渠道里「为该模型 / 该分类」绑定的自定义工作流。
+ *
+ * 执行侧与节点上的「执行流」徽标共用这一处：徽标如果自己再写一套判断，就会出现
+ * 「界面说跑 A、实际跑 B」——而这正是徽标要解决的问题。
+ */
+export function resolveChannelBoundWorkflow(channel: ModelChannel, requestModel: string | undefined, category: WorkflowCategory): ComfyuiWorkflow | undefined {
+    const channelModel = requestModel ? channel.models.find((model) => model.name === requestModel) : undefined;
+    switch (category) {
+        case "i2i":
+            return (
+                (isI2iWorkflowModel(channelModel) ? channelModel?.comfyuiWorkflow : undefined) ||
+                channel.comfyuiI2iWorkflow ||
+                channel.models.find((model) => isI2iWorkflowModel(model))?.comfyuiWorkflow
+            );
+        case "inpaint":
+            return (
+                (isInpaintWorkflowModel(channelModel) ? channelModel?.comfyuiWorkflow : undefined) ||
+                channel.comfyuiInpaintWorkflow ||
+                channel.models.find((model) => isInpaintWorkflowModel(model))?.comfyuiWorkflow
+            );
+        case "text":
+            return (
+                (isTextWorkflowModel(channelModel) ? channelModel?.comfyuiWorkflow : undefined) ||
+                channel.comfyuiTextWorkflow ||
+                channel.models.find((model) => isTextWorkflowModel(model))?.comfyuiWorkflow
+            );
+        case "frameVideo":
+            return (
+                (isFrameVideoWorkflowModel(channelModel) ? channelModel?.comfyuiWorkflow : undefined) ||
+                channel.comfyuiFrameVideoWorkflow ||
+                channel.models.find((model) => isFrameVideoWorkflowModel(model))?.comfyuiWorkflow
+            );
+        case "omniVideo":
+        case "faceRefine":
+            return (
+                (isOmniVideoWorkflowModel(channelModel) ? channelModel?.comfyuiWorkflow : undefined) ||
+                channel.comfyuiVideoWorkflow ||
+                channel.models.find((model) => isOmniVideoWorkflowModel(model))?.comfyuiWorkflow
+            );
+        case "t2i":
+            return (
+                (isT2iWorkflowModel(channelModel) ? channelModel?.comfyuiWorkflow : undefined) ||
+                channel.comfyuiT2iWorkflow ||
+                channel.models.find((model) => isT2iWorkflowModel(model))?.comfyuiWorkflow
+            );
+        default:
+            return undefined;
+    }
+}
+
 function imageReferenceSlots(workflow: ComfyuiWorkflowJson) {
     return Object.values(workflow)
         .map((node) => (node && typeof node === "object" ? (node as { _meta?: { title?: unknown } })._meta?.title : undefined))
@@ -2082,13 +2133,8 @@ export async function requestComfyuiImage(req: ComfyuiImageRequest): Promise<Com
         const category: WorkflowCategory = req.category || (isI2i ? "i2i" : "t2i");
         const channelId = req.channelId || req.config.channelId || channel.id;
         const workflowId = req.workflowId || req.config.workflowId;
-        const channelWorkflow = isI2i
-            ? (channelModel && isI2iWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
-              channel.comfyuiI2iWorkflow ||
-              channel.models.find((m) => isI2iWorkflowModel(m))?.comfyuiWorkflow
-            : (channelModel && isT2iWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
-              channel.comfyuiT2iWorkflow ||
-              channel.models.find((m) => isT2iWorkflowModel(m))?.comfyuiWorkflow;
+        // 渠道为该模型绑定的流；判断逻辑与节点上的「执行流」徽标共用一处。
+        const channelWorkflow = resolveChannelBoundWorkflow(channel, requestModel, isI2i ? "i2i" : "t2i");
 
         // 渠道里存着工作流列表时，原来的兜底是「该分类的第一个流」，且多数渠道没有
         // isDefault 标记 —— 于是列表第一条（t2i 是 Z-Image-Turbo）会把模型档案顶掉，
@@ -2258,10 +2304,7 @@ export async function requestComfyuiInpaint(req: ComfyuiInpaintRequest): Promise
             workflowId,
             modelId: rawModel,
             category: "inpaint",
-            channelWorkflow:
-                (channelModel && isInpaintWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
-                channel.comfyuiInpaintWorkflow ||
-                channel.models.find((m) => isInpaintWorkflowModel(m))?.comfyuiWorkflow,
+            channelWorkflow: resolveChannelBoundWorkflow(channel, requestModel, "inpaint"),
         });
         const modelProfile = resolved?.modelProfile ?? getModelProfile(req.model || rawModel || "inpaint");
         const inpaintWorkflow = resolved ? { json: resolved.json } : undefined;
@@ -2674,10 +2717,7 @@ export async function requestComfyuiText(req: ComfyuiTextRequest): Promise<{ tex
             workflowId,
             modelId: rawModel,
             category: "text",
-            channelWorkflow:
-                (channelModel && isTextWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
-                channel.comfyuiTextWorkflow ||
-                channel.models.find((m) => isTextWorkflowModel(m))?.comfyuiWorkflow,
+            channelWorkflow: resolveChannelBoundWorkflow(channel, requestModel, "text"),
         });
         const textWorkflow = resolved ? { json: resolved.json } : undefined;
 
@@ -3259,14 +3299,7 @@ export async function submitComfyuiVideoJob(req: ComfyuiVideoRequest): Promise<{
         modelId: req.model || rawModel || initialVideoMode,
         pinCategory: null,
         category: videoMode === "frame" ? "frameVideo" : "omniVideo",
-        channelWorkflow:
-            videoMode === "frame"
-                ? (channelModel && isFrameVideoWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
-                  channel.comfyuiFrameVideoWorkflow ||
-                  channel.models.find((m) => isFrameVideoWorkflowModel(m))?.comfyuiWorkflow
-                : (channelModel && isOmniVideoWorkflowModel(channelModel) ? channelModel.comfyuiWorkflow : undefined) ||
-                  channel.comfyuiVideoWorkflow ||
-                  channel.models.find((m) => isOmniVideoWorkflowModel(m))?.comfyuiWorkflow,
+        channelWorkflow: resolveChannelBoundWorkflow(channel, requestModel, videoMode === "frame" ? "frameVideo" : "omniVideo"),
     });
     const videoWorkflow = resolved
         ? { json: resolved.json }
