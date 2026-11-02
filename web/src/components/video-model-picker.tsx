@@ -1,6 +1,6 @@
 import { Cascader, Tooltip } from "antd";
 import { AlertTriangle, Film, HelpCircle, Server, Sparkles } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import {
     BUILTIN_VIDEO_WORKFLOW_MODELS,
@@ -11,6 +11,12 @@ import {
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useEffectiveConfig } from "@/stores/use-config-store";
+import {
+    isChannelAvailable,
+    resolveModelWhenSwitchingChannel,
+    summarizeChannelAvailability,
+    type ChannelAvailabilityContext,
+} from "@/lib/canvas/model-picker-channels";
 
 export type VideoModelPickerProps = {
     channelId?: string;
@@ -52,27 +58,40 @@ export function VideoModelPicker({
         return getModelProfile(modelId) || BUILTIN_VIDEO_WORKFLOW_MODELS[0];
     }, [modelId]);
 
+    const availabilityContext = useMemo<ChannelAvailabilityContext>(
+        () => ({ connectedImages, connectedVideos, connectedAudios, promptText }),
+        [connectedImages, connectedVideos, connectedAudios, promptText],
+    );
+
+    // 渠道级和模型级共用同一份可用性结果：列表里「这个渠道有几个能选」必须和展开后看到的置灰情况一致。
+    const channelSummaries = useMemo(
+        () => channels.map((channel) => summarizeChannelAvailability(channel, BUILTIN_VIDEO_WORKFLOW_MODELS, availabilityContext)),
+        [channels, availabilityContext],
+    );
+
+    // 只有存在别的可切换渠道时才置灰「一个模型都用不了」的渠道；全渠道都不可用时仍允许切换。
+    const hasSelectableChannel = channelSummaries.some((summary) => summary.selectableCount > 0);
+
     // 级联递进选项：第一级为 API 提供商 (算力主机)，hover 展开第二级为模型
     const options = useMemo(() => {
-        return channels.map((channel) => ({
-            value: channel.id,
+        return channelSummaries.map((summary) => ({
+            value: summary.channel.id,
+            disabled: hasSelectableChannel && summary.selectableCount === 0,
             label: (
                 <div className="flex items-center gap-1.5 py-0.5">
                     <Server className="size-3.5 text-blue-500 shrink-0" />
-                    <span className="font-medium text-xs truncate max-w-[140px]">{channel.name || "ComfyUI 主机"}</span>
+                    <span className="font-medium text-xs truncate max-w-[140px]">{summary.channel.name || "ComfyUI 主机"}</span>
+                    <span
+                        className={`ml-auto shrink-0 text-[10px] tabular-nums ${summary.selectableCount === 0 ? "text-rose-500" : "text-stone-400"}`}
+                        title={`${summary.selectableCount}/${summary.total} 个模型可切换`}
+                    >
+                        {summary.selectableCount}/{summary.total}
+                    </span>
                 </div>
             ),
-            rawName: channel.name,
-            children: BUILTIN_VIDEO_WORKFLOW_MODELS.map((model) => {
+            rawName: summary.channel.name,
+            children: summary.entries.map(({ model, availability }) => {
                 const isFrame = model.category === "frameVideo";
-                const availability = evaluateModelAvailability({
-                    targetModel: model,
-                    connectedImages,
-                    connectedVideos,
-                    connectedAudios,
-                    promptText,
-                    activeChannel: channel,
-                });
 
                 const isBlocked = !availability.isSelectable;
                 const needsInputs = availability.isSelectable && !availability.isAvailable;
@@ -142,30 +161,56 @@ export function VideoModelPicker({
                 };
             }),
         }));
-    }, [channels, connectedImages, connectedVideos, connectedAudios, promptText]);
+    }, [channelSummaries, hasSelectableChannel]);
+
+    // 当前渠道下真正对得上的模型。传进来的 modelId 可能已不属于该渠道，显示层回落到该渠道第一个可选模型。
+    const effectiveProfile = useMemo(() => {
+        const summary = channelSummaries.find((item) => item.channel.id === activeChannel.id);
+        const present = summary?.entries.find((entry) => entry.model.id === activeProfile.id);
+        return present?.model || summary?.firstSelectable || summary?.entries[0]?.model || activeProfile;
+    }, [channelSummaries, activeChannel, activeProfile]);
 
     const cascaderValue = useMemo(() => {
-        return [activeChannel.id, activeProfile.id];
-    }, [activeChannel.id, activeProfile.id]);
+        return [activeChannel.id, effectiveProfile.id];
+    }, [activeChannel.id, effectiveProfile.id]);
 
     const handleCascaderChange = (value: (string | number)[]) => {
-        if (!value || value.length < 2) return;
+        if (!value || value.length === 0) return;
         const selectedChannelId = String(value[0]);
-        const selectedModelId = String(value[1]);
-        const found = getModelProfile(selectedModelId) || activeProfile;
-        onChange(selectedChannelId, found.id, found);
+        const channel = channels.find((item) => item.id === selectedChannelId) || activeChannel;
+
+        // 只点了渠道那一级（changeOnSelect）：保留当前模型，换不过去才退回新渠道第一个可选模型。
+        if (value.length < 2) {
+            const nextProfile = resolveModelWhenSwitchingChannel(channel, BUILTIN_VIDEO_WORKFLOW_MODELS, availabilityContext, effectiveProfile.id);
+            if (!nextProfile) return;
+            onChange(channel.id, nextProfile.id, nextProfile);
+            return;
+        }
+
+        const found = getModelProfile(String(value[1])) || activeProfile;
+        onChange(channel.id, found.id, found);
     };
+
+    // 钉着的渠道被删除后，选择器会静默显示第一个渠道而执行侧仍用失效 id。只纠正「引用不存在」。
+    useEffect(() => {
+        if (!channelId || isChannelAvailable(channels, channelId)) return;
+        const fallback = channelSummaries[0];
+        if (!fallback) return;
+        const profile = fallback.firstSelectable || fallback.entries[0]?.model;
+        if (!profile) return;
+        onChange(fallback.channel.id, profile.id, profile);
+    }, [channelId, channels, channelSummaries, onChange]);
 
     const activeAvailability = useMemo(() => {
         return evaluateModelAvailability({
-            targetModel: activeProfile,
+            targetModel: effectiveProfile,
             connectedImages,
             connectedVideos,
             connectedAudios,
             promptText,
             activeChannel,
         });
-    }, [activeProfile, connectedImages, connectedVideos, connectedAudios, promptText, activeChannel]);
+    }, [effectiveProfile, connectedImages, connectedVideos, connectedAudios, promptText, activeChannel]);
 
     return (
         <Cascader
@@ -173,6 +218,8 @@ export function VideoModelPicker({
             options={options}
             onChange={handleCascaderChange}
             expandTrigger="hover"
+            // 允许只选到渠道那一级：换主机不该强制用户把模型再点一遍。
+            changeOnSelect
             allowClear={false}
             disabled={disabled}
             className={`!h-10 min-w-0 !max-w-[280px] ${className}`}
@@ -186,7 +233,7 @@ export function VideoModelPicker({
             displayRender={(_labels, selectedOptions) => {
                 const channelOpt = selectedOptions?.[0] as { rawName?: string } | undefined;
                 const modelOpt = selectedOptions?.[1] as { value?: string } | undefined;
-                const profile = getModelProfile(String(modelOpt?.value)) || activeProfile;
+                const profile = getModelProfile(String(modelOpt?.value)) || effectiveProfile;
                 const isFrame = profile.category === "frameVideo";
                 const channelName = channelOpt?.rawName || activeChannel?.name || "ComfyUI";
 

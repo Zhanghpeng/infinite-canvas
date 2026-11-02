@@ -1,5 +1,5 @@
 import { Select } from "antd";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Server, Workflow } from "lucide-react";
 
 import {
@@ -52,6 +52,22 @@ export function ChannelWorkflowPicker({
         return getChannelWorkflows(activeChannel, category);
     }, [activeChannel, category]);
 
+    // 每个渠道在该分类下有几个工作流。渠道列表只列「选了就能用」的，没有该类工作流的渠道置灰并标 0，
+    // 否则用户会选中一个渠道、工作流下拉变空，却不知道是哪一步不对。
+    const workflowCountByChannel = useMemo(() => {
+        const counts = new Map<string, number>();
+        for (const channel of channels) {
+            counts.set(channel.id, getChannelWorkflows(channel, category).length);
+        }
+        return counts;
+    }, [channels, category]);
+
+    // 所有渠道都没有该类工作流时不能再置灰，否则下拉整体锁死，用户连换渠道都无法操作。
+    const hasWorkflowChannel = useMemo(
+        () => channels.some((channel) => (workflowCountByChannel.get(channel.id) ?? 0) > 0),
+        [channels, workflowCountByChannel],
+    );
+
     // 当前解析生效的工作流
     const activeWorkflow = useMemo(() => {
         if (!workflows.length) return null;
@@ -68,12 +84,16 @@ export function ChannelWorkflowPicker({
         return getDefaultWorkflow(activeChannel, category) || workflows[0];
     }, [workflows, workflowId, activeChannel, category, preferredCategory]);
 
-    // 若当前传入的 channelId 或 workflowId 与实际计算不一致，自动校准
+    // 若当前传入的 channelId 或 workflowId 与实际计算不一致，自动校准。
+    // 同一个「输入 → 纠正值」只上报一次：父组件若因故没写回，也不能变成每次渲染都回调的死循环。
+    const lastReportedRef = useRef("");
     useEffect(() => {
         if (!activeChannel || !activeWorkflow) return;
-        if (activeChannel.id !== channelId || activeWorkflow.id !== workflowId) {
-            onChange(activeChannel.id, activeWorkflow.id, activeWorkflow);
-        }
+        if (activeChannel.id === channelId && activeWorkflow.id === workflowId) return;
+        const key = `${channelId || ""}::${workflowId || ""}->${activeChannel.id}::${activeWorkflow.id}`;
+        if (lastReportedRef.current === key) return;
+        lastReportedRef.current = key;
+        onChange(activeChannel.id, activeWorkflow.id, activeWorkflow);
     }, [activeChannel, activeWorkflow, channelId, workflowId, onChange]);
 
     const handleChannelChange = (nextChannelId: string) => {
@@ -84,7 +104,10 @@ export function ChannelWorkflowPicker({
         if (!defaultWf) {
             defaultWf = getDefaultWorkflow(nextChannel, category);
         }
-        onChange(nextChannelId, defaultWf?.id || "", defaultWf);
+        // 新渠道在这个分类下一个工作流都没有：不切换，免得把节点的 workflowId 写成空串，
+        // 执行时再静默回落到别的分类的默认流。
+        if (!defaultWf) return;
+        onChange(nextChannelId, defaultWf.id, defaultWf);
     };
 
     const handleWorkflowChange = (nextWorkflowId: string) => {
@@ -174,15 +197,22 @@ export function ChannelWorkflowPicker({
                     onChange={handleChannelChange}
                     className="w-[110px] shrink-0"
                     popupMatchSelectWidth={false}
-                    options={channels.map((c) => ({
-                        value: c.id,
-                        label: (
-                            <span className="flex items-center gap-1 text-xs">
-                                <Server className="size-3 shrink-0 text-stone-400" />
-                                <span className="truncate">{c.name}</span>
-                            </span>
-                        ),
-                    }))}
+                    options={channels.map((c) => {
+                        const count = workflowCountByChannel.get(c.id) ?? 0;
+                        return {
+                            value: c.id,
+                            disabled: hasWorkflowChannel && count === 0,
+                            label: (
+                                <span className="flex items-center gap-1 text-xs">
+                                    <Server className="size-3 shrink-0 text-stone-400" />
+                                    <span className="truncate">{c.name}</span>
+                                    <span className={`ml-auto shrink-0 text-[10px] tabular-nums ${count === 0 ? "text-rose-500" : "text-stone-400"}`}>
+                                        {count}
+                                    </span>
+                                </span>
+                            ),
+                        };
+                    })}
                 />
             ) : null}
 
