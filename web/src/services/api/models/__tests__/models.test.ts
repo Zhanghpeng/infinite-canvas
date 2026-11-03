@@ -209,7 +209,7 @@ describe("Workflow Model Profiles (Image Workflow Models)", () => {
         const textProfile = getModelProfile("text-qwen-35");
         expect(textProfile?.capability).toBe("text");
         expect(textProfile?.capabilityConfig.references.minImages).toBe(0);
-        expect(textProfile?.capabilityConfig.references.maxImages).toBe(1);
+        expect(textProfile?.capabilityConfig.references.maxImages).toBe(9);
         expect(textProfile?.capabilityConfig.textConfig).toBeUndefined();
     });
 
@@ -584,5 +584,54 @@ describe("dispatchComfyuiModelWorkflow (Cascade Pruning & Parameter Injection)",
         });
         expect((boundFallback["1"] as any).inputs.value).toContain("反推一段适合用于 AI 生图的提示词");
         expect((boundFallback["12"] as any).inputs.image).toBe("uploaded_photo.png");
+    });
+
+    it("binds multi reference images in slot order and prunes the unfilled slots", () => {
+        // 典型的多图反推流：6 个 ref_image 槽位，消费节点按「图像_0N」逐条连线。
+        // 只连 1 张图时，未填的 5 个 LoadImage 必须从执行图里裁掉——否则它们会带着
+        // JSON 里录制的示例文件名提交，ComfyUI 报 `Invalid image file`。
+        const textWorkflow = {
+            "8": { inputs: { value: "old prompt" }, class_type: "PrimitiveStringMultiline", _meta: { title: "prompt" } },
+            "30": {
+                inputs: {
+                    用户提示词: ["8", 0],
+                    图像_01: ["12", 0],
+                    图像_02: ["31", 0],
+                    图像_03: ["32", 0],
+                },
+                class_type: "QwenImagePromptOptimizer",
+                _meta: { title: "Qwen image 2.1 提示词优化" },
+            },
+            "12": { inputs: { image: "stale-1.png" }, class_type: "LoadImage", _meta: { title: "ref_image_01" } },
+            "31": { inputs: { image: "stale-2.png" }, class_type: "LoadImage", _meta: { title: "ref_image_02" } },
+            "32": { inputs: { image: "stale-3.png" }, class_type: "LoadImage", _meta: { title: "ref_image_03" } },
+        };
+
+        const single = applyTextBindings(textWorkflow as any, {
+            prompt: "反推这段画面的提示词",
+            assetIds: ["uploaded-1.png"],
+        });
+        expect((single["12"] as any).inputs.image).toBe("uploaded-1.png");
+        expect(single["31"]).toBeUndefined();
+        expect(single["32"]).toBeUndefined();
+        expect((single["30"] as any).inputs["图像_01"]).toEqual(["12", 0]);
+        expect((single["30"] as any).inputs["图像_02"]).toBeUndefined();
+        expect((single["30"] as any).inputs["图像_03"]).toBeUndefined();
+
+        const triple = applyTextBindings(textWorkflow as any, {
+            prompt: "反推这段画面的提示词",
+            assetIds: ["uploaded-1.png", "uploaded-2.png", "uploaded-3.png"],
+        });
+        expect((triple["12"] as any).inputs.image).toBe("uploaded-1.png");
+        expect((triple["31"] as any).inputs.image).toBe("uploaded-2.png");
+        expect((triple["32"] as any).inputs.image).toBe("uploaded-3.png");
+        expect((triple["30"] as any).inputs["图像_02"]).toEqual(["31", 0]);
+
+        // 0 张图：所有参考槽位都被裁掉，只剩 prompt 进模型（纯文本扩写）
+        const noImage = applyTextBindings(textWorkflow as any, { prompt: "扩写一下" });
+        expect(noImage["12"]).toBeUndefined();
+        expect(noImage["31"]).toBeUndefined();
+        expect((noImage["30"] as any).inputs["图像_01"]).toBeUndefined();
+        expect(noImage["30"]).toBeDefined();
     });
 });

@@ -2009,7 +2009,9 @@ export default {
         "cancelled": "ComfyUI generation cancelled",
         "failed": "ComfyUI generation failed",
         "noImageOutput": "The ComfyUI job completed without an image output",
-        "noVideoOutput": "The ComfyUI job completed without a video output"
+        "noVideoOutput": "The ComfyUI job completed without a video output",
+        "noImageReferenceSlot": "The bound workflow has no reference image slot (ref_image_01, ...), so reference images cannot be passed in. Pick a workflow with reference slots in Channel settings.",
+        "imageReferenceLimit": "The bound workflow only has {{count}} reference image slot(s). Please remove some reference images connected to this node."
     },
     "agent": {
         "status": {

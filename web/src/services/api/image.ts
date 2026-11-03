@@ -95,7 +95,8 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
 
 export async function requestImageQuestion(config: AiConfig, messages: AiTextMessage[], onDelta: (text: string) => void, options?: RequestOptions) {
     let prompt = "";
-    let imageDataUrl: string | undefined;
+    // 文本节点可以连多张参考图（多图反推），以前只取第一张，剩下的图在提交前就丢了。
+    const imageDataUrls: string[] = [];
     for (const msg of messages) {
         if (typeof msg.content === "string") {
             prompt += (prompt ? "\n" : "") + msg.content;
@@ -104,7 +105,7 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
                 if (part.type === "text") {
                     prompt += (prompt ? "\n" : "") + part.text;
                 } else if (part.type === "image_url" && part.image_url?.url) {
-                    if (!imageDataUrl) imageDataUrl = part.image_url.url;
+                    imageDataUrls.push(part.image_url.url);
                 }
             }
         }
@@ -115,7 +116,8 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
         config,
         model: rawModel,
         prompt,
-        imageDataUrl,
+        imageDataUrl: imageDataUrls[0],
+        imageDataUrls,
         channelId: config.channelId,
         workflowId: config.workflowId,
         seed: options?.seed,

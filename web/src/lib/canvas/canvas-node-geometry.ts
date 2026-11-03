@@ -396,7 +396,16 @@ export function findInvalidNodeConnections(
     if (!toNode) return invalidIds;
 
     const modelId = toNode.metadata?.modelId || toNode.metadata?.videoMode || toNode.metadata?.model;
-    const profile = getModelProfile(modelId) || (toNode.type === CanvasNodeType.Video ? videoMinimaxH3OmniProfile : toNode.type === CanvasNodeType.Image ? imageQwen21Profile : undefined);
+    // 文本节点也要按 DSL 兜底判一遍（此前缺了 Text 分支，超配的参考图不会标红）。
+    const profile =
+        getModelProfile(modelId) ||
+        (toNode.type === CanvasNodeType.Video
+            ? videoMinimaxH3OmniProfile
+            : toNode.type === CanvasNodeType.Image
+            ? imageQwen21Profile
+            : toNode.type === CanvasNodeType.Text
+            ? textQwen35Profile
+            : undefined);
     if (!profile?.capabilityConfig.references) return invalidIds;
 
     const refs = profile.capabilityConfig.references;

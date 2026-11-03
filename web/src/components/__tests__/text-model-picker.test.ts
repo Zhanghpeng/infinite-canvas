@@ -16,11 +16,11 @@ describe("TextModelPicker Data Contract & Unified Qwen-3.5 Multimodal Constraint
         const ids = BUILTIN_TEXT_WORKFLOW_MODELS.map((m) => m.id);
         expect(ids).toContain("text-qwen-35");
         expect(textQwen35Profile.capabilityConfig.references.minImages).toBe(0);
-        expect(textQwen35Profile.capabilityConfig.references.maxImages).toBe(1);
+        expect(textQwen35Profile.capabilityConfig.references.maxImages).toBe(9);
         expect(textQwen35Profile.capabilityConfig.textConfig).toBeUndefined();
     });
 
-    it("evaluates Qwen-3.5 availability (allows 0 images for text chat, allows 1 image for VLM reverse prompt, rejects 2+ images)", () => {
+    it("evaluates Qwen-3.5 availability (allows 0 images for text chat, allows multiple images for reverse prompt, rejects over the loose cap)", () => {
         // 0 images: valid for pure text chat
         const check0 = evaluateModelAvailability({
             targetModel: textQwen35Profile,
@@ -45,7 +45,7 @@ describe("TextModelPicker Data Contract & Unified Qwen-3.5 Multimodal Constraint
         expect(check1.isSelectable).toBe(true);
         expect(check1.reasons).toHaveLength(0);
 
-        // 2 images: rejected due to maxImages = 1
+        // 2 images: valid — 多图反推工作流（ref_image_01..06）需要能连多张
         const check2 = evaluateModelAvailability({
             targetModel: textQwen35Profile,
             connectedImages: 2,
@@ -53,9 +53,20 @@ describe("TextModelPicker Data Contract & Unified Qwen-3.5 Multimodal Constraint
             connectedAudios: 0,
             promptText: "提取两张图",
         });
-        expect(check2.isAvailable).toBe(false);
-        expect(check2.isSelectable).toBe(false);
-        expect(check2.reasons).toContain("已连接 2 张参考图，该模型最多支持 1 张");
+        expect(check2.isAvailable).toBe(true);
+        expect(check2.isSelectable).toBe(true);
+
+        // 超出宽松上限：仍要 fail-loud
+        const checkMax = evaluateModelAvailability({
+            targetModel: textQwen35Profile,
+            connectedImages: 10,
+            connectedVideos: 0,
+            connectedAudios: 0,
+            promptText: "提取十张图",
+        });
+        expect(checkMax.isAvailable).toBe(false);
+        expect(checkMax.isSelectable).toBe(false);
+        expect(checkMax.reasons).toContain("已连接 10 张参考图，该模型最多支持 9 张");
     });
 
     it("evaluates Qwen-3.5 media boundaries (rejects videos and audios)", () => {
@@ -115,7 +126,7 @@ describe("TextModelPicker Data Contract & Unified Qwen-3.5 Multimodal Constraint
         expect(check.reasons).toContain("当前主机「Host 1」未启用该模型支持");
     });
 
-    it("allows connecting 1 image to text node seamlessly, rejects 2nd image and videos", () => {
+    it("allows connecting multiple images to a text node, rejects videos", () => {
         const img1: CanvasNodeData = {
             id: "img-1",
             type: CanvasNodeType.Image,
@@ -157,12 +168,34 @@ describe("TextModelPicker Data Contract & Unified Qwen-3.5 Multimodal Constraint
         const res1 = validateInputConnection(img1.id, textNode.id, allNodes, []);
         expect(res1).toEqual({ fromNodeId: img1.id, toNodeId: textNode.id });
 
-        // 2nd connection: rejected because maxImages is 1
+        // 2nd connection: allowed — 多图反推要能连多张（实际槽位数在执行侧校验）
         const existingConns = [{ id: "c1", fromNodeId: img1.id, toNodeId: textNode.id, kind: "input" as const }];
         const res2 = validateInputConnection(img2.id, textNode.id, allNodes, existingConns);
-        expect(res2).toBeNull();
+        expect(res2).toEqual({ fromNodeId: img2.id, toNodeId: textNode.id });
 
-        const rejection = getConnectionRejectionDetail(img2.id, textNode.id, allNodes, existingConns);
+        // 超出宽松上限（9 张）时才拦截
+        const fullConns = Array.from({ length: 9 }, (_, index) => ({
+            id: `c${index + 1}`,
+            fromNodeId: `img-full-${index}`,
+            toNodeId: textNode.id,
+            kind: "input" as const,
+        }));
+        const fullNodes = [
+            ...Array.from({ length: 9 }, (_, index): CanvasNodeData => ({
+                id: `img-full-${index}`,
+                type: CanvasNodeType.Image,
+                title: `Photo ${index + 1}`,
+                position: { x: 0, y: 0 },
+                width: 200,
+                height: 200,
+            })),
+            img2,
+            textNode,
+        ];
+        const res10 = validateInputConnection(img2.id, textNode.id, fullNodes, fullConns);
+        expect(res10).toBeNull();
+
+        const rejection = getConnectionRejectionDetail(img2.id, textNode.id, fullNodes, fullConns);
         expect(rejection?.key).toBe("connectionQuotaImagesExceeded");
 
         // Video connection: rejected because text node does not support videos

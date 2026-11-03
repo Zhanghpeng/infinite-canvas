@@ -2544,7 +2544,10 @@ export function applyTextBindings(
     workflow: ComfyuiWorkflowJson,
     params: {
         prompt: string;
+        /** 单图参考（老调用点）：等价于只有一张的 `assetIds` */
         assetId?: string;
+        /** 多图参考，按连线顺序依次写入 ref_image_01..NN */
+        assetIds?: string[];
         seed?: number;
         maxLength?: number;
         thinking?: boolean;
@@ -2557,9 +2560,17 @@ export function applyTextBindings(
         _meta?: { title?: unknown };
     };
 
-    let imageNodeId: string | undefined;
+    // 单图调用点继续沿用 assetId；多图按连线顺序占位（第 1 张 → ref_image_01）。
+    const assetIds = (params.assetIds?.length ? params.assetIds : params.assetId ? [params.assetId] : []).filter(
+        (asset): asset is string => typeof asset === "string" && Boolean(asset),
+    );
 
-    // 1. Find nodes with title "prompt", "image", and "seed"
+    /** ref_image_01..NN：编号就是连线顺序（生成侧 <Picture N> 与之一一对应） */
+    const numberedSlots: Array<{ nodeId: string; index: number }> = [];
+    /** 老工作流只有一个不编号的 image / ref_image 槽位 */
+    const legacySlots: string[] = [];
+
+    // 1. 找到 prompt / seed 节点，同时收集参考图槽位
     let boundSeedTitle = false;
     for (const [nodeId, node] of Object.entries(cloned)) {
         if (typeof node !== "object" || node === null) continue;
@@ -2568,12 +2579,22 @@ export function applyTextBindings(
         if (typeof rawTitle !== "string") continue;
         const title = rawTitle.trim().toLowerCase();
 
+        const numbered = /^ref_image_(\d{2})$/.exec(title);
+        if (numbered) {
+            numberedSlots.push({ nodeId, index: Number(numbered[1]) - 1 });
+            continue;
+        }
+        if (title === "image" || title === "ref_image") {
+            legacySlots.push(nodeId);
+            continue;
+        }
+
         if (title === "prompt" && record.inputs) {
             const defaultVlmPrompt =
                 "请根据参考图片反推一段适合用于 AI 生图的提示词。\n\n要求：\n1. 只输出提示词正文，不要解释。\n2. 覆盖主体、构图、风格、光线、色彩、材质、镜头和氛围。\n3. 尽量写成可直接用于生图模型的完整提示词。";
             const promptVal = params.prompt && params.prompt.trim()
                 ? params.prompt
-                : params.assetId
+                : assetIds.length
                 ? (typeof record.inputs.value === "string" && record.inputs.value && record.inputs.value.includes("反推")
                     ? record.inputs.value
                     : defaultVlmPrompt)
@@ -2581,8 +2602,6 @@ export function applyTextBindings(
             if ("value" in record.inputs) record.inputs.value = promptVal;
             else if ("text" in record.inputs) record.inputs.text = promptVal;
             else if ("prompt" in record.inputs) record.inputs.prompt = promptVal;
-        } else if (title === "image" || title === "ref_image_01" || title === "ref_image") {
-            imageNodeId = nodeId;
         } else if (title === "seed" && params.seed !== undefined && record.inputs) {
             if ("value" in record.inputs) record.inputs.value = params.seed;
             else if ("seed" in record.inputs) record.inputs.seed = params.seed;
@@ -2591,33 +2610,43 @@ export function applyTextBindings(
         }
     }
 
-    // 2. Handle image node
-    if (params.assetId) {
-        if (imageNodeId && cloned[imageNodeId]) {
-            const imageNode = cloned[imageNodeId] as NodeRecord;
-            if (imageNode.inputs) {
-                imageNode.inputs.image = params.assetId;
-            }
-        }
-    } else {
-        // If only prompt is provided, remove the node where _meta.title === "image"
-        if (imageNodeId) {
-            delete cloned[imageNodeId];
-            // Remove any input links pointing to this removed node
-            for (const node of Object.values(cloned)) {
-                if (typeof node !== "object" || node === null) continue;
-                const record = node as NodeRecord;
-                if (!record.inputs) continue;
-                for (const [inputKey, val] of Object.entries(record.inputs)) {
-                    if (Array.isArray(val) && String(val[0]) === imageNodeId) {
-                        delete record.inputs[inputKey];
-                    }
-                }
+    // 2. 参考图槽位按顺序占位；没图可填的槽位连同节点与下游连线一起摘掉。
+    //
+    //    以前这里只认「一个」image 节点，多槽位工作流（ref_image_01..06）只有第一个被
+    //    绑定，其余 LoadImage 保留着 JSON 里录制的示例文件名直接提交，ComfyUI 于是报
+    //    `Custom validation failed for node: image - Invalid image file: xxx.png`。
+    //    参考图生图的处理方式：连接几张就绑定几张，未填充的槽位从执行图里裁掉。
+    numberedSlots.sort((a, b) => a.index - b.index);
+    const removedNodeIds = new Set<string>();
+    const writeSlotImage = (nodeId: string, assetId: string) => {
+        const record = cloned[nodeId] as NodeRecord | undefined;
+        if (record?.inputs) record.inputs.image = assetId;
+    };
+
+    let cursor = 0;
+    for (const slot of numberedSlots) {
+        if (cursor < assetIds.length) writeSlotImage(slot.nodeId, assetIds[cursor++]);
+        else removedNodeIds.add(slot.nodeId);
+    }
+    for (const nodeId of legacySlots) {
+        if (cursor < assetIds.length) writeSlotImage(nodeId, assetIds[cursor++]);
+        else removedNodeIds.add(nodeId);
+    }
+
+    // 3. 落盘删除：节点本体 + 所有指向它的连线参数（`["12", 0]` 这类）
+    for (const nodeId of removedNodeIds) delete cloned[nodeId];
+    if (removedNodeIds.size > 0) {
+        for (const node of Object.values(cloned)) {
+            if (typeof node !== "object" || node === null) continue;
+            const record = node as NodeRecord;
+            if (!record.inputs) continue;
+            for (const [inputKey, val] of Object.entries(record.inputs)) {
+                if (Array.isArray(val) && removedNodeIds.has(String(val[0]))) delete record.inputs[inputKey];
             }
         }
     }
 
-    // 3. Fallback: handle seed only if no node has _meta.title === "seed"
+    // 4. Fallback: handle seed only if no node has _meta.title === "seed"
     if (params.seed !== undefined && !boundSeedTitle) {
         for (const node of Object.values(cloned)) {
             if (typeof node !== "object" || node === null) continue;
@@ -2631,7 +2660,7 @@ export function applyTextBindings(
         }
     }
 
-    // 4. Handle text generator parameters: max_length, thinking
+    // 5. Handle text generator parameters: max_length, thinking
     for (const node of Object.values(cloned)) {
         if (typeof node !== "object" || node === null) continue;
         const record = node as NodeRecord;
@@ -2738,7 +2767,10 @@ export interface ComfyuiTextRequest {
     config: AiConfig;
     prompt: string;
     model?: string;
+    /** 单图（兼容老调用点） */
     imageDataUrl?: string;
+    /** 多图参考，按连线顺序依次写入 ref_image_01..NN */
+    imageDataUrls?: string[];
     channelId?: string;
     workflowId?: string;
     seed?: number;
@@ -2783,15 +2815,35 @@ export async function requestComfyuiText(req: ComfyuiTextRequest): Promise<{ tex
         const token = channel.comfyuiProxyToken;
 
         if (!jobId) {
-            let assetId: string | undefined;
-            if (req.imageDataUrl) {
-                assetId = await uploadComfyuiAsset(baseUrl, token, req.imageDataUrl, "image.png", req.signal);
+            // 文本节点可以连 0..N 张参考图：0 张＝纯文本扩写，N 张＝多图反推。
+            // 工作流里录制的 ref_image_0N 槽位未必都有图，未填充的槽位由 applyTextBindings
+            // 从执行图里裁掉（和参考图生图同一套处理），否则那些 LoadImage 会带着 JSON 里
+            // 录制的示例文件名提交，ComfyUI 直接判 `Invalid image file`。
+            const imageDataUrls = (req.imageDataUrls?.length
+                ? req.imageDataUrls
+                : req.imageDataUrl
+                  ? [req.imageDataUrl]
+                  : []
+            ).filter((url): url is string => typeof url === "string" && Boolean(url));
+
+            const referenceSlots = imageReferenceSlots(textWorkflow.json as unknown as ComfyuiWorkflowJson);
+            if (imageDataUrls.length > 0 && referenceSlots.length === 0) {
+                throw new ComfyuiError(i18n.t("comfyui.noImageReferenceSlot"));
             }
+            if (referenceSlots.length > 0 && imageDataUrls.length > referenceSlots.length) {
+                throw new ComfyuiError(i18n.t("comfyui.imageReferenceLimit", { count: referenceSlots.length }));
+            }
+
+            const assetIds = await Promise.all(
+                imageDataUrls.map((dataUrl, index) =>
+                    uploadComfyuiAsset(baseUrl, token, dataUrl, `ref_image_${String(index + 1).padStart(2, "0")}.png`, req.signal),
+                ),
+            );
 
             if (seed === undefined) seed = generateRandomSeed();
             const boundWorkflow = applyTextBindings(textWorkflow.json as unknown as ComfyuiWorkflowJson, {
                 prompt: req.prompt,
-                assetId,
+                assetIds,
                 seed,
                 maxLength: req.maxLength,
                 thinking: req.thinking,

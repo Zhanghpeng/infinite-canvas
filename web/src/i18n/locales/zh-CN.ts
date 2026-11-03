@@ -2009,7 +2009,9 @@ export default {
         "cancelled": "ComfyUI 生成已取消",
         "failed": "ComfyUI 生成失败",
         "noImageOutput": "ComfyUI 任务已完成，但没有图片输出",
-        "noVideoOutput": "ComfyUI 任务已完成，但没有视频输出"
+        "noVideoOutput": "ComfyUI 任务已完成，但没有视频输出",
+        "noImageReferenceSlot": "当前绑定的工作流里没有参考图槽位（ref_image_01 等），无法传入参考图。请先在「渠道」设置里换一条带参考图槽位的工作流。",
+        "imageReferenceLimit": "当前绑定的工作流只有 {{count}} 个参考图槽位，请减少连到该节点的参考图。"
     },
     "agent": {
         "status": {
