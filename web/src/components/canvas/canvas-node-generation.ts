@@ -52,7 +52,11 @@ export type NodeGenerationInput = NodeGenerationResourceInput | NodeGenerationGr
 export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[], prompt: string): NodeGenerationContext {
     const inputs = buildNodeGenerationInputs(nodeId, nodes, connections);
     const sourceNode = nodes.find((node) => node.id === nodeId);
-    if (sourceNode?.type === CanvasNodeType.Config && Boolean(sourceNode.metadata?.composerContent?.trim())) {
+    // 只有在提示词里真的 `@` 了资源，才算「合成模式挑过图」。合成面板每敲一个字都会把
+    // 输入写进 composerContent，若只按 composerContent 非空就切精选模式，用户在面板里
+    // 补一句纯文字、没 @ 任何资源时，连线上那些参考图会被整批丢掉，生成退化成纯文生。
+    const pickedComposerResources = /@\[node:[^\]]+\]/.test(prompt);
+    if (sourceNode?.type === CanvasNodeType.Config && Boolean(sourceNode.metadata?.composerContent?.trim()) && pickedComposerResources) {
         return buildComposerGenerationContext(inputs, nodes, prompt);
     }
 

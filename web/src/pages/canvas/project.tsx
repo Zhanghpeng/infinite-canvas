@@ -5553,13 +5553,41 @@ function InfiniteCanvasPage() {
             const isRepeat = intent === "repeat";
             const runController = isRepeat ? new AbortController() : startGenerationRequest(nodeId, nodeId, nodeId);
             let generationContext: NodeGenerationContext;
+            // 生成产物节点只有 lineage 边、没有 input 边。在产物节点上点「重新生成」时，
+            // 按它自己的连线取输入必然为空 —— 直接跑就等于把参考图全丢掉（视频尤其明显：
+            // 出来一条跟参考人物毫无关系的片子，还不报错）。
+            // 取值顺序：当前节点连线 → 最初发起生成的节点连线 → 上次实际用过的参考快照。
+            const drawContext = (targetId: string) => hydrateNodeGenerationContext(buildNodeGenerationContext(targetId, nodesRef.current, connectionsRef.current, prompt));
+            const hasAnyInput = (context: NodeGenerationContext) => Boolean(context.referenceImages.length || context.referenceVideos.length || context.referenceAudios.length || context.textCount);
             try {
                 if (videoTool && isRepeat) {
                     const saved = await restoreGenerationContext({ ...sourceNode?.metadata, effectivePrompt: prompt === sourceNode?.metadata?.prompt ? sourceNode?.metadata?.effectivePrompt : prompt });
                     if (!saved) throw new Error(t("canvas.projectPage.generationSnapshotMissing"));
                     generationContext = saved;
                 } else {
-                    generationContext = await hydrateNodeGenerationContext(buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, prompt));
+                    generationContext = await drawContext(nodeId);
+                    if (!hasAnyInput(generationContext)) {
+                        // origin 是这条产物最初由谁发起的（配置节点 / 空视频节点 / 图片节点）：
+                        // 用户改完参考图后回到产物上重跑，用的应该是那条源头的当前连线。
+                        const originId = sourceNode?.metadata?.generationOriginNodeId;
+                        if (originId && originId !== nodeId && nodesRef.current.some((node) => node.id === originId)) {
+                            try {
+                                const fromOrigin = await drawContext(originId);
+                                if (hasAnyInput(fromOrigin)) generationContext = fromOrigin;
+                            } catch {
+                                // 源头节点的提示词引用了已删除的资源，退回本条自己的结果，不让整次生成失败。
+                            }
+                        }
+                    }
+                    if (!hasAnyInput(generationContext) && sourceNode?.metadata?.generationReferences?.length) {
+                        // 源头节点已被删除时，回放上次真正提交过的那套参考。
+                        try {
+                            const restored = await restoreGenerationContext({ ...sourceNode.metadata, effectivePrompt: sourceNode.metadata.effectivePrompt || generationContext.prompt || prompt });
+                            if (restored) generationContext = restored;
+                        } catch {
+                            // 快照里的素材已被清理，按无参考继续跑，不阻断生成。
+                        }
+                    }
                     // Metadata-only references have no canvas connection to replay. New connected images replace them.
                     const savedImages = videoTool && !generationContext.referenceImages.length
                         ? sourceNode?.metadata?.generationReferences?.filter((reference) => reference.kind === "image" && !nodesRef.current.some((node) => node.id === reference.nodeId))

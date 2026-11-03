@@ -2159,6 +2159,36 @@ function textReferenceSlots(workflow: ComfyuiWorkflowJson) {
 }
 
 /**
+ * 视频全能流的参考图槽位数上限。返回 null 表示「存在不编号的槽位」
+ * （`ref_image` / `image` / `input_image`）：`applyVideoBindings` 对这类槽位是循环取模消费，
+ * 张数不设限，不该在这里拦。返回 0 也不拦 —— 槽位标题不规范的流交给 ComfyUI 自己报错，
+ * 在这里拦会把本来能跑的流判死。
+ */
+function videoImageSlotLimit(workflow: ComfyuiWorkflowJson): number | null {
+    let numbered = 0;
+    for (const node of Object.values(workflow)) {
+        const title = node && typeof node === "object" ? (node as { _meta?: { title?: unknown } })._meta?.title : undefined;
+        if (typeof title !== "string") continue;
+        const normalized = title.trim().toLowerCase();
+        if (/^ref_image_\d{2}$/.test(normalized)) numbered += 1;
+        else if (normalized === "image" || normalized === "ref_image" || normalized.includes("input_image")) return null;
+    }
+    return numbered;
+}
+
+/** 首尾帧流的具名槽位数（first_frame / last_frame），用于拦住「连 2 张但流里只有首帧槽位」。 */
+function videoFrameSlotLimit(workflow: ComfyuiWorkflowJson): number {
+    let slots = 0;
+    for (const node of Object.values(workflow)) {
+        const title = node && typeof node === "object" ? (node as { _meta?: { title?: unknown } })._meta?.title : undefined;
+        if (typeof title !== "string") continue;
+        const normalized = title.trim().toLowerCase();
+        if (normalized === "first_frame" || normalized === "last_frame") slots += 1;
+    }
+    return slots;
+}
+
+/**
  * Run a full ComfyUI image generation: resolve the channel and model, bind the
  * generation params into the model's workflow, submit the job, poll it until
  * completion and download the outputs as data urls.
@@ -3468,6 +3498,25 @@ export async function submitComfyuiVideoJob(req: ComfyuiVideoRequest): Promise<{
     const videoWorkflow = resolved
         ? { json: resolved.json }
         : { json: (videoMode === "frame" ? DEFAULT_COMFYUI_FRAME_VIDEO_WORKFLOW : DEFAULT_COMFYUI_VIDEO_WORKFLOW).json };
+
+    // 按工作流实际槽位数把关。模型档案的 maxImages 是模型能力上限（H3 是 9），
+    // 但具体这条流可能只接了 3 个 ref_image 槽位 —— 多出来的参考图没有任何节点接收，
+    // 会被静默丢掉：用户连了 5 张，实际只用了 3 张，出来的人还是不对。
+    if (!isVideoTool) {
+        if (videoMode === "frame") {
+            const frameSlots = videoFrameSlotLimit(videoWorkflow.json as unknown as ComfyuiWorkflowJson);
+            if (frameSlots > 0 && frameImages.length > frameSlots) {
+                throw addComfyuiChannelContext(new ComfyuiApiError(i18n.t("comfyui.imageReferenceLimit", { count: frameSlots })), channel.name);
+            }
+        } else {
+            const imageLimit = videoImageSlotLimit(videoWorkflow.json as unknown as ComfyuiWorkflowJson);
+            // imageLimit 为 0 时不拦：槽位标题不规范的流（老流、纯提示词流）交给 ComfyUI 自己报错，
+            // 在这里拦会把本来能跑通的流判死。
+            if (imageLimit !== null && imageLimit > 0 && (req.references?.length || 0) > imageLimit) {
+                throw addComfyuiChannelContext(new ComfyuiApiError(i18n.t("comfyui.imageReferenceLimit", { count: imageLimit })), channel.name);
+            }
+        }
+    }
 
     const baseUrl = (channel.comfyuiProxyUrl || "").trim();
     const token = channel.comfyuiProxyToken;

@@ -117,6 +117,34 @@ describe("buildNodeGenerationContext", () => {
         expect(ctx.generationReferences.map((ref) => ref.nodeId)).toEqual(["img1", "img2"]);
     });
 
+    it("keeps every connected reference when the composer draft has no @ token (plain text must not drop images)", () => {
+        const img1 = makeNode("img1", CanvasNodeType.Image, { content: DATA_IMG, mimeType: "image/png" });
+        const img2 = makeNode("img2", CanvasNodeType.Image, { content: DATA_IMG, mimeType: "image/png" });
+        // 合成面板每敲一个字都会写 composerContent；用户只是补了句画面描述，
+        // 没有 @ 任何资源，这时连线上的参考图必须照常提交。
+        const config = makeNode("cfg", CanvasNodeType.Config, { composerContent: "镜头缓慢推进，光线偏冷" });
+        const nodes = [img1, img2, config];
+        const connections = [input("img1", "cfg"), input("img2", "cfg")];
+
+        const ctx = buildNodeGenerationContext("cfg", nodes, connections, "镜头缓慢推进，光线偏冷");
+
+        expect(ctx.referenceImages.map((image) => image.id)).toEqual(["img1", "img2"]);
+        expect(ctx.imageCount).toBe(2);
+        expect(ctx.prompt).toBe("镜头缓慢推进，光线偏冷");
+    });
+
+    it("still narrows to @-selected resources when the composer prompt references nodes", () => {
+        const img1 = makeNode("img1", CanvasNodeType.Image, { content: DATA_IMG, mimeType: "image/png" });
+        const img2 = makeNode("img2", CanvasNodeType.Image, { content: DATA_IMG, mimeType: "image/png" });
+        const config = makeNode("cfg", CanvasNodeType.Config, { composerContent: "用 @[node:img2] 这一段" });
+        const nodes = [img1, img2, config];
+        const connections = [input("img1", "cfg"), input("img2", "cfg")];
+
+        const ctx = buildNodeGenerationContext("cfg", nodes, connections, "用 @[node:img2] 这一段");
+
+        expect(ctx.referenceImages.map((image) => image.id)).toEqual(["img2"]);
+    });
+
     it("expands a repeated text token once per occurrence in the prompt", () => {
         const text = makeNode("t1", CanvasNodeType.Text, { content: "第一段文本" });
         const source = makeNode("out", CanvasNodeType.Image);

@@ -4,7 +4,7 @@ import i18n from "@/i18n";
 import { adaptWorkflowModelPaths, applyAudioBindings, applyBindings, cancelJob, collectVideoAssetIds, ComfyuiAbortedError, ComfyuiApiError, ComfyuiJobCancelledError, ComfyuiJobError, ComfyuiJobLostError, ComfyuiJobNotFoundError, ComfyuiNetworkError, ComfyuiNoWorkflowError, ComfyuiTimeoutError, describeExecutionFailure, downloadAsset, generateRandomSeed, parseSize, pollComfyuiVideoJob, pollJob, pollJobRaw, queryComfyuiJobStatus, requestComfyuiImage, resetComfyuiBatchPollers, resolveSlotInputKey, submitComfyuiVideoJob, submitJob, validateComfyuiWorkflow, writeSlot } from "@/services/api/comfyui";
 import type { ComfyuiWorkflowJson } from "@/services/api/comfyui";
 import { defaultConfig, findWorkflow, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
-import { DEFAULT_BUILTIN_COMFYUI_DEPTH_VIDEO_WORKFLOW, DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW, DEFAULT_BUILTIN_COMFYUI_VOICE_WORKFLOW, DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW } from "@/services/api/comfyui-default-workflows";
+import { DEFAULT_BUILTIN_COMFYUI_DEPTH_VIDEO_WORKFLOW, DEFAULT_BUILTIN_COMFYUI_FACE_REFINE_WORKFLOW, DEFAULT_BUILTIN_COMFYUI_VOICE_WORKFLOW, DEFAULT_COMFYUI_VIDEO_WORKFLOW, DEFAULT_LOCAL_COMFYUI_T2I_WORKFLOW } from "@/services/api/comfyui-default-workflows";
 
 // The generation log store the service writes to (same localforage structure as image-storage).
 const { comfyuiLogStore } = vi.hoisted(() => ({
@@ -1142,6 +1142,131 @@ describe("native ComfyUI video validation", () => {
         expect(viewCalls.length).toBeGreaterThan(0);
         expect(viewCalls[0][0]).toContain("filename=depth_generated.mp4");
         expect(viewCalls[0][0]).toContain("type=output");
+    });
+});
+
+describe("native ComfyUI video reference binding", () => {
+    let fetchMock: ReturnType<typeof vi.fn>;
+    let uploadSeq = 0;
+
+    const buildOmniConfig = (): AiConfig => {
+        const channel = {
+            id: "comfy",
+            name: "ComfyUI channel",
+            baseUrl: "",
+            apiKey: "",
+            apiFormat: "comfyui",
+            models: [{ name: "ComfyUI Video", capability: "video" }],
+            comfyuiProxyUrl: "http://10.7.8.12:8188",
+            comfyuiProxyToken: "tok",
+            comfyuiVideoWorkflow: DEFAULT_COMFYUI_VIDEO_WORKFLOW,
+        } as ModelChannel;
+        return { ...defaultConfig, channels: [channel], model: "comfy::ComfyUI Video", videoModel: "comfy::ComfyUI Video", models: ["comfy::ComfyUI Video"], size: "1280x736" };
+    };
+
+    const submittedPrompt = () => {
+        const call = fetchMock.mock.calls.find((entry) => String(entry[0]).endsWith("/prompt"))!;
+        return JSON.parse(String((call[1] as RequestInit).body)).prompt as Record<string, { inputs: Record<string, unknown>; _meta?: { title?: string } }>;
+    };
+
+    const slotsOf = (prompt: Record<string, { inputs: Record<string, unknown>; _meta?: { title?: string } }>) => {
+        const slots: Record<string, unknown> = {};
+        for (const node of Object.values(prompt)) {
+            const title = node._meta?.title;
+            if (typeof title === "string" && /^ref_image_\d{2}$/.test(title)) slots[title] = node.inputs.image;
+        }
+        return slots;
+    };
+
+    beforeEach(() => {
+        uploadSeq = 0;
+        fetchMock = vi.fn(async (url: string) => {
+            if (String(url).startsWith("data:")) return { ok: true, status: 200, blob: async () => new Blob(["fake-png"], { type: "image/png" }) };
+            if (String(url).includes("/upload/image")) {
+                uploadSeq += 1;
+                return { ok: true, status: 200, json: async () => ({ name: `uploaded_${uploadSeq}.png` }) };
+            }
+            if (String(url).endsWith("/prompt")) return { ok: true, status: 200, json: async () => ({ prompt_id: "job_video_ref" }) };
+            return { ok: false, status: 500, json: async () => ({}) };
+        });
+        vi.stubGlobal("fetch", fetchMock);
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it("uploads every connected image and writes them into ref_image_01 / ref_image_02", async () => {
+        const references = ["a", "b"].map((id) => ({ id, name: `${id}.png`, type: "image/png", dataUrl: `data:image/png;base64,${id}` }));
+
+        await submitComfyuiVideoJob({ config: buildOmniConfig(), prompt: "测试", model: "omni-video-minimax-h3-fp8-4step-pdmd", videoMode: "omni", references });
+
+        expect(uploadSeq).toBe(2);
+        expect(slotsOf(submittedPrompt())).toMatchObject({
+            ref_image_01: "uploaded_1.png",
+            ref_image_02: "uploaded_2.png",
+        });
+    });
+
+    it("prunes unassigned ref_image slots instead of submitting the sample filenames baked into the workflow JSON", async () => {
+        const references = [{ id: "a", name: "a.png", type: "image/png", dataUrl: "data:image/png;base64,AA==" }];
+
+        await submitComfyuiVideoJob({ config: buildOmniConfig(), prompt: "测试", model: "omni-video-minimax-h3-fp8-4step-pdmd", videoMode: "omni", references });
+
+        const slots = slotsOf(submittedPrompt());
+        expect(slots.ref_image_01).toBe("uploaded_1.png");
+        // 只连 1 张图时，剩下 8 个槽位连同 LoadImage 节点一起被裁掉，
+        // 否则 JSON 里录制的示例文件名会原样提交，触发 ComfyUI 的 Invalid image file。
+        expect(Object.keys(slots)).toEqual(["ref_image_01"]);
+    });
+    it("fails loudly when the pinned workflow has fewer ref_image slots than the connected images", async () => {
+        const config = buildOmniConfig();
+        config.channels[0].workflows = [
+            {
+                id: "wf-two-slot",
+                name: "两槽位流",
+                category: "omniVideo",
+                createdAt: 0,
+                isBuiltin: false,
+                json: {
+                    "1": { inputs: { text: "" }, class_type: "PrimitiveStringMultiline", _meta: { title: "prompt" } },
+                    "2": { inputs: { image: "stale_a.png" }, class_type: "LoadImage", _meta: { title: "ref_image_01" } },
+                    "3": { inputs: { image: "stale_b.png" }, class_type: "LoadImage", _meta: { title: "ref_image_02" } },
+                },
+            },
+        ];
+
+        const references = ["a", "b", "c"].map((id) => ({ id, name: `${id}.png`, type: "image/png", dataUrl: `data:image/png;base64,${id}` }));
+
+        // 第 3 张没有任何节点接收，原先会被静默丢掉：不报错、但生成结果和这张图无关。
+        await expect(
+            submitComfyuiVideoJob({ config, prompt: "测试", model: "omni-video-minimax-h3-fp8-4step-pdmd", videoMode: "omni", workflowId: "wf-two-slot", references }),
+        ).rejects.toThrow("2 个参考图槽位");
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps accepting work, when the workflow exposes an unnumbered image slot (modulo binding)", async () => {
+        const config = buildOmniConfig();
+        config.channels[0].workflows = [
+            {
+                id: "wf-single-slot",
+                name: "单槽位流",
+                category: "omniVideo",
+                createdAt: 0,
+                isBuiltin: false,
+                json: {
+                    "1": { inputs: { text: "" }, class_type: "PrimitiveStringMultiline", _meta: { title: "prompt" } },
+                    "2": { inputs: { image: "stale.png" }, class_type: "LoadImage", _meta: { title: "image" } },
+                },
+            },
+        ];
+
+        const references = ["a", "b", "c"].map((id) => ({ id, name: `${id}.png`, type: "image/png", dataUrl: `data:image/png;base64,${id}` }));
+
+        // `image` 这类不编号的槽位是循环取模消费的，不该按「槽位不足」拦下来。
+        await expect(
+            submitComfyuiVideoJob({ config, prompt: "测试", model: "omni-video-minimax-h3-fp8-4step-pdmd", videoMode: "omni", workflowId: "wf-single-slot", references }),
+        ).resolves.toMatchObject({ jobId: "job_video_ref" });
     });
 });
 
