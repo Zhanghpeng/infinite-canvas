@@ -231,6 +231,9 @@ type PreparedVideoBatch = {
 
 const VIDEO_NODE_MAX_WIDTH = 420;
 const VIDEO_NODE_MAX_HEIGHT = 420;
+// 生成图片节点的最大边长：与手动添加图片（fitNodeSize 默认 640×640）保持一致，
+// 不再按节点默认尺寸（340×240）夹紧，避免生成结果明显小于手动添加的图。
+const IMAGE_NODE_MAX_EDGE = 640;
 // Stable empty reference array prevents `... || []` from invalidating CanvasNode's React.memo on every render.
 const EMPTY_REFERENCES: CanvasResourceReference[] = [];
 const CONNECTION_HANDLE_HIT_RADIUS = 40;
@@ -5540,6 +5543,8 @@ function InfiniteCanvasPage() {
                     const generationMetadata = buildImageGenerationMetadata(generationType, generationConfig, count, referenceImages);
                     const parentConfig = NODE_DEFAULT_SIZE[isConfigNode ? CanvasNodeType.Config : isImageNode ? CanvasNodeType.Image : CanvasNodeType.Text];
                     const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
+                    // 生成前就按目标比例铺占位尺寸，完成后无需再跳变。
+                    const pendingImageSize = nodeSizeFromRatio(generationConfig.size, IMAGE_NODE_MAX_EDGE, IMAGE_NODE_MAX_EDGE) || imageConfig;
                     const parentPosition = sourceNode?.position || { x: 0, y: 0 };
                     const rootId = isEmptyImageNode ? nodeId : nanoid();
                     const imageIds = Array.from({ length: count }, () => nanoid());
@@ -5550,10 +5555,10 @@ function InfiniteCanvasPage() {
                         title: isRepeat && sourceNode?.title ? sourceNode.title : (effectivePrompt.slice(0, 32) || "Generated Image"),
                         position: {
                             x: isEmptyImageNode ? parentPosition.x : parentPosition.x + (sourceNode?.width || parentConfig.width) + 96,
-                            y: isEmptyImageNode ? parentPosition.y : isRepeat ? parentPosition.y : parentPosition.y + parentConfig.height / 2 - imageConfig.height / 2,
+                            y: isEmptyImageNode ? parentPosition.y : isRepeat ? parentPosition.y : parentPosition.y + parentConfig.height / 2 - pendingImageSize.height / 2,
                         },
-                        width: isEmptyImageNode ? sourceNode?.width || imageConfig.width : (isRepeat && sourceNode?.width ? sourceNode.width : imageConfig.width),
-                        height: isEmptyImageNode ? sourceNode?.height || imageConfig.height : (isRepeat && sourceNode?.height ? sourceNode.height : imageConfig.height),
+                        width: isEmptyImageNode ? sourceNode?.width || imageConfig.width : (isRepeat && sourceNode?.width ? sourceNode.width : pendingImageSize.width),
+                        height: isEmptyImageNode ? sourceNode?.height || imageConfig.height : (isRepeat && sourceNode?.height ? sourceNode.height : pendingImageSize.height),
                         metadata: {
                             ...(isRepeat && sourceNode?.metadata ? cloneNodeMetadata(sourceNode.metadata, sourceNode.type) : {}),
                             prompt,
@@ -5651,7 +5656,6 @@ function InfiniteCanvasPage() {
                                           onProgress: handleBatchProgress,
                                       }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl);
-                                const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 const item: CanvasNodeImage = {
                                     id: imageId,
                                     status: NODE_STATUS_SUCCESS,
@@ -5669,6 +5673,8 @@ function InfiniteCanvasPage() {
                                         const images = node.metadata?.images?.map((image) => (image.id === imageId ? item : image)) || [];
                                         const hasActivePrimary = Boolean(node.metadata?.primaryImageId && images.some((image) => image.id === node.metadata?.primaryImageId && Boolean(image.content)));
                                         if (hasActivePrimary) return { ...node, metadata: { ...node.metadata, images } };
+                                        // 用户手动调过尺寸（freeResize）就保持外框，否则按生成图实际比例铺到与手动添加一致的 640 上限。
+                                        const imageSize = node.metadata?.freeResize ? { width: node.width, height: node.height } : fitNodeSize(uploaded.width, uploaded.height, IMAGE_NODE_MAX_EDGE, IMAGE_NODE_MAX_EDGE);
                                         const center = { x: node.position.x + node.width / 2, y: node.position.y + node.height / 2 };
                                         return {
                                             ...node,
@@ -6455,7 +6461,6 @@ function InfiniteCanvasPage() {
                               onProgress: handleRetryProgress,
                           }).then((items) => items[0]);
                     const uploadedImage = await uploadImage(image.dataUrl);
-                    const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
                     const retryImage: CanvasNodeImage = {
                         id: imageId || node.metadata?.primaryImageId || nanoid(),
                         status: NODE_STATUS_SUCCESS,
@@ -6473,11 +6478,12 @@ function InfiniteCanvasPage() {
                             if (item.id !== node.id) return item;
                             const makePrimary = !imageId || !item.metadata?.content;
                             const edge = imageId ? Math.max(item.width, item.height) : 0;
-                            const imageSize = imageId && item.metadata?.freeResize ? { width: item.width, height: item.height } : imageId ? fitNodeSize(uploadedImage.width, uploadedImage.height, edge, edge) : fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
+                            // freeResize（用户手动调过外框）优先保持；其余与手动添加一致按 640 上限铺开。
+                            const imageSize = item.metadata?.freeResize ? { width: item.width, height: item.height } : imageId ? fitNodeSize(uploadedImage.width, uploadedImage.height, edge, edge) : fitNodeSize(uploadedImage.width, uploadedImage.height, IMAGE_NODE_MAX_EDGE, IMAGE_NODE_MAX_EDGE);
                             return {
                                 ...item,
                                 type: CanvasNodeType.Image,
-                                ...(makePrimary ? { width: imageSize.width, height: imageSize.height, ...(imageId ? { position: { x: item.position.x + item.width / 2 - imageSize.width / 2, y: item.position.y + item.height / 2 - imageSize.height / 2 } } : {}) } : {}),
+                                ...(makePrimary ? { width: imageSize.width, height: imageSize.height, position: { x: item.position.x + item.width / 2 - imageSize.width / 2, y: item.position.y + item.height / 2 - imageSize.height / 2 } } : {}),
                                 metadata: {
                                     ...item.metadata,
                                     ...(makePrimary ? imageMetadata(uploadedImage) : { status: NODE_STATUS_SUCCESS }),
