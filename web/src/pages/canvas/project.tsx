@@ -70,7 +70,7 @@ import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { buildNodeMentionReferences, getGroupResourceNodes, isCanvasReferenceNode, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { collectCollapsedNodeIds, collectGroupDescendantIds, isNodeLocked } from "@/lib/canvas/canvas-group-collapse";
-import { applyOptimizedText, appendOptimizedTextSlot, assistantOutputSummaryText, buildNodeOutputRequest, buildPromptAssistantRequest, cleanOptimizedPrompt, collectWorkflowSlots, MAX_ASSISTANT_SOURCE_CHARS, readNodeSourceText, readNodeText, resolveAssistantTargetCategory, resolveSkillProduces, resolveWorkflowConstraint, revertOptimizedTextSlot, summarizeAssistantOutput, type PromptAssistantConfig } from "@/lib/canvas/canvas-prompt-assistant";
+import { applyOptimizedText, appendOptimizedTextSlot, assistantOutputSummaryText, buildNodeOutputRequest, buildPromptAssistantRequest, cleanOptimizedPrompt, collectWorkflowSlots, DUAL_PROMPT_SEPARATOR, DUAL_PROMPT_SKILL_NAME, MAX_ASSISTANT_SOURCE_CHARS, readNodeSourceText, readNodeText, resolveAssistantTargetCategory, resolveSkillProduces, resolveWorkflowConstraint, revertOptimizedTextSlot, summarizeAssistantOutput, type PromptAssistantConfig } from "@/lib/canvas/canvas-prompt-assistant";
 import type { BuiltinPromptSkillId } from "@/lib/canvas/prompt-skills";
 import { readAgentClientId } from "@/lib/agent/agent-client-id";
 import { AgentApiError, fetchAgentJson, interruptCodexTurn } from "@/services/api/canvas-agent";
@@ -2743,7 +2743,7 @@ function InfiniteCanvasPage() {
                 if (options?.scope === "group") return runNodeSkillBatchRef.current?.(node, assistantConfig);
                 return runPromptAssistantNodes(node, assistantConfig, skillId, { contextImages });
             }
-            const { prompt, truncated } = buildPromptAssistantRequest({ config: assistantConfig, nodeText: sourceText, workflowConstraint: promptAssistantConstraintFor(node), hasImages: contextImages.length > 0 });
+            const { prompt, truncated } = buildPromptAssistantRequest({ config: assistantConfig, nodeText: sourceText, workflowConstraint: promptAssistantConstraintFor(node), imageCount: contextImages.length });
             if (truncated) message.info(t("canvas.promptAssistant.truncatedHint"));
 
             // 原文不动：先挂一条空备选承接流式结果，显示仍留在原文上，直到第一个字回来。
@@ -2775,7 +2775,14 @@ function InfiniteCanvasPage() {
                             item.id === node.id ? { ...item, metadata: { ...item.metadata, ...applyOptimizedText(item, slotId, finalText), promptAssistant: { ...assistantConfig, optimizedAt: new Date().toISOString() } } } : item,
                         ),
                     );
-                    message.success(t("canvas.promptAssistant.applied"));
+                    // 双份配方要求「H3 正文 + 一行分隔符 + LTX 正文」：没按格式出也照样写回，
+                    // 但给一句可执行的提示，免得用户以为两份都齐了。
+                    const isDualRecipe = assistantConfig.skill?.kind === "agent" && assistantConfig.skill.name === DUAL_PROMPT_SKILL_NAME;
+                    if (isDualRecipe && !finalText.includes(DUAL_PROMPT_SEPARATOR)) {
+                        message.warning(t("canvas.promptAssistant.dualPromptMissingSeparator"));
+                    } else {
+                        message.success(t("canvas.promptAssistant.applied"));
+                    }
                 } catch (error) {
                     setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...revertOptimizedTextSlot(item, slotId) } } : item)));
                     if (controller.signal.aborted) {

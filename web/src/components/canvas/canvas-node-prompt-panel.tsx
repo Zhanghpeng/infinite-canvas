@@ -312,6 +312,9 @@ export function CanvasNodePromptPanel({
         }
     };
 
+    // Agent 模式下本次执行不吃渠道文本工作流：把渠道/工作流/参数控件收起来，
+    // 避免和「执行者 + 技能」两个入口同时摆着、还互相写回同一个 channelId。
+    const agentMode = Boolean(mode === "text" && promptAssistantConfig?.backend === "agent");
     // 选了技能就走技能执行（执行者/形态由技能决定），没选就是原来的文本生成。
     const canSkillRun = Boolean(mode === "text" && promptAssistantConfig?.backend === "agent" && promptAssistantConfig.skill && onOptimizePrompt);
     // 执行者已是本地 Agent 但还没选技能：按钮置灰并说明先选技能，避免落到「渠道生成」的歧义上。
@@ -648,22 +651,24 @@ export function CanvasNodePromptPanel({
                         </>
                     ) : (
                         <>
-                            <TextModelPicker
-                                channelId={node.metadata?.channelId || config.channelId}
-                                modelId={node.metadata?.modelId || "text-qwen-35"}
-                                workflowId={node.metadata?.workflowId}
-                                connectedImages={connectedResources.images}
-                                connectedVideos={connectedResources.videos}
-                                connectedAudios={connectedResources.audios}
-                                promptText={prompt}
-                                onChange={(nextChannelId, nextModelId, _profile, workflow) => {
-                                    onConfigChange(node.id, {
-                                        channelId: nextChannelId,
-                                        modelId: nextModelId,
-                                        workflowId: workflow?.id,
-                                    });
-                                }}
-                            />
+                            {!agentMode ? (
+                                <TextModelPicker
+                                    channelId={node.metadata?.channelId || config.channelId}
+                                    modelId={node.metadata?.modelId || "text-qwen-35"}
+                                    workflowId={node.metadata?.workflowId}
+                                    connectedImages={connectedResources.images}
+                                    connectedVideos={connectedResources.videos}
+                                    connectedAudios={connectedResources.audios}
+                                    promptText={prompt}
+                                    onChange={(nextChannelId, nextModelId, _profile, workflow) => {
+                                        onConfigChange(node.id, {
+                                            channelId: nextChannelId,
+                                            modelId: nextModelId,
+                                            workflowId: workflow?.id,
+                                        });
+                                    }}
+                                />
+                            ) : null}
                             {promptAssistantConfig && onPromptAssistantChange ? (
                                 <>
                                     <CanvasPromptExecutorPicker
@@ -697,22 +702,24 @@ export function CanvasNodePromptPanel({
                                     ) : null}
                                 </>
                             ) : null}
-                            <CanvasTextSettingsPopover
-                                modelId={node.metadata?.modelId || "text-qwen-35"}
-                                maxLength={node.metadata?.maxLength}
-                                thinking={node.metadata?.thinking}
-                                onParamChange={(patch) => onConfigChange(node.id, patch)}
-                                config={config}
-                                count={node.metadata?.textCount || 1}
-                                buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
-                                onCountChange={(textCount) => onConfigChange(node.id, { textCount })}
-                                onOpenChange={handleSettingsOpenChange}
-                            />
+                            {!agentMode ? (
+                                <CanvasTextSettingsPopover
+                                    modelId={node.metadata?.modelId || "text-qwen-35"}
+                                    maxLength={node.metadata?.maxLength}
+                                    thinking={node.metadata?.thinking}
+                                    onParamChange={(patch) => onConfigChange(node.id, patch)}
+                                    config={config}
+                                    count={node.metadata?.textCount || 1}
+                                    buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
+                                    onCountChange={(textCount) => onConfigChange(node.id, { textCount })}
+                                    onOpenChange={handleSettingsOpenChange}
+                                />
+                            ) : null}
                         </>
                     )}
                     {/* 四个节点的选择器二级已经是工作流名本身，徽标只保留「是否跟随配置默认」
                          这一个状态信号，不再重复流名；解除钉住的入口在选择器右侧回转图标。 */}
-                    <CanvasExecutionWorkflowBadge node={node} mode={mode} imageCount={connectedResources.images} />
+                    {!agentMode ? <CanvasExecutionWorkflowBadge node={node} mode={mode} imageCount={connectedResources.images} /> : null}
                 </div>
                 {isOptimizingPrompt ? (
                     <Button type="primary" danger className="ml-auto !h-10 shrink-0 !rounded-full !px-3" onClick={() => onCancelOptimizePrompt?.()} aria-label={t("canvas.promptAssistant.cancel")}>

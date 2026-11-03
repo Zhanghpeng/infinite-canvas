@@ -32,13 +32,41 @@ export const DEFAULT_PROMPT_ASSISTANT_CONFIG: PromptAssistantConfig = {
 /** 单次处理的源文上限（字符）：超了要先按章节拆分或截断，避免把长文整段塞进上下文。 */
 export const MAX_ASSISTANT_SOURCE_CHARS = 8000;
 
-export function buildPromptAssistantRequest(input: { config: PromptAssistantConfig; nodeText: string; workflowConstraint?: string; contextBlock?: string; hasImages?: boolean }): { prompt: string; truncated: boolean } {
+/** H3 + LTX-2.5 双份提示词技能：一次产出两段，中间用这一行分割（与技能 SKILL.md 里的约定一致）。 */
+export const DUAL_PROMPT_SEPARATOR = "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=";
+export const DUAL_PROMPT_SKILL_NAME = "h3-ltx25-dual-prompt";
+
+/**
+ * 运行时技能里「只回文字」的那几个：视频提示词写作/转换类。
+ * 其余 Agent 技能默认会操作画布（建节点），必须走 nodeOutputContract。
+ * 名字要与 canvas-agent/builtin-skills 里的 frontmatter.name 一致。
+ */
+const AGENT_INLINE_SKILL_NAMES = new Set([DUAL_PROMPT_SKILL_NAME, "h3-prompt-writing", "h3-to-ltx25-prompt"]);
+
+export function isInlineAgentSkill(name: string): boolean {
+    return AGENT_INLINE_SKILL_NAMES.has(name);
+}
+
+export function buildPromptAssistantRequest(input: { config: PromptAssistantConfig; nodeText: string; workflowConstraint?: string; contextBlock?: string; imageCount?: number; hasImages?: boolean }): { prompt: string; truncated: boolean } {
     const blocks: string[] = [];
     if (input.config.skill?.kind === "builtin") blocks.push(promptSkillInstruction(input.config.skill.id));
     if (input.config.instruction?.trim()) blocks.push(i18n.t("canvas.promptAssistant.extraInstructionTemplate", { instruction: input.config.instruction.trim() }));
     if (input.workflowConstraint?.trim()) blocks.push(input.workflowConstraint.trim());
     if (input.contextBlock?.trim()) blocks.push(input.contextBlock.trim());
-    if (input.hasImages) blocks.push(i18n.t("canvas.promptAssistant.imageContext"));
+    // 参考图编号映射：H3 的 <Picture N> 必须与画布 ref_image_0N 槽位、以及发出去的附件名
+    // reference-N.png 三者对齐，否则写出来的标签和下游视频节点连的图对不上。
+    if (input.imageCount && input.imageCount > 0) {
+        const lines = Array.from({ length: input.imageCount }, (_, index) =>
+            i18n.t("canvas.promptAssistant.referenceMapItem", {
+                file: `reference-${index + 1}.png`,
+                label: `<Picture ${index + 1}>`,
+                slot: `ref_image_${String(index + 1).padStart(2, "0")}`,
+            }),
+        );
+        blocks.push([i18n.t("canvas.promptAssistant.referenceMapIntro"), ...lines].join("\n"));
+    } else if (input.hasImages) {
+        blocks.push(i18n.t("canvas.promptAssistant.imageContext"));
+    }
     // 走 Agent 时它是「有工具的智能体」，必须明确禁用工具：否则可能去跑命令/读写文件，既慢又要等审批。
     if (input.config.backend === "agent") blocks.push(i18n.t("canvas.promptAssistant.agentTaskContract"));
     blocks.push(i18n.t("canvas.promptAssistant.outputContract"));
@@ -166,7 +194,10 @@ export function cleanOptimizedPrompt(raw: string): string {
 export function resolveSkillProduces(config: PromptAssistantConfig): PromptSkillProduces | undefined {
     if (!config.skill) return undefined;
     if (config.skill.kind === "builtin") return promptSkillProduces(config.skill.id);
-    return "nodes";
+    // 视频提示词写作/转换类技能只回文字：走 agentTaskContract（禁工具）并把答案写回本节点。
+    // 若一律判成 nodes，请求会塞 nodeOutputContract 要求建文本卡，技能却只输出提示词，
+    // 两边打架就是「选了技能点发送没反应/报错」的根因。
+    return isInlineAgentSkill(config.skill.name) ? "inline" : "nodes";
 }
 
 /**

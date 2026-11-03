@@ -1,13 +1,18 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import i18n from "@/i18n";
 import {
+    DUAL_PROMPT_SEPARATOR,
+    DUAL_PROMPT_SKILL_NAME,
     MAX_ASSISTANT_SOURCE_CHARS,
     appendOptimizedTextSlot,
     applyOptimizedText,
     buildNodeOutputRequest,
     buildPromptAssistantRequest,
     cleanOptimizedPrompt,
+    isInlineAgentSkill,
     readNodeText,
     readNodeSourceText,
     resolveSkillProduces,
@@ -280,5 +285,36 @@ describe("assistantOutputSummaryText", () => {
     it("appends the other-nodes segment for a director-stage build", () => {
         const text = assistantOutputSummaryText({ addedNodes: 2, addedTextNodes: 0, addedGroups: 0, addedOtherNodes: 2, addedConnections: 0 });
         expect(text).toContain(i18n.t("canvas.promptAssistant.nodesDoneOther", { others: 2 }));
+    });
+});
+
+describe("video prompt recipes", () => {
+    it("treats the dual-prompt and H3/LTX skills as text-only, others as canvas output", () => {
+        const produces = (name: string) => resolveSkillProduces({ backend: "agent", skill: { kind: "agent", name, path: `skills/${name}` } });
+        expect(produces(DUAL_PROMPT_SKILL_NAME)).toBe("inline");
+        expect(produces("h3-prompt-writing")).toBe("inline");
+        expect(produces("h3-to-ltx25-prompt")).toBe("inline");
+        expect(produces("director-shot-design")).toBe("nodes");
+        expect(resolveSkillProduces({ backend: "agent" })).toBeUndefined();
+        expect(isInlineAgentSkill(DUAL_PROMPT_SKILL_NAME)).toBe(true);
+        expect(isInlineAgentSkill("storyboard")).toBe(false);
+    });
+
+    it("maps every attached image to <Picture N> and ref_image_0N in connection order", () => {
+        const { prompt } = buildPromptAssistantRequest({ config: { backend: "agent" }, nodeText: "雨夜街头", imageCount: 2 });
+        expect(prompt).toContain(i18n.t("canvas.promptAssistant.referenceMapItem", { label: "<Picture 1>", file: "reference-1.png", slot: "ref_image_01" }));
+        expect(prompt).toContain(i18n.t("canvas.promptAssistant.referenceMapItem", { label: "<Picture 2>", file: "reference-2.png", slot: "ref_image_02" }));
+        expect(prompt.indexOf("<Picture 1>")).toBeLessThan(prompt.indexOf("<Picture 2>"));
+    });
+
+    it("omits the reference map block when there are no images", () => {
+        const { prompt } = buildPromptAssistantRequest({ config: { backend: "agent" }, nodeText: "一只猫" });
+        expect(prompt).not.toContain(i18n.t("canvas.promptAssistant.referenceMapIntro"));
+    });
+
+    it("keeps the front-end separator identical to the builtin skill contract", () => {
+        const skill = readFileSync(resolve(process.cwd(), "../canvas-agent/builtin-skills/h3-ltx25-dual-prompt/SKILL.md"), "utf8");
+        expect(DUAL_PROMPT_SEPARATOR.length).toBe(51);
+        expect(skill).toContain(DUAL_PROMPT_SEPARATOR);
     });
 });

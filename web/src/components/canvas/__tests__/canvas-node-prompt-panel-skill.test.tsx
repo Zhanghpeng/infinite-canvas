@@ -79,4 +79,15 @@ describe("文本节点的提示词助手入口", () => {
         });
         expect(html).toContain(i18n.t("canvas.promptAssistant.cancel"));
     });
+
+    it("collapses the channel/workflow cascader when an inline agent skill is active", () => {
+        const html = render({
+            promptAssistantConfig: { backend: "agent", skill: { kind: "agent", name: "h3-ltx25-dual-prompt", path: "skills/h3-ltx25-dual-prompt" } },
+            onPromptAssistantChange: () => undefined,
+            onOptimizePrompt: () => undefined,
+        });
+        // 文本工作流 Cascader 与参数弹层都不参与本次执行，收掉后底部只剩「执行者 + 技能 + 发送」
+        expect(html).not.toContain("ant-cascader");
+        expect(html).toContain(i18n.t("canvas.promptAssistant.runSkill"));
+    });
 });

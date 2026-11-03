@@ -2,7 +2,7 @@ import { Select, type SelectProps } from "antd";
 import { Bot, Cpu, Sparkles, WandSparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { PromptAssistantConfig, PromptAssistantSkillRef } from "@/lib/canvas/canvas-prompt-assistant";
+import { DUAL_PROMPT_SKILL_NAME, isInlineAgentSkill, type PromptAssistantConfig, type PromptAssistantSkillRef } from "@/lib/canvas/canvas-prompt-assistant";
 import { BUILTIN_PROMPT_SKILLS, promptSkillHint, promptSkillLabel } from "@/lib/canvas/prompt-skills";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
 import { useAgentStore } from "@/stores/use-agent-store";
@@ -99,6 +99,22 @@ export function CanvasPromptSkillPicker({ config, onChange }: { config: PromptAs
     const agentSkills = useAgentSkillStore((state) => state.skills);
     const loadSkills = useAgentSkillStore((state) => state.loadSkills);
 
+    // 视频提示词类技能只回文字、写回本节点；其余运行时技能会操作画布。
+    // 分组与标签按真实产出形态来，别再一律标成「产出节点」。
+    const videoRecipes = agentSkills.filter((skill) => isInlineAgentSkill(skill.name));
+    const canvasSkills = agentSkills.filter((skill) => !isInlineAgentSkill(skill.name));
+    const agentSkillOption = (skill: (typeof agentSkills)[number], inline: boolean) => ({
+        value: `agent:${skill.name}|${skill.path}`,
+        label: (
+            <OptionLabel
+                icon={<Sparkles className="size-3 shrink-0 text-stone-400" />}
+                text={skill.interface?.displayName || skill.name}
+                hint={skill.name === DUAL_PROMPT_SKILL_NAME ? t("canvas.promptAssistant.dualPromptSkillHint") : skill.shortDescription || skill.description}
+                tag={t(inline ? "canvas.promptAssistant.producesInline" : "canvas.promptAssistant.producesNodes")}
+            />
+        ),
+    });
+
     const options: SelectProps["options"] = [
         {
             label: <span className="text-[11px] font-semibold text-stone-400">{t("canvas.promptAssistant.builtinSkills")}</span>,
@@ -114,21 +130,19 @@ export function CanvasPromptSkillPicker({ config, onChange }: { config: PromptAs
                 ),
             })),
         },
-        ...(agentSkills.length
+        ...(videoRecipes.length
+            ? [
+                  {
+                      label: <span className="text-[11px] font-semibold text-stone-400">{t("canvas.promptAssistant.videoPromptSkillGroup")}</span>,
+                      options: videoRecipes.map((skill) => agentSkillOption(skill, true)),
+                  },
+              ]
+            : []),
+        ...(canvasSkills.length
             ? [
                   {
                       label: <span className="text-[11px] font-semibold text-stone-400">{t("canvas.promptAssistant.agentSkills")}</span>,
-                      options: agentSkills.map((skill) => ({
-                          value: `agent:${skill.name}|${skill.path}`,
-                          label: (
-                              <OptionLabel
-                                  icon={<Sparkles className="size-3 shrink-0 text-stone-400" />}
-                                  text={skill.interface?.displayName || skill.name}
-                                  hint={skill.shortDescription || skill.description}
-                                  tag={t("canvas.promptAssistant.producesNodes")}
-                              />
-                          ),
-                      })),
+                      options: canvasSkills.map((skill) => agentSkillOption(skill, false)),
                   },
               ]
             : []),
@@ -156,7 +170,8 @@ export function CanvasPromptSkillPicker({ config, onChange }: { config: PromptAs
                     return;
                 }
                 const [name, ...rest] = next.replace("agent:", "").split("|");
-                onChange({ skill: { kind: "agent", name, path: rest.join("|") } });
+                // 运行时技能只有本地 Agent 跑得动：选中即切过去，省掉「先切执行者再选技能」这一步。
+                onChange({ skill: { kind: "agent", name, path: rest.join("|") }, backend: "agent" });
             }}
             options={options}
         />
