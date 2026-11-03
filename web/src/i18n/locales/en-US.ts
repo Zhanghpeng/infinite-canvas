@@ -1809,6 +1809,7 @@ export default {
         "channels": {
             "description": "Choose a protocol for each provider, fetch its models, assign capabilities, and optionally customize request scripts.",
             "add": "Add provider",
+            "importWorkflow": "Import workflow",
             "unnamed": "Unnamed provider",
             "numberedName": "Provider {{count}}",
             "modelCount": "{{count}} models",
@@ -2659,6 +2660,7 @@ export default {
         "title": "Workflow Management & Model Configuration",
         "description": "Fetch and configure Diffusion models and CLIP encoders in real time from ComfyUI. Changes take effect across all channels instantly.",
         "instance": "ComfyUI Instance: ",
+        "importWorkflow": "Import / Adapt Workflow",
         "searchPlaceholder": "Search workflows...",
         "workflowList": "Workflows ({{count}})",
         "default": "Default",

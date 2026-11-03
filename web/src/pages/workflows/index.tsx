@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
     AlertCircle,
@@ -15,6 +15,7 @@ import {
     Save,
     Sparkles,
     Star,
+    Upload,
     Workflow as WorkflowIcon,
 } from "lucide-react";
 import { App, Button, Empty, Input, Segmented, Select, Tag, Tooltip } from "antd";
@@ -64,6 +65,7 @@ export default function WorkflowsPage() {
     const { t } = useTranslation();
     const { message } = App.useApp();
     const copyText = useCopyText();
+    const navigate = useNavigate();
     const [searchParams] = useSearchParams();
 
     const categoryTabs = useMemo(
@@ -290,11 +292,18 @@ export default function WorkflowsPage() {
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-2 text-xs">
+                    <div className="flex items-center gap-3 text-xs">
                         <span className="text-stone-400">{t("workflowsPage.instance")}</span>
                         <code className="rounded bg-stone-100 px-2 py-0.5 font-mono text-[11px] text-stone-700 dark:bg-stone-800 dark:text-stone-300">
                             {comfyEndpoint}
                         </code>
+                        <Button
+                            size="small"
+                            icon={<Upload className="size-3.5" />}
+                            onClick={() => navigate("/community/studio")}
+                        >
+                            {t("workflowsPage.importWorkflow")}
+                        </Button>
                     </div>
                 </div>
 

@@ -484,3 +484,52 @@ describe("WorkflowIngestionAdapter (Candidate 1 Seam)", () => {
         expect(ingestWorkflow({}).ok).toBe(false);
     });
 });
+
+// 工作流适配工坊（community/studio）依赖这里的字段名。适配器曾经从
+// {adaptedWorkflow, modality, slots} 改成 {workflow, detectedCategory, detectedSlots}
+// 却没同步改调用方，导致拖入 JSON 后 res.workflow 为 undefined：页面一直停在上传区，
+// 保存按钮又因为空 JSON 直接 return。这几条锁死消费契约，防止再次静默回归。
+describe("studio consumption contract", () => {
+    const validT2i: ComfyuiWorkflowJson = {
+        "1": {
+            class_type: "PrimitiveStringMultiline",
+            inputs: { value: "a cat" },
+            _meta: { title: "prompt" },
+        },
+        "2": {
+            class_type: "SaveImage",
+            inputs: { images: ["3", 0] },
+            _meta: { title: "output_image" },
+        },
+    };
+
+    it("returns a usable workflow and a valid category on success", () => {
+        const result = ingestWorkflow(validT2i);
+        expect(result.ok).toBe(true);
+        expect(result.workflow).toBeTruthy();
+        expect(typeof result.workflow).toBe("object");
+        expect(["t2i", "i2i", "inpaint", "text", "omniVideo", "frameVideo", "audio", "faceRefine", "depthVideo"]).toContain(result.detectedCategory);
+        expect(Array.isArray(result.detectedSlots)).toBe(true);
+        for (const slot of result.detectedSlots) {
+            expect(typeof slot.slot).toBe("string");
+            expect(typeof slot.nodeId).toBe("string");
+        }
+        for (const item of result.ambiguities || []) {
+            expect(typeof item.description).toBe("string");
+        }
+    });
+
+    it("accepts categoryHint on the fast path", () => {
+        const result = ingestWorkflow(validT2i, { categoryHint: "t2i" });
+        expect(result.ok).toBe(true);
+        expect(result.detectedCategory).toBe("t2i");
+        expect(result.confidence).toBe(1);
+    });
+
+    it("never exposes a workflow when ingestion fails", () => {
+        const result = ingestWorkflow("not a json");
+        expect(result.ok).toBe(false);
+        expect(result.workflow).toBeUndefined();
+        expect(result.error).toBeTruthy();
+    });
+});

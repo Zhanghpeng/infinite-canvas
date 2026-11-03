@@ -1809,6 +1809,7 @@ export default {
         "channels": {
             "description": "每个渠道选择一个协议并拉取模型，为每个模型指定能力（生图/视频/文本/音频），并可自定义调用脚本。",
             "add": "新增渠道",
+            "importWorkflow": "导入工作流",
             "unnamed": "未命名渠道",
             "numberedName": "渠道 {{count}}",
             "modelCount": "{{count}} 个模型",
@@ -2659,6 +2660,7 @@ export default {
         "title": "工作流管理与大模型配置",
         "description": "实时从本地 ComfyUI 端点拉取并选择 Diffusion 扩散模型与 CLIP 编码器，一处修改全局所有渠道即刻生效。",
         "instance": "ComfyUI 实例：",
+        "importWorkflow": "导入 / 适配工作流",
         "searchPlaceholder": "搜索工作流...",
         "workflowList": "工作流列表 ({{count}})",
         "default": "默认",

@@ -1,9 +1,9 @@
 import { App, Button, Form, Input, Modal, Progress, Select, Tabs, Tag } from "antd";
 import type { TFunction } from "i18next";
-import { Cloud, Download, Pencil, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
+import { Cloud, Download, Pencil, Plus, RefreshCw, Trash2, Upload, Wifi, Workflow } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { ModelPicker } from "@/components/model-picker";
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
@@ -55,6 +55,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const { message } = App.useApp();
     const { i18n, t } = useTranslation();
     const configInputRef = useRef<HTMLInputElement>(null);
+    const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState<ConfigTabKey>(initialTab);
     const [editingChannelId, setEditingChannelId] = useState("");
     const [testingWebdav, setTestingWebdav] = useState(false);
@@ -209,9 +210,22 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                             <div>
                                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                                     <div className="text-xs text-stone-500">{t("config.channels.description")}</div>
-                                    <Button type="primary" icon={<Plus className="size-4" />} onClick={addChannel}>
-                                        {t("config.channels.add")}
-                                    </Button>
+                                    <div className="flex items-center gap-2">
+                                        {config.channels.some((channel) => channel.apiFormat === "comfyui") && (
+                                            <Button
+                                                icon={<Workflow className="size-4" />}
+                                                onClick={() => {
+                                                    setConfigDialogOpen(false);
+                                                    navigate("/community/studio");
+                                                }}
+                                            >
+                                                {t("config.channels.importWorkflow")}
+                                            </Button>
+                                        )}
+                                        <Button type="primary" icon={<Plus className="size-4" />} onClick={addChannel}>
+                                            {t("config.channels.add")}
+                                        </Button>
+                                    </div>
                                 </div>
                                 <div className="space-y-3">
                                     {config.channels.map((channel, index) => {

@@ -18,9 +18,9 @@ import { nanoid } from "nanoid";
 import { ComfyFlowGraph } from "@/components/workflow-graph/comfy-flow-graph";
 import { createZip } from "@/lib/zip";
 import {
+    formatIngestSuccessMessage,
     ingestWorkflow,
-    type InferredWorkflowModality,
-    type WorkflowIngestionResult,
+    type IngestResult,
 } from "@/services/api/comfyui-adapter";
 import { extractComfyMetadataFromImage } from "@/services/api/comfyui-image-parser";
 import { getDefaultComfyWorkflowItems } from "@/services/api/comfyui-default-workflows";
@@ -43,13 +43,26 @@ const MODALITY_OPTIONS: { value: WorkflowCategory; label: string }[] = [
     { value: "depthVideo", label: "深度估计视频 (Depth Video)" },
 ];
 
+const MODEL_SLOT_PREFIX = "select_models_";
+
+/** 把适配器返回的扁平插槽表整理成界面与导出包都要用的摘要。 */
+function summarizeSlots(result: IngestResult) {
+    const list = result.detectedSlots;
+    return {
+        prompt: list.find((slot) => slot.slot === "prompt")?.nodeId ?? null,
+        seed: list.find((slot) => slot.slot === "seed")?.nodeId ?? null,
+        outputs: list.filter((slot) => slot.slot.startsWith("output_")).map((slot) => slot.nodeId),
+        models: list.filter((slot) => slot.slot.startsWith(MODEL_SLOT_PREFIX)).map((slot) => slot.nodeId),
+    };
+}
+
 export default function CommunityStudioPage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [rawInput, setRawInput] = useState<unknown | null>(null);
-    const [ingestionResult, setIngestionResult] = useState<WorkflowIngestionResult | null>(null);
+    const [ingestionResult, setIngestionResult] = useState<IngestResult | null>(null);
     const [activeWorkflowJson, setActiveWorkflowJson] = useState<ComfyuiWorkflowJson | null>(null);
     const [isDragging, setIsDragging] = useState(false);
     const [isParsing, setIsParsing] = useState(false);
@@ -66,16 +79,27 @@ export default function CommunityStudioPage() {
         (data: unknown, fallbackName?: string) => {
             try {
                 const res = ingestWorkflow(data);
+                // 适配失败时不要把 undefined 塞进画布：那样页面会一直停在上传区，
+                // 表现为「拖入文件没反应」，保存按钮也会因为空 JSON 直接 return。
+                if (!res.ok || !res.workflow) {
+                    message.error(res.error ? `解析工作流失败: ${res.error}` : "解析工作流失败：未识别出有效的 ComfyUI 工作流");
+                    return;
+                }
                 setRawInput(data);
                 setIngestionResult(res);
-                setActiveWorkflowJson(res.adaptedWorkflow);
-                setMetaCategory(res.modality);
+                setActiveWorkflowJson(res.workflow);
+                setMetaCategory(res.detectedCategory);
                 if (fallbackName && !metaName) {
                     setMetaName(fallbackName);
                 } else if (!metaName) {
-                    setMetaName(`社区适配工作流-${res.modality}`);
+                    setMetaName(`社区适配工作流-${res.detectedCategory}`);
                 }
-                message.success(`成功识别模态: ${res.modality} (置信度 ${Math.round(res.confidence * 100)}%)`);
+                message.success(
+                    formatIngestSuccessMessage(
+                        `成功识别模态: ${res.detectedCategory} (置信度 ${Math.round(res.confidence * 100)}%)`,
+                        res.detectedSlots.length,
+                    ),
+                );
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
                 message.error(`解析工作流失败: ${msg}`);
@@ -148,21 +172,22 @@ export default function CommunityStudioPage() {
         (nodeId: string, slotTitle: string) => {
             if (!activeWorkflowJson) return;
 
-            const cloned: ComfyuiWorkflowJson = JSON.parse(JSON.stringify(activeWorkflowJson));
-            if (!cloned[nodeId]) return;
+            const cloned = JSON.parse(JSON.stringify(activeWorkflowJson)) as ComfyuiWorkflowJson;
+            const target = cloned[nodeId] as Record<string, unknown> | undefined;
+            if (!target || typeof target !== "object") return;
 
-            if (!cloned[nodeId]._meta) {
-                cloned[nodeId]._meta = {};
-            }
-
+            const meta = (target._meta && typeof target._meta === "object" ? target._meta : {}) as Record<string, unknown>;
             if (slotTitle) {
-                cloned[nodeId]._meta.title = slotTitle;
+                meta.title = slotTitle;
+                target._meta = meta;
             } else {
-                delete cloned[nodeId]._meta.title;
+                delete meta.title;
+                if (Object.keys(meta).length) target._meta = meta;
+                else delete target._meta;
             }
 
-            // 重新运行适配器以更新槽位统计
-            const nextResult = ingestWorkflow(cloned, { preferredModality: metaCategory });
+            // 重新运行适配器以更新槽位统计（画布保留用户手动改过的 cloned）
+            const nextResult = ingestWorkflow(cloned, { categoryHint: metaCategory });
             setActiveWorkflowJson(cloned);
             setIngestionResult(nextResult);
             message.success(`已更新节点 #${nodeId} 槽位标记为: ${slotTitle || "普通节点"}`);
@@ -185,7 +210,7 @@ export default function CommunityStudioPage() {
         };
 
         useConfigStore.getState().saveWorkflowGlobally(workflowItem);
-        message.success(t("community.saveSuccess"));
+        message.success(`${t("community.saveSuccess")} 可在「工作流管理」中设为默认，或在「配置 → 渠道」里切换。`);
     };
 
     // 导出规范化 API JSON
@@ -215,7 +240,7 @@ export default function CommunityStudioPage() {
                 .split(/[,，]/)
                 .map((t) => t.trim())
                 .filter(Boolean),
-            slots: ingestionResult.slots,
+            slots: summarizeSlots(ingestionResult),
         };
 
         const readme = `# ${metaName || "Community Workflow"}\n\n${metaDescription}\n\n## 适用模态\n\`${metaCategory}\`\n\n## 作者\n${metaAuthor || "Community Creator"}\n\n## 导入指引\n在 Infinite Canvas 中打开「开源社区」-「工作流适配工坊」，直接拖入 \`workflow.json\` 即可一键安装使用。\n`;
@@ -249,6 +274,13 @@ export default function CommunityStudioPage() {
                             {t("community.studioTitle")}
                         </h1>
                     </div>
+                    <Link
+                        to="/workflows"
+                        className="ml-1 inline-flex items-center gap-1.5 text-xs text-stone-500 hover:text-stone-900 dark:text-stone-400 dark:hover:text-stone-100"
+                    >
+                        <WorkflowIcon className="size-3.5" />
+                        <span>工作流管理</span>
+                    </Link>
                 </div>
 
                 {activeWorkflowJson && (
@@ -367,9 +399,9 @@ export default function CommunityStudioPage() {
                                             onChange={(val) => {
                                                 setMetaCategory(val);
                                                 if (rawInput) {
-                                                    const res = ingestWorkflow(rawInput, { preferredModality: val });
+                                                    const res = ingestWorkflow(rawInput, { categoryHint: val });
                                                     setIngestionResult(res);
-                                                    setActiveWorkflowJson(res.adaptedWorkflow);
+                                                    if (res.workflow) setActiveWorkflowJson(res.workflow);
                                                 }
                                             }}
                                         />
@@ -382,24 +414,28 @@ export default function CommunityStudioPage() {
                                     )}
 
                                     {/* 关键槽位指示 */}
-                                    {ingestionResult && (
-                                        <div className="flex items-center gap-1.5 text-xs">
-                                            <Tag color={ingestionResult.slots.prompt ? "blue" : "default"}>
-                                                提示词: #{ingestionResult.slots.prompt || "无"}
-                                            </Tag>
-                                            <Tag color={ingestionResult.slots.seed ? "purple" : "default"}>
-                                                种子: #{ingestionResult.slots.seed || "无"}
-                                            </Tag>
-                                            <Tag color={ingestionResult.slots.outputs.length > 0 ? "green" : "default"}>
-                                                输出端点: {ingestionResult.slots.outputs.length} 个
-                                            </Tag>
-                                            {ingestionResult.slots.models.length > 0 && (
-                                                <Tag color="geekblue">
-                                                    模型插槽: {ingestionResult.slots.models.length} 个
-                                                </Tag>
-                                            )}
-                                        </div>
-                                    )}
+                                    {ingestionResult &&
+                                        (() => {
+                                            const slots = summarizeSlots(ingestionResult);
+                                            return (
+                                                <div className="flex items-center gap-1.5 text-xs">
+                                                    <Tag color={slots.prompt ? "blue" : "default"}>
+                                                        提示词: #{slots.prompt || "无"}
+                                                    </Tag>
+                                                    <Tag color={slots.seed ? "purple" : "default"}>
+                                                        种子: #{slots.seed || "无"}
+                                                    </Tag>
+                                                    <Tag color={slots.outputs.length > 0 ? "green" : "default"}>
+                                                        输出端点: {slots.outputs.length} 个
+                                                    </Tag>
+                                                    {slots.models.length > 0 && (
+                                                        <Tag color="geekblue">
+                                                            模型插槽: {slots.models.length} 个
+                                                        </Tag>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
                                 </div>
 
                                 <div className="flex items-center gap-2">
@@ -419,11 +455,11 @@ export default function CommunityStudioPage() {
                             </div>
 
                             {/* 警告与歧义提示 */}
-                            {ingestionResult && ingestionResult.ambiguities.length > 0 && (
+                            {ingestionResult && (ingestionResult.ambiguities?.length ?? 0) > 0 && (
                                 <div className="mt-2.5 flex items-start gap-1.5 rounded-lg bg-amber-50 p-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
                                     <Info className="size-4 shrink-0 mt-0.5" />
                                     <span>
-                                        检测到多候选插槽：{ingestionResult.ambiguities.join("；")}。可在下方流图中点击对应节点进行针对性覆盖分配。
+                                        检测到多候选插槽：{ingestionResult.ambiguities?.map((item) => item.description).join("；")}。可在下方流图中点击对应节点进行针对性覆盖分配。
                                     </span>
                                 </div>
                             )}
