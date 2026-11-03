@@ -9,6 +9,7 @@ import {
     buildPromptAssistantRequest,
     cleanOptimizedPrompt,
     readNodeText,
+    readNodeSourceText,
     resolveSkillProduces,
     assistantOutputSummaryText,
     resolveWorkflowConstraint,
@@ -212,6 +213,15 @@ describe("optimized text write-back", () => {
         expect(readNodeText(textNode("legacy"))).toBe("legacy");
         expect(readNodeText(textNode("legacy", { texts: [{ id: "s0", status: "success", content: " 主文本 " }], primaryTextId: "s0" }))).toBe("主文本");
         expect(readNodeText({ ...textNode("x"), type: CanvasNodeType.Image })).toBe("");
+    });
+
+    it("treats the composer instruction as input while the node body is still empty", () => {
+        // 新建的文本节点正文是空的，用户是在下面输入框里写指令：技能入口必须能吃到它。
+        expect(readNodeSourceText(textNode("", { prompt: " 写一段 H3 提示词 " }))).toBe("写一段 H3 提示词");
+        expect(readNodeSourceText(textNode("", { composerContent: "改写这张图" }))).toBe("改写这张图");
+        // 正文优先：有正文时输入框那句只是附加指令，不顶替原文。
+        expect(readNodeSourceText(textNode("正文", { prompt: "附加指令" }))).toBe("正文");
+        expect(readNodeSourceText({ ...textNode("", { prompt: "x" }), type: CanvasNodeType.Image })).toBe("");
     });
 });
 

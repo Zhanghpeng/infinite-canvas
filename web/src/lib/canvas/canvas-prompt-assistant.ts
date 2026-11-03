@@ -120,6 +120,18 @@ export function readNodeText(node: CanvasNodeData): string {
     return (primary?.content || node.metadata?.content || "").trim();
 }
 
+/**
+ * 技能真正能吃的输入：正文优先；正文还空着时退回输入框里那句指令。
+ * 新建的文本节点正文必然是空的，用户其实是在下面输入框里写了一句话 + 挂了参考图，
+ * 只看正文会让「选技能 → 写一句 → 发送」这条路直接卡在“请先输入内容”。
+ */
+export function readNodeSourceText(node: CanvasNodeData): string {
+    const text = readNodeText(node);
+    if (text) return text;
+    if (node.type !== CanvasNodeType.Text) return "";
+    return (node.metadata?.composerContent || node.metadata?.prompt || "").trim();
+}
+
 /** 优化结果先落成一条新备选（不覆盖原文），流式期间就挂在它上面，用户能边写边看。 */
 export function appendOptimizedTextSlot(node: CanvasNodeData): { slotId: string; texts: CanvasNodeText[] } {
     const slotId = nanoid();

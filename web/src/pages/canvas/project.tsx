@@ -70,7 +70,7 @@ import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { buildNodeMentionReferences, getGroupResourceNodes, isCanvasReferenceNode, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { collectCollapsedNodeIds, collectGroupDescendantIds, isNodeLocked } from "@/lib/canvas/canvas-group-collapse";
-import { applyOptimizedText, appendOptimizedTextSlot, assistantOutputSummaryText, buildNodeOutputRequest, buildPromptAssistantRequest, cleanOptimizedPrompt, collectWorkflowSlots, MAX_ASSISTANT_SOURCE_CHARS, readNodeText, resolveAssistantTargetCategory, resolveSkillProduces, resolveWorkflowConstraint, revertOptimizedTextSlot, summarizeAssistantOutput, type PromptAssistantConfig } from "@/lib/canvas/canvas-prompt-assistant";
+import { applyOptimizedText, appendOptimizedTextSlot, assistantOutputSummaryText, buildNodeOutputRequest, buildPromptAssistantRequest, cleanOptimizedPrompt, collectWorkflowSlots, MAX_ASSISTANT_SOURCE_CHARS, readNodeSourceText, readNodeText, resolveAssistantTargetCategory, resolveSkillProduces, resolveWorkflowConstraint, revertOptimizedTextSlot, summarizeAssistantOutput, type PromptAssistantConfig } from "@/lib/canvas/canvas-prompt-assistant";
 import type { BuiltinPromptSkillId } from "@/lib/canvas/prompt-skills";
 import { readAgentClientId } from "@/lib/agent/agent-client-id";
 import { AgentApiError, fetchAgentJson, interruptCodexTurn } from "@/services/api/canvas-agent";
@@ -2642,15 +2642,16 @@ function InfiniteCanvasPage() {
      * 只走 Agent（ComfyUI 文本工作流只会返回一段文字，建不了节点）。
      */
     const runPromptAssistantNodes = useCallback(
-        async (node: CanvasNodeData, assistantConfig: PromptAssistantConfig, skillId?: BuiltinPromptSkillId, options?: { quiet?: boolean }) => {
+        async (node: CanvasNodeData, assistantConfig: PromptAssistantConfig, skillId?: BuiltinPromptSkillId, options?: { quiet?: boolean; contextImages?: string[] }) => {
             if (promptAssistantAbortRef.current) return null;
             if (node.type !== CanvasNodeType.Text) return null;
             if (isNodeLocked(node, nodesRef.current)) {
                 if (!options?.quiet) message.warning(t("canvas.promptAssistant.disabledLocked"));
                 return null;
             }
-            const sourceText = readNodeText(node);
-            if (!sourceText) {
+            const contextImages = options?.contextImages || [];
+            const sourceText = readNodeSourceText(node);
+            if (!sourceText && !contextImages.length) {
                 if (!options?.quiet) message.warning(t("canvas.promptAssistant.disabledEmpty"));
                 return null;
             }
@@ -2673,14 +2674,29 @@ function InfiniteCanvasPage() {
             const controller = new AbortController();
             promptAssistantAbortRef.current = controller;
             try {
-                const answer = await runPromptAssistantTurn(prompt, { ...config, backend: "agent" }, controller.signal);
+                const answer = await runPromptAssistantTurn(prompt, { ...config, backend: "agent" }, controller.signal, contextImages);
                 const summary = summarizeAssistantOutput(before, { nodes: nodesRef.current, connections: connectionsRef.current });
                 if (summary.addedNodes) {
                     setSelectedNodeIds(new Set(summary.addedIds));
                     setSelectedConnectionId(null);
                     if (!options?.quiet) message.success(assistantOutputSummaryText(summary));
                 } else if (!options?.quiet) {
-                    message.info(t("canvas.promptAssistant.nodesNone", { answer: cleanOptimizedPrompt(answer).slice(0, 120) }));
+                    // 技能也可能只回一段文字（H3 提示词、单条改写这类）：没有节点产出就落回当前文本节点，
+                    // 否则用户等半天只看到一句被截断的提示，节点还是一片空白。
+                    const finalText = cleanOptimizedPrompt(answer) || answer.trim();
+                    if (finalText) {
+                        setNodes((prev) =>
+                            prev.map((item) => {
+                                if (item.id !== node.id) return item;
+                                const { slotId, texts } = appendOptimizedTextSlot(item);
+                                const staged = { ...item, metadata: { ...item.metadata, texts } };
+                                return { ...staged, metadata: { ...staged.metadata, ...applyOptimizedText(staged, slotId, finalText), promptAssistant: { ...config, optimizedAt: new Date().toISOString() } } };
+                            }),
+                        );
+                        message.success(t("canvas.promptAssistant.applied"));
+                    } else {
+                        message.info(t("canvas.promptAssistant.nodesNone", { answer: "" }));
+                    }
                 }
                 return summary;
             } catch (error) {
@@ -2716,15 +2732,16 @@ function InfiniteCanvasPage() {
             if (promptAssistantAbortRef.current) return;
             if (node.type !== CanvasNodeType.Text) return;
             if (isNodeLocked(node, nodesRef.current)) return message.warning(t("canvas.promptAssistant.disabledLocked"));
-            const sourceText = options?.sourceText ?? readNodeText(node);
+            const sourceText = options?.sourceText ?? readNodeSourceText(node);
             const contextImages = options?.contextImages || [];
             if (!sourceText && !contextImages.length) return message.warning(t("canvas.promptAssistant.disabledEmpty"));
 
             const assistantConfig: PromptAssistantConfig = skillId ? { ...config, skill: { kind: "builtin", id: skillId } } : config;
-            // 形态由技能/配置决定：产出节点走另一条路径（不做写回）。
-            if (!options?.sourceText && !contextImages.length && resolveSkillProduces(assistantConfig) === "nodes") {
+            // 形态由技能决定：产出节点的技能（含全部 Agent 技能）走另一条路径（不做写回），
+            // 参考图作为附件一起喂进去——否则「挂图 + 选技能」这条路等于没把图给模型。
+            if (!options?.sourceText && resolveSkillProduces(assistantConfig) === "nodes") {
                 if (options?.scope === "group") return runNodeSkillBatchRef.current?.(node, assistantConfig);
-                return runPromptAssistantNodes(node, assistantConfig, skillId);
+                return runPromptAssistantNodes(node, assistantConfig, skillId, { contextImages });
             }
             const { prompt, truncated } = buildPromptAssistantRequest({ config: assistantConfig, nodeText: sourceText, workflowConstraint: promptAssistantConstraintFor(node), hasImages: contextImages.length > 0 });
             if (truncated) message.info(t("canvas.promptAssistant.truncatedHint"));
@@ -2816,6 +2833,38 @@ function InfiniteCanvasPage() {
             }
         },
         [effectiveConfig, interruptAgentTurn, message, promptAssistantConstraintFor, runPromptAssistantNodes, runPromptAssistantTurn, t],
+    );
+
+    /**
+     * 面板上的「按技能执行」入口。
+     *
+     * 面板能给的输入有两处：输入框里那句指令、以及「参考内容」里连着的图。技能执行以前两样都没带上，
+     * 只读节点正文 —— 而新建的文本节点正文必然为空，于是这条路的表现是「按钮点不动 / 点了没反应」。
+     * 这里按生成侧同一套解析把指令（含 @ 引用）和参考图都备齐再交给技能。
+     */
+    const runTextNodeSkill = useCallback(
+        async (node: CanvasNodeData, scope: "chapter" | "group") => {
+            const config = promptAssistantConfigOf(node);
+            const bodyText = readNodeText(node);
+            const composerPrompt = (node.metadata?.composerContent ?? node.metadata?.prompt ?? "").trim();
+            // 有正文时正文才是原文，输入框那句只是附加指令；正文为空时输入框里的指令就是原文。
+            let sourceText = bodyText || readNodeSourceText(node);
+            let contextImages: string[] = [];
+            try {
+                const context = buildNodeGenerationContext(node.id, nodesRef.current, connectionsRef.current, bodyText ? "" : composerPrompt);
+                if (!bodyText && context.prompt.trim()) sourceText = context.prompt.trim();
+                if (context.referenceImages.length) {
+                    const hydrated = await hydrateNodeGenerationContext(context);
+                    contextImages = hydrated.referenceImages.map((image) => image.dataUrl).filter((url): url is string => Boolean(url));
+                }
+            } catch {
+                // 连线里的引用节点可能已被删除：退回节点正文/输入框文本，仍然让技能跑起来，不必整轮失败。
+            }
+            // 产出节点的技能（含全部 Agent 技能）要自己建节点，不能按「改写这段文字」喂 sourceText。
+            const producesNodes = resolveSkillProduces(config) === "nodes";
+            await runPromptAssistant(node, config, undefined, producesNodes ? { scope, contextImages } : { scope, sourceText, contextImages });
+        },
+        [promptAssistantConfigOf, runPromptAssistant],
     );
 
     /** 产出类技能跑「整个分组」：逐条串行执行（一次只喂一条，避免上下文爆掉）。 */
@@ -6722,7 +6771,7 @@ function InfiniteCanvasPage() {
                     modeOverride={getNodeDefinition(panelNode.type)?.useBuiltinPanel?.mode}
                     promptAssistantConfig={panelNode.type === CanvasNodeType.Text ? promptAssistantConfigOf(panelNode) : undefined}
                     onPromptAssistantChange={panelNode.type === CanvasNodeType.Text ? (patch) => handlePromptAssistantChange(panelNode, { ...promptAssistantConfigOf(panelNode), ...patch }) : undefined}
-                    onOptimizePrompt={panelNode.type === CanvasNodeType.Text ? (scope) => void runPromptAssistant(panelNode, promptAssistantConfigOf(panelNode), undefined, { scope }) : undefined}
+                    onOptimizePrompt={panelNode.type === CanvasNodeType.Text ? (scope) => void runTextNodeSkill(panelNode, scope) : undefined}
                     isOptimizingPrompt={promptAssistantNodeId === panelNode.id}
                     onCancelOptimizePrompt={cancelPromptAssistant}
                     promptAssistantDisabledReason={
@@ -6730,11 +6779,12 @@ function InfiniteCanvasPage() {
                             ? undefined
                             : isNodeLocked(panelNode, nodes)
                               ? t("canvas.promptAssistant.disabledLocked")
-                              : !readNodeText(panelNode)
+                              // 正文和输入框都空、也没连参考图时才拦：挂了图的「反推/风格提取」本来就允许空提示词。
+                              // 本地 Agent 未连接不再做置灰 —— 置灰后点击毫无反馈，用户只会觉得「点了没反应」；
+                              // 放行点击由执行路径弹明确提示（连接方式写在那条提示里）。
+                              : !readNodeSourceText(panelNode) && !(connectedNodesByNodeId.get(panelNode.id) || []).some((item) => item.type === CanvasNodeType.Image && Boolean(item.metadata?.content))
                                 ? t("canvas.promptAssistant.disabledEmpty")
-                                : resolveSkillProduces(promptAssistantConfigOf(panelNode)) === "nodes" && !useAgentStore.getState().connected
-                                  ? t("canvas.promptAssistant.nodesDisabledAgent")
-                                  : undefined
+                                : undefined
                     }
                     onSettingsOpenChange={(open) => {
                         setNodeImageSettingsOpen(open);
@@ -6742,7 +6792,7 @@ function InfiniteCanvasPage() {
                     }}
                 />
             ),
-        [cancelPromptAssistant, configInputsById, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, focusNode, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, handlePromptAssistantChange, mentionReferencesByNodeId, nodes, promptAssistantConfigOf, promptAssistantNodeId, renderPluginPanel, reorderNodeReferences, runPromptAssistant, runningNodeIds, startNodeReferenceSelection, t],
+        [cancelPromptAssistant, configInputsById, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, focusNode, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, handlePromptAssistantChange, mentionReferencesByNodeId, nodes, promptAssistantConfigOf, promptAssistantNodeId, renderPluginPanel, reorderNodeReferences, runTextNodeSkill, runningNodeIds, startNodeReferenceSelection, t],
     );
 
     const renderNodeContentPanel = useCallback(
