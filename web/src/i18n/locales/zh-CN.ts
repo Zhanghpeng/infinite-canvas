@@ -928,6 +928,7 @@ export default {
             "styleReal": "写实",
             "styleAnime": "二次元画风",
             "depth": "深度图",
+            "sensitive": "显示敏感内容",
             "count": "命中 {{count}} 项",
             "scopeAll": "全部",
             "scopeFavorite": "收藏",

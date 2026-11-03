@@ -928,6 +928,7 @@ export default {
             "styleReal": "Realistic",
             "styleAnime": "Anime style",
             "depth": "Depth map",
+            "sensitive": "Show sensitive",
             "count": "{{count}} items",
             "scopeAll": "All",
             "scopeFavorite": "Saved",

@@ -1,4 +1,4 @@
-import { ALL_POSES, POSE_ANGLE_LABELS, POSE_SERIES_LIST, getPoseImageUrl } from "@/lib/canvas/pose-presets";
+import { ALL_POSES, POSE_ANGLE_LABELS, POSE_SERIES_LIST, SAFE_POSE_COUNT, getPoseImageUrl, getPoseThumbUrl } from "@/lib/canvas/pose-presets";
 
 import { readCache, writeCache } from "./cache";
 import { COSTUME_FACET_GROUP_BY_KEYWORD } from "./facet-map";
@@ -52,9 +52,10 @@ export const SYSTEM_LIBRARY_TOTALS: Record<SystemLibraryId, number> = {
     pose: 0,
 };
 
-/** 姿势库总量来自本地数据，不进上面的常量表。 */
-export function getSystemLibraryTotal(id: SystemLibraryId): number {
-    return id === "pose" ? ALL_POSES.length : SYSTEM_LIBRARY_TOTALS[id];
+/** 姿势库总量来自本地数据，不进上面的常量表。敏感内容默认不算在内。 */
+export function getSystemLibraryTotal(id: SystemLibraryId, options?: { includeSensitive?: boolean }): number {
+    if (id !== "pose") return SYSTEM_LIBRARY_TOTALS[id];
+    return options?.includeSensitive ? ALL_POSES.length : SAFE_POSE_COUNT;
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +260,8 @@ function loadPose(): LibraryItem[] {
             key: angle,
             label: POSE_ANGLE_LABELS[angle] || angle,
             short: (POSE_ANGLE_LABELS[angle] || angle).slice(0, 1),
-            thumb: getPoseImageUrl(pose.id, angle),
+            // 网格用 CDN 的 thumbs jpg，插入节点才取 PNG 原图。
+            thumb: getPoseThumbUrl(pose.id, angle),
             image: getPoseImageUrl(pose.id, angle),
             // 深度图与姿势图共用 id 体系（`{组ID}_{视角}`），直接由 id 推导，不额外拉 1MB 索引。
             altThumb: `${CDN.depth}/thumbs/${pose.id}_${angle}.jpg`,
@@ -280,6 +282,7 @@ function loadPose(): LibraryItem[] {
             variants,
             facets: { series: [series], category: pose.category ? [pose.category] : [] },
             search: `${pose.id} ${pose.name} ${pose.category} ${series}`.toLowerCase(),
+            nsfw: pose.nsfw,
         };
     });
 }
@@ -301,7 +304,9 @@ export function loadSystemLibrary(id: SystemLibraryId): Promise<SystemLibrarySou
     if (existing) return existing;
 
     const task = (async () => {
-        const cacheKey = `syslib:v2:${id}`;
+        // v3：姿势库改为与资产弹窗同源的 288 条（带 nsfw 标记）。旧 v2 缓存里没有
+        // nsfw 字段，命中后「显示敏感内容」开关永远不会出现，所以必须换键作废。
+        const cacheKey = `syslib:v3:${id}`;
         const cached = await readCache<LibraryItem[]>(cacheKey);
         if (cached && cached.length) return { id, items: cached };
         const items = await buildLibrary(id);

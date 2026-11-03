@@ -54,6 +54,8 @@ export function SystemLibraryPanel({
     const [scope, setScope] = useState<Scope>("all");
     const [costumeStyle, setCostumeStyle] = useState<CostumeStyle>("real");
     const [depthMode, setDepthMode] = useState(false);
+    /** 姿势库的敏感内容（双人互动）：默认隐藏，和资产弹窗的开关同一语义。 */
+    const [includeSensitive, setIncludeSensitive] = useState(false);
     const [limit, setLimit] = useState(PAGE_SIZE);
 
     const [favorites, setFavorites] = useState<string[]>(() => readFavoriteKeys());
@@ -86,35 +88,46 @@ export function SystemLibraryPanel({
         setOpenGroup(null);
         setLimit(PAGE_SIZE);
         setScope("all");
+        // 敏感内容不跨库记忆：切走再回来默认回到隐藏状态。
+        setIncludeSensitive(false);
     }, [libraryId]);
 
     useEffect(() => {
         setLimit(PAGE_SIZE);
-    }, [deferredQuery, selection, scope]);
+    }, [deferredQuery, selection, scope, includeSensitive]);
 
     const facetGroups = SYSTEM_LIBRARY_FACETS[libraryId];
 
     const tokens = useMemo(() => tokenize(deferredQuery), [deferredQuery]);
 
+    /**
+     * 敏感内容在进入筛选与分面统计之前就被拦掉：否则「双人纠缠」这类分面 chip
+     * 会挂着 0 计数留在界面上，看起来像坏了。
+     */
+    const gatedItems = useMemo(
+        () => (includeSensitive ? items : items.filter((item) => !item.nsfw)),
+        [items, includeSensitive],
+    );
+
     const facetValues = useMemo(() => {
         const map: Record<string, string[]> = {};
-        for (const group of facetGroups) map[group.key] = collectFacetValues(items, group.key);
+        for (const group of facetGroups) map[group.key] = collectFacetValues(gatedItems, group.key);
         return map;
-    }, [items, facetGroups]);
+    }, [gatedItems, facetGroups]);
 
     const scopedItems = useMemo(() => {
         if (scope === "favorite") {
             const set = new Set(favorites);
-            return items.filter((item) => set.has(item.key));
+            return gatedItems.filter((item) => set.has(item.key));
         }
         if (scope === "recent") {
             const order = new Map(recents.map((key, index) => [key, index]));
-            return items
+            return gatedItems
                 .filter((item) => order.has(item.key))
                 .sort((a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0));
         }
-        return items;
-    }, [items, scope, favorites, recents]);
+        return gatedItems;
+    }, [gatedItems, scope, favorites, recents]);
 
     const filtered = useMemo(() => filterLibraryItems(scopedItems, tokens, selection), [scopedItems, tokens, selection]);
 
@@ -199,6 +212,7 @@ export function SystemLibraryPanel({
     const aspect = LIBRARY_ASPECT[libraryId];
     const showStyleSwitch = libraryId === "costume" && items.some((item) => Boolean(item.altThumb));
     const showDepthSwitch = libraryId === "pose";
+    const showSensitiveSwitch = libraryId === "pose" && items.some((item) => item.nsfw);
 
     return (
         <div className="flex h-full flex-col">
@@ -222,7 +236,11 @@ export function SystemLibraryPanel({
                                 }}
                             >
                                 {t(`canvas.systemLibrary.libraries.${id}`)}
-                                {active ? <span className="text-[10px] opacity-60">{items.length || getSystemLibraryTotal(id)}</span> : null}
+                                {active ? (
+                                    <span className="text-[10px] opacity-60">
+                                        {gatedItems.length || getSystemLibraryTotal(id, { includeSensitive })}
+                                    </span>
+                                ) : null}
                             </button>
                         );
                     })}
@@ -240,7 +258,7 @@ export function SystemLibraryPanel({
                 />
             </div>
 
-            {(showStyleSwitch || showDepthSwitch) && (
+            {(showStyleSwitch || showDepthSwitch || showSensitiveSwitch) && (
                 <div className="flex flex-wrap gap-1 px-3 pb-2">
                     {showStyleSwitch ? (
                         <>
@@ -255,6 +273,15 @@ export function SystemLibraryPanel({
                     {showDepthSwitch ? (
                         <MiniChip active={depthMode} theme={theme} onClick={() => setDepthMode((value) => !value)}>
                             {t("canvas.systemLibrary.depth")}
+                        </MiniChip>
+                    ) : null}
+                    {showSensitiveSwitch ? (
+                        <MiniChip
+                            active={includeSensitive}
+                            theme={theme}
+                            onClick={() => setIncludeSensitive((value) => !value)}
+                        >
+                            {t("canvas.systemLibrary.sensitive")}
                         </MiniChip>
                     ) : null}
                 </div>

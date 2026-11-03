@@ -49,6 +49,8 @@ export type LibraryItem = {
     altThumb?: string;
     altPreview?: string;
     altImage?: string;
+    /** 敏感内容（双人互动等）：默认隐藏，面板的「显示敏感内容」开关放行。 */
+    nsfw?: boolean;
 };
 
 export type SystemLibrarySource = {
