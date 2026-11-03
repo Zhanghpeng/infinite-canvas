@@ -9,7 +9,21 @@ import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-p
 import type { CanvasImageAngleParams } from "@/components/canvas/canvas-node-angle-dialog";
 import type { ReferenceImage } from "@/types/image";
 import { nanoid } from "nanoid";
-import { CanvasNodeType, type CanvasAssistantSession, type CanvasConnection, type CanvasGenerationIntent, type CanvasNodeData, type CanvasNodeMetadata } from "@/types/canvas";
+import { CanvasNodeType, type CanvasAssistantSession, type CanvasConnection, type CanvasGenerationIntent, type CanvasGenerationReferenceSnapshot, type CanvasNodeData, type CanvasNodeMetadata } from "@/types/canvas";
+
+export function getVideoToolCategory(config: AiConfig, node?: CanvasNodeData) {
+    const workflowId = node?.metadata?.workflowId || config.workflowId;
+    if (!workflowId) return undefined;
+    const workflow = findWorkflow(config, node?.metadata?.channelId || config.channelId, workflowId);
+    return workflow?.id === workflowId && (workflow.category === "faceRefine" || workflow.category === "depthVideo") ? workflow.category : undefined;
+}
+
+export function snapshotVideoToolInputs(source: CanvasNodeData, images: ReferenceImage[] = []): CanvasGenerationReferenceSnapshot[] {
+    return [
+        { nodeId: source.id, kind: "video", storageKey: source.metadata?.storageKey, url: source.metadata?.storageKey ? undefined : source.metadata?.content, mimeType: source.metadata?.mimeType || "video/mp4" },
+        ...images.map((image): CanvasGenerationReferenceSnapshot => ({ nodeId: image.id, kind: "image", storageKey: image.storageKey, url: image.storageKey ? undefined : image.url || image.dataUrl, mimeType: image.type })),
+    ];
+}
 
 export function imageExtension(dataUrl: string) {
     return dataUrl.match(/^data:image[/]([^;]+)/)?.[1] || dataUrl.match(/image[/]([^;]+)/)?.[1] || "png";
@@ -137,13 +151,14 @@ export function getInputSummary(inputs: NodeGenerationInput[]) {
 }
 
 export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
-    const rawModel = node?.metadata?.modelId || node?.metadata?.model;
-    const model = resolveModelForCapability(config, rawModel, mode);
+    const videoTool = mode === "video" && getVideoToolCategory(config, node);
+    const rawModel = videoTool ? undefined : node?.metadata?.modelId || node?.metadata?.model;
     const channelId = node?.metadata?.channelId || config.channelId;
     // 只有节点自己钉住的工作流才作数。节点已经用模型选择器表达意图时，不能再回落到
     // 全局 `config.workflowId`：那个值属于「上一次在配置里选中的流」，与节点当前渠道、
     // 当前模型毫无关系，回落等于让节点的模型选择静默失效。
     const workflowId = node?.metadata?.workflowId || (rawModel ? undefined : config.workflowId);
+    const model = videoTool ? workflowId! : resolveModelForCapability(config, rawModel, mode);
     let videoMode = node?.metadata?.videoMode;
     // 视频模式的决定顺序：节点上钉住的那条流的分类 > 显式 videoMode > 模型 id 里的 frame 字样
     // > 全局设置。原来只要有 modelId 就无条件按 id 推，把用户手动切的模式（首尾帧开关）覆盖掉；
@@ -156,6 +171,10 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
     }
     if (mode === "video" && !videoMode && node?.metadata?.modelId) {
         videoMode = node.metadata.modelId.includes("frame") ? "frame" : "omni";
+    }
+    // 工具流（换脸/深度）没有首尾帧概念，统一按全能参考走。
+    if (videoTool) {
+        videoMode = "omni";
     }
     if (!videoMode) {
         videoMode = config.videoMode || defaultConfig.videoMode || "omni";
@@ -291,27 +310,6 @@ export function localizeErrorDetails(errorDetails?: string): string | undefined 
         return i18n.t("canvas.projectPage.partialTextFailed");
     }
     return errorDetails;
-}
-
-/**
- * 针对节点卡片紧凑区域的错误展示文案（如提取主机与端口、精简网络状态）
- */
-export function formatCompactErrorMessage(errorDetails?: string): string | undefined {
-    if (!errorDetails) return undefined;
-    const localized = localizeErrorDetails(errorDetails);
-    if (!localized) return undefined;
-
-    const match = localized.match(/无法连接 ComfyUI 服务[（(](https?:\/\/([^/]+))[)）]/);
-    if (match?.[2]) {
-        return `无法连接 ComfyUI (${match[2]})`;
-    }
-    if (localized.includes("无法连接 ComfyUI") || localized.includes("Failed to fetch")) {
-        return "无法连接 ComfyUI 服务";
-    }
-    if (localized.includes("本地网络连接已断开")) {
-        return "本地网络已断开";
-    }
-    return localized;
 }
 
 /**
@@ -548,61 +546,26 @@ export function updateNodeGenerationProgress(
     targetNodeId: string,
     status: string,
     detail?: { jobId?: string; queuePosition?: number; message?: string },
-    imageId?: string,
+    slotId?: string,
 ): CanvasNodeData[] {
-    const isSubmitted = status === "submitted" && Boolean(detail?.jobId);
-    const isPending = status === "pending" && typeof detail?.queuePosition === "number";
-    const isRunning = status === "running";
-    const isRetry = status === "network_retry";
-    const retryText = isRetry ? detail?.message || "服务重连中..." : undefined;
-
-    return nodes.map((item) => {
-        if (item.id !== targetNodeId) return item;
-
-        if (imageId) {
-            const images = item.metadata?.images?.map((img) => {
-                if (img.id !== imageId) return img;
-                return {
-                    ...img,
-                    ...(isSubmitted ? { jobId: detail?.jobId, networkRetryText: undefined } : {}),
-                    ...(isPending ? { queuePosition: detail?.queuePosition, networkRetryText: undefined } : {}),
-                    ...(isRunning ? { queuePosition: undefined, networkRetryText: undefined } : {}),
-                    ...(isRetry ? { networkRetryText: retryText } : {}),
-                };
-            });
-            return {
-                ...item,
-                metadata: {
-                    ...item.metadata,
-                    ...(isSubmitted ? { jobId: detail?.jobId, networkRetryText: undefined } : {}),
-                    ...(isPending ? { queuePosition: detail?.queuePosition, networkRetryText: undefined } : {}),
-                    ...(isRunning ? { queuePosition: undefined, networkRetryText: undefined } : {}),
-                    ...(isRetry ? { networkRetryText: retryText } : {}),
-                    images,
-                },
-            };
-        }
-
-        const images = item.metadata?.images?.map((img) => ({
-            ...img,
-            ...(isSubmitted ? { jobId: detail?.jobId, networkRetryText: undefined } : {}),
-            ...(isPending ? { queuePosition: detail?.queuePosition, networkRetryText: undefined } : {}),
-            ...(isRunning ? { queuePosition: undefined, networkRetryText: undefined } : {}),
-            ...(isRetry ? { networkRetryText: retryText } : {}),
-        }));
-
+    const patch = {
+        ...(status === "submitted" && detail?.jobId ? { jobId: detail.jobId, networkRetryText: undefined } : {}),
+        ...(status === "pending" && typeof detail?.queuePosition === "number" ? { queuePosition: detail.queuePosition, networkRetryText: undefined } : {}),
+        ...(status === "running" ? { queuePosition: undefined, networkRetryText: undefined } : {}),
+        ...(status === "network_retry" ? { networkRetryText: detail?.message || "服务重连中..." } : {}),
+    };
+    return nodes.map((node) => {
+        if (node.id !== targetNodeId) return node;
+        const metadata = node.metadata || {};
+        const slots = metadata.images?.length ? metadata.images : metadata.texts;
         return {
-            ...item,
+            ...node,
             metadata: {
-                ...item.metadata,
-                ...(isSubmitted ? { jobId: detail?.jobId, networkRetryText: undefined } : {}),
-                ...(isPending ? { queuePosition: detail?.queuePosition, networkRetryText: undefined } : {}),
-                ...(isRunning ? { queuePosition: undefined, networkRetryText: undefined } : {}),
-                ...(isRetry ? { networkRetryText: retryText } : {}),
-                ...(images ? { images } : {}),
+                ...metadata,
+                ...(!slots?.length || slots.length === 1 ? patch : {}),
+                images: metadata.images?.map((slot) => !slotId || slot.id === slotId ? { ...slot, ...patch } : slot),
+                texts: metadata.texts?.map((slot) => !slotId || slot.id === slotId ? { ...slot, ...patch } : slot),
             },
         };
     });
 }
-
-

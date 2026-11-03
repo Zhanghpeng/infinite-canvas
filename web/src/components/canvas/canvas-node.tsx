@@ -14,9 +14,9 @@ import type { CanvasNodeContext, CanvasPluginHost } from "@/types/canvas-plugin"
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasVideoPlayer } from "./canvas-video-player";
 import { useTranslation } from "react-i18next";
-import { Tooltip } from "antd";
-import { formatCompactErrorMessage, formatNodeLoadingText, localizeErrorDetails } from "@/lib/canvas/canvas-generation-helpers";
+import { formatNodeLoadingText } from "@/lib/canvas/canvas-generation-helpers";
 import { formatTimecode } from "@/lib/canvas/video-timeline";
+import { CanvasGenerationError } from "./canvas-generation-error";
 
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 const selectionBlue = "#2f80ff";
@@ -552,22 +552,32 @@ export const CanvasNode = React.memo(function CanvasNode({
 });
 
 function NodeContent(props: NodeContentRendererProps) {
-    if (props.node.type === CanvasNodeType.Config && props.renderNodeContent) return props.renderNodeContent(props.node);
-    if (props.isBatchRoot && props.node.type === CanvasNodeType.Image) return <ImageNodeContent {...props} />;
-    if (props.node.type === CanvasNodeType.Text && props.node.metadata?.texts?.length && (props.node.metadata.status !== "error" || props.node.metadata.texts.some((text) => text.content))) return <TextContent {...props} />;
-    if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} node={props.node} />;
-    if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
+    const { node } = props;
+    const slots = (node.type === CanvasNodeType.Image ? node.metadata?.images : node.type === CanvasNodeType.Text ? node.metadata?.texts : undefined) || [];
+    const hasError = node.metadata?.status === "error" || Boolean(node.metadata?.errorDetails) || slots.some((slot) => slot.status === "error");
+    const hasContent = Boolean(node.metadata?.content || slots.some((slot) => slot.content));
+    const isConfig = node.type === CanvasNodeType.Config && Boolean(props.renderNodeContent);
+    const failedWithoutContent = !hasContent && (node.metadata?.status === "error" || slots.length > 0 && slots.every((slot) => slot.status === "error"));
+    if (!isConfig && failedWithoutContent && !props.isBatchRoot) return <CanvasGenerationError node={node} onRetry={props.onRetry} />;
+    const rendersSlots = node.type === CanvasNodeType.Image && props.isBatchRoot || node.type === CanvasNodeType.Text && slots.length > 0;
+    if (!isConfig && node.metadata?.status === "loading" && !rendersSlots) return <LoadingContent theme={props.theme} node={node} />;
 
-    const Renderer = nodeContentRenderers[props.node.type as CanvasNodeType];
-    if (Renderer) return <Renderer {...props} />;
+    const Renderer = nodeContentRenderers[node.type as CanvasNodeType];
+    let content: ReactNode = isConfig ? props.renderNodeContent?.(node) : Renderer ? <Renderer {...props} /> : null;
 
     // Render plugin nodes with their registered renderer, or show the missing-plugin placeholder.
-    const definition = getNodeDefinition(props.node.type);
-    if (definition?.Content && props.pluginContext) {
-        const PluginContent = definition.Content;
-        return <PluginContent ctx={props.pluginContext} />;
+    if (!Renderer) {
+        const definition = getNodeDefinition(node.type);
+        const PluginContent = definition?.Content;
+        content = PluginContent && props.pluginContext ? <PluginContent ctx={props.pluginContext} /> : <MissingPluginContent theme={props.theme} type={node.type} />;
     }
-    return <MissingPluginContent theme={props.theme} type={props.node.type} />;
+    if (!hasError) return content;
+    return (
+        <div className="flex h-full w-full min-w-0 flex-col">
+            <div className={`relative min-h-0 flex-1 ${isConfig ? "thin-scrollbar overflow-y-auto" : ""}`}>{content}</div>
+            <div className="min-h-0 basis-1/2 shrink-0"><CanvasGenerationError node={node} onRetry={isConfig ? undefined : props.onRetry} /></div>
+        </div>
+    );
 }
 
 const nodeContentRenderers = {
@@ -671,36 +681,6 @@ function LoadingContent({ theme, node }: Pick<NodeContentRendererProps, "theme">
             )}
             {segment ? <span className="rounded-full bg-indigo-600/80 px-2 py-0.5 text-[10px] font-medium text-white">{t("canvas.videoTimeline.node.segmentBadge", { index: segment.index + 1 })}</span> : null}
             <span className="text-[10px] tracking-[0.2em]">{loadingText}</span>
-        </div>
-    );
-}
-
-function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "node" | "theme" | "onRetry">) {
-    const { t } = useTranslation();
-    const canResume = Boolean(node.metadata?.jobId);
-    const fullError = localizeErrorDetails(node.metadata?.errorDetails) || t("canvas.node.failed");
-    const compactError = formatCompactErrorMessage(node.metadata?.errorDetails) || t("canvas.node.failed");
-
-    return (
-        <div className="flex max-w-[260px] flex-col items-center gap-3 px-5 text-center">
-            <Tooltip title={fullError} placement="top">
-                <div className="text-xs leading-5 text-red-300 cursor-help line-clamp-3">
-                    {compactError}
-                </div>
-            </Tooltip>
-            <button
-                type="button"
-                className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
-                style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
-                onClick={(event) => {
-                    event.stopPropagation();
-                    onRetry?.(node);
-                }}
-                onMouseDown={(event) => event.stopPropagation()}
-            >
-                <RefreshCw className="size-3.5" />
-                {canResume ? t("canvas.node.resumePolling") : t("canvas.node.retry")}
-            </button>
         </div>
     );
 }
@@ -854,15 +834,11 @@ function TextSlotStatus({ text }: { text: CanvasNodeText }) {
     const failed = text.status === "error";
     const loading = text.status === "loading";
     const loadingText = formatNodeLoadingText(text);
-    const fullError = localizeErrorDetails(text.errorDetails) || t("canvas.node.failed");
-    const compactError = formatCompactErrorMessage(text.errorDetails) || t("canvas.node.failed");
 
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: theme.node.fill, color: failed ? theme.node.text : theme.node.activeStroke }}>
             {failed ? (
-                <Tooltip title={fullError} placement="top">
-                    <span className="text-xs leading-5 text-red-300 cursor-help line-clamp-3">{compactError}</span>
-                </Tooltip>
+                <CanvasGenerationError errorDetails={text.errorDetails} />
             ) : loading ? (
                 <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
             ) : (
@@ -975,10 +951,12 @@ function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
         );
     return (
         <div className="flex h-full w-full flex-col justify-center gap-3 px-4" style={{ background: theme.node.fill, color: theme.node.text }}>
-            <div className="flex min-w-0 items-center gap-2 text-sm opacity-70">
-                <KindIcon className="size-4 shrink-0" />
-                <span className="truncate">{kindLabel}</span>
-            </div>
+            {node.metadata?.status !== "error" ? (
+                <div className="flex min-w-0 items-center gap-2 text-sm opacity-70">
+                    <KindIcon className="size-4 shrink-0" />
+                    <span className="truncate">{kindLabel}</span>
+                </div>
+            ) : null}
             <audio src={node.metadata.content} controls className="w-full" data-canvas-no-zoom />
         </div>
     );
@@ -1120,15 +1098,11 @@ function ImageSlotStatus({ image }: { image?: CanvasNodeImage }) {
     const failed = image?.status === "error";
     const loading = image?.status === "loading";
     const loadingText = formatNodeLoadingText(image);
-    const fullError = localizeErrorDetails(image?.errorDetails) || t("canvas.node.failed");
-    const compactError = formatCompactErrorMessage(image?.errorDetails) || t("canvas.node.failed");
 
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: theme.node.fill, color: failed ? theme.node.text : theme.node.activeStroke }}>
             {failed ? (
-                <Tooltip title={fullError} placement="top">
-                    <span className="text-xs leading-5 text-red-300 cursor-help line-clamp-3">{compactError}</span>
-                </Tooltip>
+                <CanvasGenerationError errorDetails={image?.errorDetails} />
             ) : loading ? (
                 <>
                     <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />

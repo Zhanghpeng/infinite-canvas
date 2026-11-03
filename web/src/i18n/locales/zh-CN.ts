@@ -900,8 +900,6 @@ export default {
             "dragOrClickToInsert": "拖拽或点击插入画布",
             "systemAssets": "系统预设",
             "myAssets": "我的素材",
-            "searchPoses": "搜索姿态、动作、编号...",
-            "noMatchingPoses": "未找到匹配姿态",
             "searchPrompts": "搜索提示词",
             "noPrompts": "暂无提示词",
             "promptCopied": "已复制提示词",
@@ -1077,10 +1075,7 @@ export default {
             "search": "搜索资产",
             "empty": "没有资产",
             "tabMyAssets": "我的素材",
-            "tabPosePresets": "预设姿态库",
-            "searchPoses": "搜索姿态名称或编号...",
-            "emptyPoses": "未找到匹配的姿态预设",
-            "insertAngle": "插入此视角"
+            "tabSystemPresets": "系统预设"
         },
         "imageTools": {
             "copyPrompt": "复制提示词",
@@ -1354,6 +1349,14 @@ export default {
             "stopGeneration": "停止生成",
             "generate": "生成",
             "repeatGeneration": "再次生成",
+            "faceRefineStart": "开始人脸修复",
+            "faceRefineRepeat": "再次修复",
+            "depthVideoStart": "开始提取",
+            "depthVideoRepeat": "再次提取",
+            "depthVideoPrompt": "深度提取无需提示词，可直接开始",
+            "toolInputs": "原视频：{{title}} · 参考图：{{count}} 张",
+            "toolInputsHint": "再次操作沿用保存的原视频和参考图，提示词可调整；更换素材请从目标视频重新打开工具。",
+            "savedToolImages": "已保存参考图 {{count}} 张，连接新参考图可替换",
             "stop": "停止",
             "clearPrompt": "清空提示词",
             "confirmClearTitle": "确定清空提示词？",
@@ -2626,6 +2629,26 @@ export default {
     "locale": {
         "zhCN": "简体中文",
         "enUS": "English"
+    },
+    "systemPresets": {
+        "categories": {
+            "pose": "姿态",
+            "costume": "服装",
+            "portrait": "发型"
+        },
+        "renditions": {
+            "line": "线稿",
+            "depth": "深度"
+        },
+        "search": "搜索名称、编号或提示词...",
+        "allGroups": "全部",
+        "empty": "未找到匹配的预设资产",
+        "loadFailed": "预设资产加载失败",
+        "retry": "重试",
+        "sensitive": "敏感内容",
+        "sensitiveHint": "关闭时隐藏双人互动、内衣、泳装等敏感分类",
+        "insert": "插入",
+        "dragOrClick": "拖拽或点击插入"
     },
     "workflowsPage": {
         "title": "工作流管理与大模型配置",
