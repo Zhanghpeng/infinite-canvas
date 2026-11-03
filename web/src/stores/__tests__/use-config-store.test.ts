@@ -4,6 +4,8 @@ import {
     COMFYUI_DEFAULT_MODELS,
     createModelChannel,
     defaultConfig,
+    getChannelWorkflows,
+    getDefaultComfyWorkflowItems,
     isAiConfigReady,
     isModelSupportedByHost,
     modelOptionLabel,
@@ -457,3 +459,86 @@ describe("isModelSupportedByHost & updateChannelSupportedModels", () => {
     });
 });
 
+
+/**
+ * 工作流管理页的「删除 / 恢复默认」必须是全渠道操作：页面的「保存修改」写的是所有渠道，
+ * 删除只动当前渠道会留下「列表删了、别的渠道还在跑」的错配。
+ */
+describe("工作流全局删除与恢复出厂", () => {
+    const customTextWorkflow = () => ({
+        id: "custom-text-dedupe",
+        name: "我的反推流",
+        category: "text" as const,
+        json: { "1": { class_type: "LoadImage", inputs: { image: "a.png" } } },
+        createdAt: Date.now(),
+        isBuiltin: false,
+    });
+
+    it("removes a custom workflow from every channel", () => {
+        const channels = [createModelChannel({ id: "ch-a" }), createModelChannel({ id: "ch-b" })];
+        useConfigStore.setState({ config: { ...defaultConfig, channels } });
+
+        const custom = customTextWorkflow();
+        useConfigStore.getState().saveWorkflowGlobally(custom);
+        for (const channel of useConfigStore.getState().config.channels) {
+            expect(getChannelWorkflows(channel).some((w) => w.id === custom.id)).toBe(true);
+        }
+
+        useConfigStore.getState().deleteWorkflowGlobally(custom.id);
+        for (const channel of useConfigStore.getState().config.channels) {
+            expect(getChannelWorkflows(channel).some((w) => w.id === custom.id)).toBe(false);
+        }
+    });
+
+    it("restores the factory JSON when deleting a modified built-in workflow", () => {
+        const channel = createModelChannel({ id: "ch-builtin-edit" });
+        useConfigStore.setState({ config: { ...defaultConfig, channels: [channel] } });
+
+        const factory = getDefaultComfyWorkflowItems(channel).find((w) => w.category === "text")!;
+        expect(factory).toBeTruthy();
+
+        useConfigStore.getState().saveWorkflowGlobally({ ...factory, json: { broken: { class_type: "X" } } });
+        const modified = getChannelWorkflows(useConfigStore.getState().config.channels[0]).find((w) => w.id === factory.id)!;
+        expect(modified.json).toEqual({ broken: { class_type: "X" } });
+
+        useConfigStore.getState().deleteWorkflowGlobally(factory.id);
+        const restoredChannel = useConfigStore.getState().config.channels[0];
+        const restored = getChannelWorkflows(restoredChannel).find((w) => w.id === factory.id)!;
+        expect(restored.isBuiltin).toBe(true);
+        expect(restored.json).toEqual(factory.json);
+        // 渠道上按分类缓存的默认工作流必须一起回到出厂版本，否则执行侧还在用改坏的 JSON
+        expect((restoredChannel as any).comfyuiTextWorkflow.json).toEqual(factory.json);
+    });
+
+    it("promotes a sibling workflow when the deleted one was the category default", () => {
+        const channel = createModelChannel({ id: "ch-default" });
+        useConfigStore.setState({ config: { ...defaultConfig, channels: [channel] } });
+
+        const first = { ...customTextWorkflow(), id: "custom-text-a", name: "反推 A" };
+        const second = { ...customTextWorkflow(), id: "custom-text-b", name: "反推 B" };
+        useConfigStore.getState().saveWorkflowGlobally(first);
+        useConfigStore.getState().saveWorkflowGlobally(second);
+        useConfigStore.getState().setChannelDefaultWorkflow(channel.id, "text", first.id);
+
+        useConfigStore.getState().deleteWorkflowGlobally(first.id);
+        const nextChannel = useConfigStore.getState().config.channels[0];
+        const remaining = getChannelWorkflows(nextChannel, "text");
+        expect(remaining.some((w) => w.id === first.id)).toBe(false);
+        expect(remaining.find((w) => w.id === second.id)?.isDefault).toBe(true);
+        expect((nextChannel as any).comfyuiTextWorkflow.name).toBe("反推 B");
+    });
+
+    it("resetWorkflowGlobally restores every channel, not just one", () => {
+        const channels = [createModelChannel({ id: "ch-r1" }), createModelChannel({ id: "ch-r2" })];
+        useConfigStore.setState({ config: { ...defaultConfig, channels } });
+
+        const factory = getDefaultComfyWorkflowItems(channels[0]).find((w) => w.category === "t2i")!;
+        useConfigStore.getState().saveWorkflowGlobally({ ...factory, json: { broken: {} } });
+        useConfigStore.getState().resetWorkflowGlobally(factory.id);
+
+        for (const channel of useConfigStore.getState().config.channels) {
+            const item = getChannelWorkflows(channel).find((w) => w.id === factory.id)!;
+            expect(item.json).toEqual(factory.json);
+        }
+    });
+});

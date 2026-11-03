@@ -15,10 +15,11 @@ import {
     Save,
     Sparkles,
     Star,
+    Trash2,
     Upload,
     Workflow as WorkflowIcon,
 } from "lucide-react";
-import { App, Button, Empty, Input, Segmented, Select, Tag, Tooltip } from "antd";
+import { App, Button, Empty, Input, Popconfirm, Segmented, Select, Tag, Tooltip } from "antd";
 
 import { ComfyFlowGraph } from "@/components/workflow-graph/comfy-flow-graph";
 
@@ -84,7 +85,8 @@ export default function WorkflowsPage() {
     const config = useEffectiveConfig();
     const saveWorkflowGlobally = useConfigStore((state) => state.saveWorkflowGlobally);
     const setChannelDefaultWorkflow = useConfigStore((state) => state.setChannelDefaultWorkflow);
-    const resetChannelWorkflowToBuiltin = useConfigStore((state) => state.resetChannelWorkflowToBuiltin);
+    const resetWorkflowGlobally = useConfigStore((state) => state.resetWorkflowGlobally);
+    const deleteWorkflowGlobally = useConfigStore((state) => state.deleteWorkflowGlobally);
 
     // 当前渠道及基准端点（若 URL 传了 channelId 则锁定对应渠道，否则使用当前默认 ComfyUI 渠道）
     const primaryChannel = useMemo(() => {
@@ -240,15 +242,24 @@ export default function WorkflowsPage() {
         message.success(t("workflowsPage.saveSuccess", { name: updatedWorkflow.name }));
     };
 
-    // 恢复系统内置出厂版本
+    // 恢复系统内置出厂版本（与保存一致，全渠道生效）
     const handleReset = () => {
         if (!primaryChannel || !activeWorkflow || !builtinCounterpart) return;
-        resetChannelWorkflowToBuiltin(primaryChannel.id, activeWorkflow.id);
+        resetWorkflowGlobally(activeWorkflow.id);
         setCurrentName(builtinCounterpart.name);
         setCurrentDesc(builtinCounterpart.description || "");
         setCurrentJson(JSON.parse(JSON.stringify(builtinCounterpart.json)));
         setIsDirty(false);
         message.success(t("workflowsPage.resetDefaultSuccess", { name: builtinCounterpart.name }));
+    };
+
+    // 删除自定义工作流（全渠道）。出厂版本走「恢复默认」，这里只处理导入进来的自定义流
+    const handleDelete = () => {
+        if (!activeWorkflow) return;
+        const name = activeWorkflow.name;
+        deleteWorkflowGlobally(activeWorkflow.id);
+        setIsDirty(false);
+        message.success(t("workflowsPage.deleteSuccess", { name }));
     };
 
     // 导出文件
@@ -500,6 +511,25 @@ export default function WorkflowsPage() {
                                 >
                                     {t("workflowsPage.saveChanges")}
                                 </Button>
+                                {!builtinCounterpart && (
+                                    <Popconfirm
+                                        title={t("workflowsPage.deleteTitle")}
+                                        description={t("workflowsPage.deleteTip")}
+                                        okText={t("workflowsPage.delete")}
+                                        cancelText={t("common.cancel")}
+                                        okButtonProps={{ danger: true }}
+                                        onConfirm={handleDelete}
+                                    >
+                                        <Button
+                                            size="small"
+                                            danger
+                                            icon={<Trash2 className="size-3.5" />}
+                                            title={t("workflowsPage.deleteTip")}
+                                        >
+                                            {t("workflowsPage.delete")}
+                                        </Button>
+                                    </Popconfirm>
+                                )}
                             </div>
                         </div>
 

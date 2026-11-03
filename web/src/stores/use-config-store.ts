@@ -365,6 +365,10 @@ type ConfigStore = {
     saveWorkflowGlobally: (workflow: ComfyWorkflowItem) => void;
     setChannelDefaultWorkflow: (channelId: string, category: WorkflowCategory, workflowId: string) => void;
     resetChannelWorkflowToBuiltin: (channelId: string, workflowId: string) => void;
+    /** 全渠道恢复某条工作流的出厂版本（与 saveWorkflowGlobally 的写入范围保持一致） */
+    resetWorkflowGlobally: (workflowId: string) => void;
+    /** 全渠道移除某条工作流；出厂就有的那条会退化成「恢复出厂」而不是真删 */
+    deleteWorkflowGlobally: (workflowId: string) => void;
     updateChannelSupportedModels: (channelId: string, supportedModelIds: string[]) => void;
 };
 
@@ -545,6 +549,62 @@ export const useConfigStore = create<ConfigStore>()(
                             channels,
                         },
                     };
+                }),
+            resetWorkflowGlobally: (workflowId: string) =>
+                set((state) => {
+                    const channels = state.config.channels.map((channel) => {
+                        const currentWorkflows = getChannelWorkflows(channel);
+                        const target = currentWorkflows.find((w) => w.id === workflowId);
+                        if (!target) return channel;
+                        const builtin = getDefaultComfyWorkflowItems(channel).find(
+                            (w) => w.id === target.id || (w.category === target.category && w.name === target.name)
+                        );
+                        if (!builtin) return channel;
+                        const nextWorkflows = currentWorkflows.map((w) =>
+                            w.id === workflowId ? { ...builtin, id: target.id, isDefault: w.isDefault } : w
+                        );
+                        return syncChannelWorkflowField({ ...channel, workflows: nextWorkflows }, nextWorkflows, target.category);
+                    });
+                    return { config: { ...state.config, channels } };
+                }),
+            deleteWorkflowGlobally: (workflowId: string) =>
+                set((state) => {
+                    const channels = state.config.channels.map((channel) => {
+                        const currentWorkflows = getChannelWorkflows(channel);
+                        const target = currentWorkflows.find((w) => w.id === workflowId);
+                        if (!target) return channel;
+
+                        const defaults = getDefaultComfyWorkflowItems(channel);
+                        const builtin = defaults.find(
+                            (w) => w.id === target.id || (w.category === target.category && w.name === target.name)
+                        );
+
+                        let nextWorkflows: ComfyWorkflowItem[];
+                        if (builtin) {
+                            // 出厂就有的流删不干净：执行侧找不到时会兜底回出厂版本，
+                            // 与其留下「列表没了、生成还在跑」，不如直接恢复出厂。
+                            nextWorkflows = currentWorkflows.map((w) =>
+                                w.id === workflowId ? { ...builtin, id: target.id, isDefault: w.isDefault } : w
+                            );
+                        } else {
+                            nextWorkflows = currentWorkflows.filter((w) => w.id !== workflowId);
+                            if (target.isDefault) {
+                                // 删掉的是渠道默认：优先顶另一条自定义流，没有才回落到出厂内置
+                                const fallback =
+                                    nextWorkflows.find((w) => w.category === target.category && !w.isBuiltin) ||
+                                    nextWorkflows.find((w) => w.category === target.category);
+                                if (fallback) {
+                                    nextWorkflows = nextWorkflows.map((w) => (w.id === fallback.id ? { ...w, isDefault: true } : w));
+                                }
+                            }
+                            if (!nextWorkflows.some((w) => w.category === target.category)) {
+                                nextWorkflows = [...nextWorkflows, ...defaults.filter((w) => w.category === target.category)];
+                            }
+                        }
+
+                        return syncChannelWorkflowField({ ...channel, workflows: nextWorkflows }, nextWorkflows, target.category);
+                    });
+                    return { config: { ...state.config, channels } };
                 }),
             saveWorkflowGlobally: (workflow: ComfyWorkflowItem) =>
                 set((state) => {
@@ -816,6 +876,31 @@ export function createModelChannel(channel?: Partial<ModelChannel>, options?: { 
         comfyuiDepthVideoWorkflow: channel?.comfyuiDepthVideoWorkflow !== undefined ? channel.comfyuiDepthVideoWorkflow : workflows.depthVideo,
     };
     return result;
+}
+
+/**
+ * 工作流条目被替换 / 删除后，同步渠道上按分类缓存的默认工作流快照。
+ * 执行侧（`resolveExecutionWorkflow` 的「渠道绑定流 / 渠道默认流」两档）读的是
+ * `channel.comfyuiXxxWorkflow`，这里不同步就会出现「列表里已经删了、生成还在跑那条流」。
+ */
+function syncChannelWorkflowField(
+    channel: ModelChannel,
+    nextWorkflows: ComfyWorkflowItem[],
+    category: WorkflowCategory,
+): ModelChannel {
+    const channelField = WORKFLOW_CATEGORY_TO_CHANNEL_FIELD[category];
+    if (!channelField) return channel;
+    const fallback =
+        nextWorkflows.find((w) => w.category === category && w.isDefault) || nextWorkflows.find((w) => w.category === category);
+    if (!fallback) return channel;
+    const updatedChannel: ModelChannel = { ...channel };
+    (updatedChannel as any)[channelField] = {
+        name: fallback.name,
+        json: fallback.json,
+        createdAt: fallback.createdAt || 0,
+        isBuiltin: Boolean(fallback.isBuiltin),
+    };
+    return updatedChannel;
 }
 
 export function getChannelWorkflows(channel?: ModelChannel | null, category?: WorkflowCategory | WorkflowCategory[]): ComfyWorkflowItem[] {
