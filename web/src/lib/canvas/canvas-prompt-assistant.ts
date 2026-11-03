@@ -37,21 +37,37 @@ export const DUAL_PROMPT_SEPARATOR = "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 export const DUAL_PROMPT_SKILL_NAME = "h3-ltx25-dual-prompt";
 
 /**
- * 运行时技能里「只回文字」的那几个：视频提示词写作/转换类。
- * 其余 Agent 技能默认会操作画布（建节点），必须走 nodeOutputContract。
- * 名字要与 canvas-agent/builtin-skills 里的 frontmatter.name 一致。
+ * 运行时技能里「视频提示词写作/转换」那一组：技能下拉里单独归一组，
+ * 它们只回文字，且输入必须是参考图 + 一句画面描述。
  */
-const AGENT_INLINE_SKILL_NAMES = new Set([DUAL_PROMPT_SKILL_NAME, "h3-prompt-writing", "h3-to-ltx25-prompt"]);
+const VIDEO_PROMPT_SKILL_NAMES = new Set([DUAL_PROMPT_SKILL_NAME, "h3-prompt-writing", "h3-to-ltx25-prompt"]);
+
+/**
+ * 明确要「在画布上建节点」的运行时技能（白名单，目前为空）。
+ *
+ * 技能按钮的语义是「处理这个文本节点」，所以默认按 inline 处理：把结果写回本节点。
+ * 只有确实要产出一整套新节点的技能才登记在这里——不登记的一律不会去动画布工具，
+ * 这是「职责单一」的兜底，避免选了提示词技能反而在画布上建一堆节点。
+ */
+const AGENT_NODE_SKILL_NAMES = new Set<string>();
 
 export function isInlineAgentSkill(name: string): boolean {
-    return AGENT_INLINE_SKILL_NAMES.has(name);
+    return VIDEO_PROMPT_SKILL_NAMES.has(name);
 }
 
+/**
+ * 技能执行（把当前节点这一句 + 参考图交给某个 Skill 跑）用的请求：
+ * 「技能规则 + 这一句原文 + 参考图编号 + 只输出正文」，不叠加下游工作流约束、
+ * 不展开上游节点正文 —— 技能自己规定了输出形态，多一层规则只会互相打架。
+ */
 export function buildPromptAssistantRequest(input: { config: PromptAssistantConfig; nodeText: string; workflowConstraint?: string; contextBlock?: string; imageCount?: number; hasImages?: boolean }): { prompt: string; truncated: boolean } {
     const blocks: string[] = [];
+    const agentSkill = input.config.skill?.kind === "agent";
     if (input.config.skill?.kind === "builtin") blocks.push(promptSkillInstruction(input.config.skill.id));
     if (input.config.instruction?.trim()) blocks.push(i18n.t("canvas.promptAssistant.extraInstructionTemplate", { instruction: input.config.instruction.trim() }));
-    if (input.workflowConstraint?.trim()) blocks.push(input.workflowConstraint.trim());
+    // 选了运行时技能就不注入「下游工作流要什么形状」：那是没选技能时的通用改写约束，
+    // 和技能自带的产出规范（H3 六段 / LTX 字段）叠在一起会把技能带偏。
+    if (!agentSkill && input.workflowConstraint?.trim()) blocks.push(input.workflowConstraint.trim());
     if (input.contextBlock?.trim()) blocks.push(input.contextBlock.trim());
     // 参考图编号映射：H3 的 <Picture N> 必须与画布 ref_image_0N 槽位、以及发出去的附件名
     // reference-N.png 三者对齐，否则写出来的标签和下游视频节点连的图对不上。
@@ -67,9 +83,9 @@ export function buildPromptAssistantRequest(input: { config: PromptAssistantConf
     } else if (input.hasImages) {
         blocks.push(i18n.t("canvas.promptAssistant.imageContext"));
     }
-    // 走 Agent 时它是「有工具的智能体」，必须明确禁用工具：否则可能去跑命令/读写文件，既慢又要等审批。
+    // 走 Agent 时它是「有工具的智能体」，必须明确禁用工具：否则可能去跑命令/读写文件/动画布节点，既慢又要等审批。
     if (input.config.backend === "agent") blocks.push(i18n.t("canvas.promptAssistant.agentTaskContract"));
-    blocks.push(i18n.t("canvas.promptAssistant.outputContract"));
+    blocks.push(agentSkill ? i18n.t("canvas.promptAssistant.skillOutputContract") : i18n.t("canvas.promptAssistant.outputContract"));
 
     const { text, truncated } = truncatePromptSource(input.nodeText);
     blocks.push(i18n.t("canvas.promptAssistant.sourceBlock", { text }));
@@ -160,6 +176,21 @@ export function readNodeSourceText(node: CanvasNodeData): string {
     return (node.metadata?.composerContent || node.metadata?.prompt || "").trim();
 }
 
+/**
+ * 技能执行的原文：只取当前节点这一句（正文优先，空则输入框里的指令）。
+ *
+ * `@[node:id]` 引用换成那个节点的标题——只换名字，不展开它的正文。展开上游正文属于生成侧
+ * （要拿整条链路喂模型），技能执行只该处理「当前节点 + 参考图」这一件事。
+ */
+export function readSkillSourceText(node: CanvasNodeData, nodes: CanvasNodeData[] = []): string {
+    const text = readNodeSourceText(node);
+    if (!text) return "";
+    const titleById = new Map(nodes.map((item) => [item.id, item.title]));
+    return text
+        .replace(/@\[node:([^\]]+)\]/g, (_match, id: string) => titleById.get(id) || id)
+        .trim();
+}
+
 /** 优化结果先落成一条新备选（不覆盖原文），流式期间就挂在它上面，用户能边写边看。 */
 export function appendOptimizedTextSlot(node: CanvasNodeData): { slotId: string; texts: CanvasNodeText[] } {
     const slotId = nanoid();
@@ -190,14 +221,14 @@ export function cleanOptimizedPrompt(raw: string): string {
     return text.trim();
 }
 
-/** 产出形态由技能决定：内置技能按声明，运行时 Skill 默认「产出节点」；没选技能时返回 undefined（走普通生成）。 */
+/**
+ * 产出形态由技能决定：内置技能按声明；运行时技能默认「改写这段文字」（inline），
+ * 只有登记进 AGENT_NODE_SKILL_NAMES 的才在画布上建节点；没选技能时返回 undefined（走普通生成）。
+ */
 export function resolveSkillProduces(config: PromptAssistantConfig): PromptSkillProduces | undefined {
     if (!config.skill) return undefined;
     if (config.skill.kind === "builtin") return promptSkillProduces(config.skill.id);
-    // 视频提示词写作/转换类技能只回文字：走 agentTaskContract（禁工具）并把答案写回本节点。
-    // 若一律判成 nodes，请求会塞 nodeOutputContract 要求建文本卡，技能却只输出提示词，
-    // 两边打架就是「选了技能点发送没反应/报错」的根因。
-    return isInlineAgentSkill(config.skill.name) ? "inline" : "nodes";
+    return AGENT_NODE_SKILL_NAMES.has(config.skill.name) ? "nodes" : "inline";
 }
 
 /**

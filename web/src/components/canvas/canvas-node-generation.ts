@@ -327,6 +327,20 @@ export async function hydrateNodeGenerationContext(context: NodeGenerationContex
     return { ...context, referenceImages: await Promise.all(context.referenceImages.map(async (image) => ({ ...image, dataUrl: await imageToDataUrl(image) }))) };
 }
 
+/**
+ * 只取「连到这个节点的参考图」，按连线顺序，转成可直接发出去的 dataUrl。
+ *
+ * 技能执行（提示词产出）只需要图：生成上下文里那套 `@[node:x]` 引用展开、上游文本节点正文拼接
+ * 都是生成侧的职责，混进技能输入会把「处理当前节点这一句」变成「处理整条上游链路」。
+ * 这里给空 prompt 走一遍上下文构造，就只为拿按序排好的 referenceImages。
+ */
+export async function collectNodeReferenceImages(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]): Promise<ReferenceImage[]> {
+    const context = buildNodeGenerationContext(nodeId, nodes, connections, "");
+    if (!context.referenceImages.length) return [];
+    const hydrated = await hydrateNodeGenerationContext(context);
+    return hydrated.referenceImages.filter((image) => Boolean(image.dataUrl));
+}
+
 function readNodeTextInput(node: CanvasNodeData) {
     if (node.type === CanvasNodeType.Text) return node.metadata?.content || node.metadata?.prompt || "";
     return node.metadata?.prompt || "";

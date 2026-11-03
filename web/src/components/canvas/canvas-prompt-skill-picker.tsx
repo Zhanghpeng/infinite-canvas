@@ -2,7 +2,7 @@ import { Select, type SelectProps } from "antd";
 import { Bot, Cpu, Sparkles, WandSparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { DUAL_PROMPT_SKILL_NAME, isInlineAgentSkill, type PromptAssistantConfig, type PromptAssistantSkillRef } from "@/lib/canvas/canvas-prompt-assistant";
+import { DUAL_PROMPT_SKILL_NAME, isInlineAgentSkill, resolveSkillProduces, type PromptAssistantConfig, type PromptAssistantSkillRef } from "@/lib/canvas/canvas-prompt-assistant";
 import { BUILTIN_PROMPT_SKILLS, promptSkillHint, promptSkillLabel } from "@/lib/canvas/prompt-skills";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
 import { useAgentStore } from "@/stores/use-agent-store";
@@ -99,21 +99,24 @@ export function CanvasPromptSkillPicker({ config, onChange }: { config: PromptAs
     const agentSkills = useAgentSkillStore((state) => state.skills);
     const loadSkills = useAgentSkillStore((state) => state.loadSkills);
 
-    // 视频提示词类技能只回文字、写回本节点；其余运行时技能会操作画布。
-    // 分组与标签按真实产出形态来，别再一律标成「产出节点」。
+    // 视频提示词类技能单独成组，方便一次找到；标签一律按技能真实产出形态打，
+    // 不再「运行时技能 = 产出节点」硬编码（技能执行默认就是写回本节点）。
     const videoRecipes = agentSkills.filter((skill) => isInlineAgentSkill(skill.name));
     const canvasSkills = agentSkills.filter((skill) => !isInlineAgentSkill(skill.name));
-    const agentSkillOption = (skill: (typeof agentSkills)[number], inline: boolean) => ({
-        value: `agent:${skill.name}|${skill.path}`,
-        label: (
-            <OptionLabel
-                icon={<Sparkles className="size-3 shrink-0 text-stone-400" />}
-                text={skill.interface?.displayName || skill.name}
-                hint={skill.name === DUAL_PROMPT_SKILL_NAME ? t("canvas.promptAssistant.dualPromptSkillHint") : skill.shortDescription || skill.description}
-                tag={t(inline ? "canvas.promptAssistant.producesInline" : "canvas.promptAssistant.producesNodes")}
-            />
-        ),
-    });
+    const agentSkillOption = (skill: (typeof agentSkills)[number]) => {
+        const produces = resolveSkillProduces({ backend: "agent", skill: { kind: "agent", name: skill.name, path: skill.path } });
+        return {
+            value: `agent:${skill.name}|${skill.path}`,
+            label: (
+                <OptionLabel
+                    icon={<Sparkles className="size-3 shrink-0 text-stone-400" />}
+                    text={skill.interface?.displayName || skill.name}
+                    hint={skill.name === DUAL_PROMPT_SKILL_NAME ? t("canvas.promptAssistant.dualPromptSkillHint") : skill.shortDescription || skill.description}
+                    tag={t(produces === "nodes" ? "canvas.promptAssistant.producesNodes" : "canvas.promptAssistant.producesInline")}
+                />
+            ),
+        };
+    };
 
     const options: SelectProps["options"] = [
         {
@@ -134,7 +137,7 @@ export function CanvasPromptSkillPicker({ config, onChange }: { config: PromptAs
             ? [
                   {
                       label: <span className="text-[11px] font-semibold text-stone-400">{t("canvas.promptAssistant.videoPromptSkillGroup")}</span>,
-                      options: videoRecipes.map((skill) => agentSkillOption(skill, true)),
+                      options: videoRecipes.map(agentSkillOption),
                   },
               ]
             : []),
@@ -142,7 +145,7 @@ export function CanvasPromptSkillPicker({ config, onChange }: { config: PromptAs
             ? [
                   {
                       label: <span className="text-[11px] font-semibold text-stone-400">{t("canvas.promptAssistant.agentSkills")}</span>,
-                      options: canvasSkills.map((skill) => agentSkillOption(skill, false)),
+                      options: canvasSkills.map(agentSkillOption),
                   },
               ]
             : []),

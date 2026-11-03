@@ -15,6 +15,7 @@ import {
     isInlineAgentSkill,
     readNodeText,
     readNodeSourceText,
+    readSkillSourceText,
     resolveSkillProduces,
     assistantOutputSummaryText,
     resolveWorkflowConstraint,
@@ -67,8 +68,10 @@ describe("resolveSkillProduces", () => {
         expect(resolveSkillProduces({ ...base, skill: { kind: "builtin", id: "novel-deconstruct" } })).toBe("nodes");
     });
 
-    it("treats a runtime agent skill as node output by default", () => {
-        expect(resolveSkillProduces({ ...base, skill: { kind: "agent", name: "novel-deconstruct", path: "/tmp/x" } })).toBe("nodes");
+    it("treats a runtime agent skill as text-only by default", () => {
+        // 技能按钮的语义是「处理这个文本节点」，所以运行时技能默认写回本节点，不去动画布。
+        expect(resolveSkillProduces({ ...base, skill: { kind: "agent", name: "novel-deconstruct", path: "/tmp/x" } })).toBe("inline");
+        expect(resolveSkillProduces({ ...base, skill: { kind: "agent", name: "director-shot-design", path: "/tmp/y" } })).toBe("inline");
     });
 });
 
@@ -289,15 +292,37 @@ describe("assistantOutputSummaryText", () => {
 });
 
 describe("video prompt recipes", () => {
-    it("treats the dual-prompt and H3/LTX skills as text-only, others as canvas output", () => {
+    it("keeps every runtime skill text-only so the canvas is never touched", () => {
         const produces = (name: string) => resolveSkillProduces({ backend: "agent", skill: { kind: "agent", name, path: `skills/${name}` } });
         expect(produces(DUAL_PROMPT_SKILL_NAME)).toBe("inline");
         expect(produces("h3-prompt-writing")).toBe("inline");
         expect(produces("h3-to-ltx25-prompt")).toBe("inline");
-        expect(produces("director-shot-design")).toBe("nodes");
+        expect(produces("director-shot-design")).toBe("inline");
         expect(resolveSkillProduces({ backend: "agent" })).toBeUndefined();
         expect(isInlineAgentSkill(DUAL_PROMPT_SKILL_NAME)).toBe(true);
         expect(isInlineAgentSkill("storyboard")).toBe(false);
+    });
+
+    it("drops the downstream workflow constraint once a runtime skill is in charge", () => {
+        const constraint = resolveWorkflowConstraint("text", ["prompt"]);
+        const skillConfig = { backend: "agent" as const, skill: { kind: "agent" as const, name: DUAL_PROMPT_SKILL_NAME, path: "skills/dual" } };
+        const withSkill = buildPromptAssistantRequest({ config: skillConfig, nodeText: "雨夜街头", workflowConstraint: constraint });
+        // 技能自己规定了输出形态，再叠一层「写成结构清晰的说明」只会把技能带偏。
+        expect(withSkill.prompt).not.toContain(constraint);
+        expect(withSkill.prompt).toContain(i18n.t("canvas.promptAssistant.skillOutputContract"));
+        // 没选运行时技能时，这条约束照旧生效。
+        const plain = buildPromptAssistantRequest({ config: { backend: "agent" }, nodeText: "雨夜街头", workflowConstraint: constraint });
+        expect(plain.prompt).toContain(constraint);
+    });
+
+    it("reads only the current node text and never expands an upstream node body", () => {
+        const upstream = { ...textNode("上游那一整段正文"), id: "up1", title: "参考图一" };
+        const current = { ...textNode(""), id: "cur", title: "当前节点", metadata: { content: "", status: "success" as const, fontSize: 14, composerContent: "按 @[node:up1] 这张图写一段镜头描述" } };
+        const text = readSkillSourceText(current, [upstream, current]);
+        expect(text).toContain("按");
+        // @ 引用只换成节点标题，不把上游正文展开进来。
+        expect(text).toContain("参考图一");
+        expect(text).not.toContain("上游那一整段正文");
     });
 
     it("maps every attached image to <Picture N> and ref_image_0N in connection order", () => {

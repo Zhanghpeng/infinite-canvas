@@ -42,7 +42,7 @@ import { CanvasNodeUpscaleDialog, type CanvasImageUpscaleParams } from "@/compon
 import { CanvasFaceRefineModal } from "@/components/canvas/canvas-face-refine-modal";
 import { CanvasVideoTimelineModal, type VideoEditPlan } from "@/components/canvas/canvas-video-timeline-modal";
 import { CanvasDepthVideoModal } from "@/components/canvas/canvas-depth-video-modal";
-import { buildNodeGenerationContext, buildNodeGenerationInputs, buildNodeResponseMessages, hydrateNodeGenerationContext, type NodeGenerationContext, type NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
+import { collectNodeReferenceImages, buildNodeGenerationContext, buildNodeGenerationInputs, buildNodeResponseMessages, hydrateNodeGenerationContext, type NodeGenerationContext, type NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import { CanvasNodeHoverToolbar, CanvasNodeInfoModal } from "@/components/canvas/canvas-node-hover-toolbar";
 import { CanvasNodeInspectorOverlay } from "@/components/canvas/canvas-node-inspector-overlay";
 import { InfiniteCanvas } from "@/components/canvas/infinite-canvas";
@@ -70,7 +70,7 @@ import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { buildNodeMentionReferences, getGroupResourceNodes, isCanvasReferenceNode, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { collectCollapsedNodeIds, collectGroupDescendantIds, isNodeLocked } from "@/lib/canvas/canvas-group-collapse";
-import { applyOptimizedText, appendOptimizedTextSlot, assistantOutputSummaryText, buildNodeOutputRequest, buildPromptAssistantRequest, cleanOptimizedPrompt, collectWorkflowSlots, DUAL_PROMPT_SEPARATOR, DUAL_PROMPT_SKILL_NAME, MAX_ASSISTANT_SOURCE_CHARS, readNodeSourceText, readNodeText, resolveAssistantTargetCategory, resolveSkillProduces, resolveWorkflowConstraint, revertOptimizedTextSlot, summarizeAssistantOutput, type PromptAssistantConfig } from "@/lib/canvas/canvas-prompt-assistant";
+import { applyOptimizedText, appendOptimizedTextSlot, assistantOutputSummaryText, buildNodeOutputRequest, buildPromptAssistantRequest, cleanOptimizedPrompt, collectWorkflowSlots, DUAL_PROMPT_SEPARATOR, DUAL_PROMPT_SKILL_NAME, MAX_ASSISTANT_SOURCE_CHARS, readNodeSourceText, readSkillSourceText, resolveAssistantTargetCategory, resolveSkillProduces, resolveWorkflowConstraint, revertOptimizedTextSlot, summarizeAssistantOutput, type PromptAssistantConfig } from "@/lib/canvas/canvas-prompt-assistant";
 import type { BuiltinPromptSkillId } from "@/lib/canvas/prompt-skills";
 import { readAgentClientId } from "@/lib/agent/agent-client-id";
 import { AgentApiError, fetchAgentJson, interruptCodexTurn } from "@/services/api/canvas-agent";
@@ -2743,7 +2743,14 @@ function InfiniteCanvasPage() {
                 if (options?.scope === "group") return runNodeSkillBatchRef.current?.(node, assistantConfig);
                 return runPromptAssistantNodes(node, assistantConfig, skillId, { contextImages });
             }
-            const { prompt, truncated } = buildPromptAssistantRequest({ config: assistantConfig, nodeText: sourceText, workflowConstraint: promptAssistantConstraintFor(node), imageCount: contextImages.length });
+            const { prompt, truncated } = buildPromptAssistantRequest({
+                config: assistantConfig,
+                nodeText: sourceText,
+                // 运行时技能自己规定输出形态：不再叠「下游工作流要什么形状」的通用约束，
+                // 也不为它白算一遍默认工作流槽位。
+                workflowConstraint: assistantConfig.skill?.kind === "agent" ? undefined : promptAssistantConstraintFor(node),
+                imageCount: contextImages.length,
+            });
             if (truncated) message.info(t("canvas.promptAssistant.truncatedHint"));
 
             // 原文不动：先挂一条空备选承接流式结果，显示仍留在原文上，直到第一个字回来。
@@ -2843,31 +2850,25 @@ function InfiniteCanvasPage() {
     );
 
     /**
-     * 面板上的「按技能执行」入口。
+     * 面板上的「按技能执行」入口：职责单一 —— 取这个节点自己的一句话 + 连到它的参考图，
+     * 交给选中的技能跑一轮，结果写回本节点。
      *
-     * 面板能给的输入有两处：输入框里那句指令、以及「参考内容」里连着的图。技能执行以前两样都没带上，
-     * 只读节点正文 —— 而新建的文本节点正文必然为空，于是这条路的表现是「按钮点不动 / 点了没反应」。
-     * 这里按生成侧同一套解析把指令（含 @ 引用）和参考图都备齐再交给技能。
+     * 刻意不做的事（以前都做了，是「选了技能却在处理别的东西」的来源）：
+     * - 不再走生成上下文的文本拼接：那会把上游文本节点的正文、@ 引用展开后的内容一起塞进来；
+     * - 不再推断下游工作流形状去补约束：那是「没选技能时的通用改写」才需要的东西；
+     * - 不再让技能动画布：产出形态默认 inline，见 resolveSkillProduces。
      */
     const runTextNodeSkill = useCallback(
         async (node: CanvasNodeData, scope: "chapter" | "group") => {
             const config = promptAssistantConfigOf(node);
-            const bodyText = readNodeText(node);
-            const composerPrompt = (node.metadata?.composerContent ?? node.metadata?.prompt ?? "").trim();
-            // 有正文时正文才是原文，输入框那句只是附加指令；正文为空时输入框里的指令就是原文。
-            let sourceText = bodyText || readNodeSourceText(node);
+            const sourceText = readSkillSourceText(node, nodesRef.current);
             let contextImages: string[] = [];
             try {
-                const context = buildNodeGenerationContext(node.id, nodesRef.current, connectionsRef.current, bodyText ? "" : composerPrompt);
-                if (!bodyText && context.prompt.trim()) sourceText = context.prompt.trim();
-                if (context.referenceImages.length) {
-                    const hydrated = await hydrateNodeGenerationContext(context);
-                    contextImages = hydrated.referenceImages.map((image) => image.dataUrl).filter((url): url is string => Boolean(url));
-                }
+                const images = await collectNodeReferenceImages(node.id, nodesRef.current, connectionsRef.current);
+                contextImages = images.map((image) => image.dataUrl).filter((url): url is string => Boolean(url));
             } catch {
-                // 连线里的引用节点可能已被删除：退回节点正文/输入框文本，仍然让技能跑起来，不必整轮失败。
+                // 连线里的节点可能已被删除：没有图也让这条路跑起来，不必整轮失败。
             }
-            // 产出节点的技能（含全部 Agent 技能）要自己建节点，不能按「改写这段文字」喂 sourceText。
             const producesNodes = resolveSkillProduces(config) === "nodes";
             await runPromptAssistant(node, config, undefined, producesNodes ? { scope, contextImages } : { scope, sourceText, contextImages });
         },
