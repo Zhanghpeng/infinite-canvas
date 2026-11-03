@@ -2146,6 +2146,19 @@ function imageReferenceSlots(workflow: ComfyuiWorkflowJson) {
 }
 
 /**
+ * 文本工作流的参考图槽位数：除了 `ref_image_01..NN`，还要认老工作流那个不编号的
+ * `image` 槽位（`imageReferenceSlots` 的严格正则故意不含它，图像链路别动）。
+ */
+function textReferenceSlots(workflow: ComfyuiWorkflowJson) {
+    return Object.values(workflow).filter((node) => {
+        const title = node && typeof node === "object" ? (node as { _meta?: { title?: unknown } })._meta?.title : undefined;
+        if (typeof title !== "string") return false;
+        const normalized = title.trim().toLowerCase();
+        return normalized === "image" || normalized === "ref_image" || /^ref_image_\d{2}$/.test(normalized);
+    });
+}
+
+/**
  * Run a full ComfyUI image generation: resolve the channel and model, bind the
  * generation params into the model's workflow, submit the job, poll it until
  * completion and download the outputs as data urls.
@@ -2826,7 +2839,7 @@ export async function requestComfyuiText(req: ComfyuiTextRequest): Promise<{ tex
                   : []
             ).filter((url): url is string => typeof url === "string" && Boolean(url));
 
-            const referenceSlots = imageReferenceSlots(textWorkflow.json as unknown as ComfyuiWorkflowJson);
+            const referenceSlots = textReferenceSlots(textWorkflow.json as unknown as ComfyuiWorkflowJson);
             if (imageDataUrls.length > 0 && referenceSlots.length === 0) {
                 throw new ComfyuiError(i18n.t("comfyui.noImageReferenceSlot"));
             }

@@ -634,4 +634,22 @@ describe("dispatchComfyuiModelWorkflow (Cascade Pruning & Parameter Injection)",
         expect((noImage["30"] as any).inputs["图像_01"]).toBeUndefined();
         expect(noImage["30"]).toBeDefined();
     });
+
+    it("keeps the legacy unnumbered image slot working", () => {
+        // 老工作流用 `_meta.title = "image"`（不带 ref_image 前缀）挂单张参考图，
+        // 多图改造后这条路不能断。
+        const legacyWorkflow = {
+            "1": { inputs: { value: "" }, class_type: "PrimitiveStringMultiline", _meta: { title: "prompt" } },
+            "9": { inputs: { prompt: ["1", 0], image: ["12", 0] }, class_type: "TextGenerate", _meta: { title: "TextGenerate" } },
+            "12": { inputs: { image: "stale.png" }, class_type: "LoadImage", _meta: { title: "image" } },
+        };
+
+        const bound = applyTextBindings(legacyWorkflow as any, { prompt: "看图说话", assetIds: ["uploaded.png"] });
+        expect((bound["12"] as any).inputs.image).toBe("uploaded.png");
+        expect((bound["9"] as any).inputs.image).toEqual(["12", 0]);
+
+        const pruned = applyTextBindings(legacyWorkflow as any, { prompt: "纯文本" });
+        expect(pruned["12"]).toBeUndefined();
+        expect((pruned["9"] as any).inputs.image).toBeUndefined();
+    });
 });
