@@ -17,6 +17,7 @@ import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
 export { formatIngestSuccessMessage, ingestWorkflow, type IngestOptions, type IngestResult, type DetectedSlotInfo, type AmbiguityInfo } from "./comfyui-adapter";
+import { collectConsumerImageSlots } from "./consumer-image-slots";
 import {
     dispatchComfyuiModelWorkflow,
     getModelProfile,
@@ -2165,6 +2166,9 @@ function textReferenceSlots(workflow: ComfyuiWorkflowJson) {
  * 在这里拦会把本来能跑的流判死。
  */
 function videoImageSlotLimit(workflow: ComfyuiWorkflowJson): number | null {
+    // 主节点的消费键才是真实槽位（内置 H3 流 9 个、自定义流也可能 9 个但只有 7 个打了标题）
+    const consumerSlots = collectConsumerImageSlots(workflow as unknown as Record<string, unknown>);
+    if (consumerSlots.length) return consumerSlots.length;
     let numbered = 0;
     for (const node of Object.values(workflow)) {
         const title = node && typeof node === "object" ? (node as { _meta?: { title?: unknown } })._meta?.title : undefined;
@@ -3123,7 +3127,10 @@ export function applyVideoBindings(
 
     let boundPrompt = false;
     let refIndex = 0;
-    for (const node of Object.values(cloned)) {
+    /** 已经写入过图片的节点 / 已经消费掉的图片下标：用于给「标题没标 ref_image」的槽位补位 */
+    const boundImageNodeIds = new Set<string>();
+    const consumedImageIndexes = new Set<number>();
+    for (const [nodeId, node] of Object.entries(cloned)) {
         if (typeof node !== "object" || node === null) continue;
         const record = node as NodeRecord;
         const rawTitle = record._meta?.title;
@@ -3170,11 +3177,16 @@ export function applyVideoBindings(
                 const idx = Number(numberedMatch[1]) - 1;
                 if (params.assetIds[idx]) {
                     record.inputs.image = params.assetIds[idx];
+                    boundImageNodeIds.add(nodeId);
+                    consumedImageIndexes.add(idx);
                 }
             } else if (title === "ref_image" || title === "image" || title.includes("input_image")) {
-                const assetId = params.assetIds[refIndex % params.assetIds.length];
+                const picked = refIndex % params.assetIds.length;
+                const assetId = params.assetIds[picked];
                 refIndex++;
                 record.inputs.image = assetId;
+                boundImageNodeIds.add(nodeId);
+                consumedImageIndexes.add(picked);
             }
         }
 
@@ -3211,6 +3223,33 @@ export function applyVideoBindings(
             else if ("sampling_mode.seed" in record.inputs) record.inputs["sampling_mode.seed"] = params.seed;
             else if ("noise_seed" in record.inputs) record.inputs.noise_seed = params.seed;
             else if ("value" in record.inputs && title === "seed") record.inputs.value = params.seed;
+        }
+    }
+
+    /**
+     * 补位：把没被标题认领的参考图，按主节点 ref_images.ref_image_N 的顺序填进剩余槽位。
+     *
+     * 自定义导入的 H3 流常见两种写法：主参考图节点的标题是默认的「加载图像」，
+     * 或者标号从 ref_image_03 起跳。只按「title 编号 = 第 N 张图」硬对应时，
+     * 用户连的第 1、2 张图没有任何槽位接收，槽位里留着录制时的示例文件名
+     * （`老鼠父亲 (1).png` / `鸭子儿子.png`）被一起提交 —— 生成结果与参考图无关且不报错。
+     */
+    if (params.assetIds?.length) {
+        const pending = params.assetIds
+            .map((_, index) => index)
+            .filter((index) => !consumedImageIndexes.has(index));
+        if (pending.length) {
+            const slots = collectConsumerImageSlots(cloned).filter((slot) => !boundImageNodeIds.has(slot.nodeId));
+            for (let i = 0; i < slots.length && i < pending.length; i++) {
+                const slot = slots[i];
+                const record = cloned[slot.nodeId] as NodeRecord | undefined;
+                if (!record?.inputs) continue;
+                const key = slot.inputKey in record.inputs ? slot.inputKey : "image" in record.inputs ? "image" : undefined;
+                if (!key) continue;
+                record.inputs[key] = params.assetIds[pending[i]];
+                boundImageNodeIds.add(slot.nodeId);
+                consumedImageIndexes.add(pending[i]);
+            }
         }
     }
 
@@ -3252,7 +3291,8 @@ export function applyVideoBindings(
         const imgMatch = /^ref_image_(\d{2})$/.exec(title);
         if (imgMatch) {
             const idx = Number(imgMatch[1]) - 1;
-            if (idx >= assignedImageCount) removedNodeIds.add(id);
+            // 补位阶段已经写入图片的节点不能按标号删（自定义流的标号不一定从 01 起跳）
+            if (idx >= assignedImageCount && !boundImageNodeIds.has(id)) removedNodeIds.add(id);
         }
         const vidMatch = /^ref_video_(0[1-9])$/.exec(title);
         if (vidMatch) {
@@ -3303,7 +3343,7 @@ export function applyVideoBindings(
 
             let shouldPrune = false;
             const imgIn = /^ref_images\.ref_image_(\d+)$/.exec(inputKey);
-            if (imgIn && Number(imgIn[1]) >= assignedImageCount) shouldPrune = true;
+            if (imgIn && Number(imgIn[1]) >= assignedImageCount && !boundImageNodeIds.has(upstreamId)) shouldPrune = true;
             const vidIn = /^ref_videos\.ref_video_(\d+)$/.exec(inputKey);
             if (vidIn && Number(vidIn[1]) >= assignedVideoCount) shouldPrune = true;
             const audIn = /^ref_audios\.ref_audio_(\d+)$/.exec(inputKey);

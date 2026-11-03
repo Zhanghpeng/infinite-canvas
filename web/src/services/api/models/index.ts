@@ -4,6 +4,7 @@ import type {
     WorkflowCapabilityConfig,
     WorkflowModelProfile,
 } from "./types";
+import { collectConsumerImageSlots } from "../consumer-image-slots";
 import {
     videoMinimaxH3OmniFp8PdmdProfile,
     videoMinimaxH3OmniFp8Profile,
@@ -292,8 +293,12 @@ export function dispatchComfyuiModelWorkflow(
 
     const cloned = structuredClone(rawWorkflow) as Record<string, NodeRecord>;
 
+    /** 已经写入过图片的节点 / 已经消费掉的图片下标：用于给「标题没标 ref_image」的槽位补位 */
+    const boundImageNodeIds = new Set<string>();
+    const consumedImageIndexes = new Set<number>();
+
     // Pass 1: 槽位参数注入
-    for (const node of Object.values(cloned)) {
+    for (const [nodeId, node] of Object.entries(cloned)) {
         if (typeof node !== "object" || node === null) continue;
         const rawTitle = node._meta?.title;
         const title = typeof rawTitle === "string" ? rawTitle.trim().toLowerCase() : "";
@@ -369,6 +374,8 @@ export function dispatchComfyuiModelWorkflow(
                 const idx = Number(numberedMatch[1]) - 1;
                 if (params.assetIds[idx]) {
                     node.inputs.image = params.assetIds[idx];
+                    boundImageNodeIds.add(nodeId);
+                    consumedImageIndexes.add(idx);
                 }
             }
         }
@@ -402,6 +409,33 @@ export function dispatchComfyuiModelWorkflow(
         }
     }
 
+    /**
+     * 补位：把没被标题认领的参考图，按主节点 ref_images.ref_image_N 的顺序填进剩余槽位。
+     *
+     * 自定义导入的 H3 流常见两种写法：主参考图节点的标题是 ComfyUI 默认的「加载图像」，
+     * 或者标号从 ref_image_03 起跳。只按「title 编号 = 第 N 张图」硬对应时，用户连的
+     * 第 1、2 张图没有任何槽位接收，槽位里留着录制时的示例文件名（老鼠父亲.png 之类）
+     * 被一起提交 —— 生成结果与参考图无关，还不报错。
+     */
+    if (params.assetIds?.length) {
+        const pending = params.assetIds
+            .map((_, index) => index)
+            .filter((index) => !consumedImageIndexes.has(index));
+        if (pending.length) {
+            const slots = collectConsumerImageSlots(cloned).filter((slot) => !boundImageNodeIds.has(slot.nodeId));
+            for (let i = 0; i < slots.length && i < pending.length; i++) {
+                const slot = slots[i];
+                const record = cloned[slot.nodeId];
+                if (!record?.inputs) continue;
+                const key = slot.inputKey in record.inputs ? slot.inputKey : "image" in record.inputs ? "image" : undefined;
+                if (!key) continue;
+                record.inputs[key] = params.assetIds[pending[i]];
+                boundImageNodeIds.add(slot.nodeId);
+                consumedImageIndexes.add(pending[i]);
+            }
+        }
+    }
+
     // Pass 2: 动态级联修剪（抹除未分配的插槽与桥接转换节点）
     const assignedImageCount = params.assetIds?.length || 0;
     const assignedVideoCount = params.videoAssetIds?.length || 0;
@@ -424,7 +458,7 @@ export function dispatchComfyuiModelWorkflow(
         }
 
         const imgMatch = /^ref_image_(\d{2})$/.exec(title);
-        if (imgMatch && Number(imgMatch[1]) - 1 >= assignedImageCount) {
+        if (imgMatch && Number(imgMatch[1]) - 1 >= assignedImageCount && !boundImageNodeIds.has(id)) {
             removedNodeIds.add(id);
         }
 
@@ -459,7 +493,7 @@ export function dispatchComfyuiModelWorkflow(
 
             let shouldPrune = false;
             const imgIn = /^ref_images\.ref_image_(\d+)$/.exec(inputKey);
-            if (imgIn && Number(imgIn[1]) >= assignedImageCount) shouldPrune = true;
+            if (imgIn && Number(imgIn[1]) >= assignedImageCount && !boundImageNodeIds.has(upstreamId)) shouldPrune = true;
             const vidIn = /^ref_videos\.ref_video_(\d+)$/.exec(inputKey);
             if (vidIn && Number(vidIn[1]) >= assignedVideoCount) shouldPrune = true;
             const audIn = /^ref_audios\.ref_audio_(\d+)$/.exec(inputKey);

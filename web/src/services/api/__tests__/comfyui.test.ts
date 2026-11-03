@@ -1245,6 +1245,90 @@ describe("native ComfyUI video reference binding", () => {
         expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    it("binds images to the slots the consumer node actually reads, even when the LoadImage titles were never tagged", async () => {
+        const config = buildOmniConfig();
+        // 复刻从适配工坊导入的自定义 H3 流：主节点真正吃图的是 ref_images.ref_image_0..N，
+        // 但前两个 LoadImage 保留了 ComfyUI 默认标题「加载图像」，标号还是从 03 起跳的。
+        // 只按「title 编号 = 第 N 张图」硬对应时，用户连的第 1 张图没有任何槽位接收，
+        // 槽位里录制的示例图（老鼠父亲 / 鸭子儿子）会被原样提交。
+        config.channels[0].workflows = [
+            {
+                id: "wf-untagged-slots",
+                name: "未打标的自定义 H3 流",
+                category: "omniVideo",
+                createdAt: 0,
+                isBuiltin: false,
+                json: {
+                    "1": { inputs: { text: "" }, class_type: "PrimitiveStringMultiline", _meta: { title: "prompt" } },
+                    "118": { inputs: { image: "老鼠父亲 (1).png" }, class_type: "LoadImage", _meta: { title: "加载图像" } },
+                    "119": { inputs: { image: "鸭子儿子.png" }, class_type: "LoadImage", _meta: { title: "加载图像" } },
+                    "188": { inputs: { image: "22.png" }, class_type: "LoadImage", _meta: { title: "ref_image_03" } },
+                    "117": {
+                        inputs: {
+                            prompt: ["1", 0],
+                            "ref_images.ref_image_0": ["118", 0],
+                            "ref_images.ref_image_1": ["119", 0],
+                            "ref_images.ref_image_2": ["188", 0],
+                        },
+                        class_type: "MiniMaxH3ReferenceToVideo",
+                        _meta: { title: "MiniMax H3 参考转视频" },
+                    },
+                },
+            },
+        ];
+
+        const references = [{ id: "a", name: "a.png", type: "image/png", dataUrl: "data:image/png;base64,AA==" }];
+        await submitComfyuiVideoJob({ config, prompt: "测试", model: "omni-video-minimax-h3-fp8-4step-pdmd", videoMode: "omni", workflowId: "wf-untagged-slots", references });
+
+        const prompt = submittedPrompt();
+        const h3 = prompt["117"] as { inputs: Record<string, unknown> };
+        const refKeys = Object.keys(h3.inputs).filter((key) => key.startsWith("ref_images."));
+        expect(refKeys).toEqual(["ref_images.ref_image_0"]);
+        expect((prompt["118"] as { inputs: Record<string, unknown> }).inputs.image).toBe("uploaded_1.png");
+        // 未填充的槽位连节点带示例文件名一起消失
+        expect(prompt["119"]).toBeUndefined();
+        expect(prompt["188"]).toBeUndefined();
+    });
+
+    it("fills untagged slots in consumer order when several images are connected", async () => {
+        const config = buildOmniConfig();
+        config.channels[0].workflows = [
+            {
+                id: "wf-untagged-many",
+                name: "未打标的自定义 H3 流",
+                category: "omniVideo",
+                createdAt: 0,
+                isBuiltin: false,
+                json: {
+                    "1": { inputs: { text: "" }, class_type: "PrimitiveStringMultiline", _meta: { title: "prompt" } },
+                    "118": { inputs: { image: "stale_a.png" }, class_type: "LoadImage", _meta: { title: "加载图像" } },
+                    "119": { inputs: { image: "stale_b.png" }, class_type: "LoadImage", _meta: { title: "加载图像" } },
+                    "188": { inputs: { image: "stale_c.png" }, class_type: "LoadImage", _meta: { title: "ref_image_03" } },
+                    "117": {
+                        inputs: {
+                            prompt: ["1", 0],
+                            "ref_images.ref_image_0": ["118", 0],
+                            "ref_images.ref_image_1": ["119", 0],
+                            "ref_images.ref_image_2": ["188", 0],
+                        },
+                        class_type: "MiniMaxH3ReferenceToVideo",
+                        _meta: { title: "MiniMax H3 参考转视频" },
+                    },
+                },
+            },
+        ];
+
+        const references = ["a", "b", "c"].map((id) => ({ id, name: `${id}.png`, type: "image/png", dataUrl: `data:image/png;base64,${id}` }));
+        await submitComfyuiVideoJob({ config, prompt: "测试", model: "omni-video-minimax-h3-fp8-4step-pdmd", videoMode: "omni", workflowId: "wf-untagged-many", references });
+
+        const prompt = submittedPrompt();
+        expect((prompt["118"] as { inputs: Record<string, unknown> }).inputs.image).toBe("uploaded_1.png");
+        expect((prompt["119"] as { inputs: Record<string, unknown> }).inputs.image).toBe("uploaded_2.png");
+        expect((prompt["188"] as { inputs: Record<string, unknown> }).inputs.image).toBe("uploaded_3.png");
+        const refKeys = Object.keys((prompt["117"] as { inputs: Record<string, unknown> }).inputs).filter((key) => key.startsWith("ref_images."));
+        expect(refKeys).toEqual(["ref_images.ref_image_0", "ref_images.ref_image_1", "ref_images.ref_image_2"]);
+    });
+
     it("keeps accepting work, when the workflow exposes an unnumbered image slot (modulo binding)", async () => {
         const config = buildOmniConfig();
         config.channels[0].workflows = [
