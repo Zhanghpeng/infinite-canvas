@@ -512,6 +512,11 @@ function LibraryCard({
     const image = useAnime ? (item.altImage ?? item.altThumb ?? baseImage) : depthMode && variant?.altImage ? variant.altImage : baseImage;
     // 悬停放大跟着当前变体走：用库级 preview 会在换了机位/发色后跳回第一张，看起来像图错乱。
     const preview = hovering && image && image !== thumb ? image : thumb;
+    // 服装的「动漫画风」挂在第三方镜像上，有几十个 id 整组缺图（CDN 对缺图回 200 + 首页 HTML）。
+    // 落回写实缩略图，至少还能认出是哪一套，不至于整张卡片空白。
+    const [brokenSrc, setBrokenSrc] = useState<string[]>([]);
+    const thumbFallback = item.thumb && item.thumb !== preview ? item.thumb : undefined;
+    const shownSrc = brokenSrc.includes(preview) ? thumbFallback : preview;
 
     const title = variant && item.variants.length > 1 ? `${item.title}（${variant.label}）` : item.title;
 
@@ -535,10 +540,11 @@ function LibraryCard({
         >
             <div className="relative w-full flex-1 overflow-hidden bg-black/5 dark:bg-white/5" style={{ aspectRatio: String(aspect) }}>
                 <img
-                    src={preview}
+                    src={shownSrc}
                     alt={title}
                     loading="lazy"
                     className="size-full object-contain p-1 transition duration-200 group-hover:scale-[1.03]"
+                    onError={() => setBrokenSrc((current) => (current.includes(preview) ? current : [...current, preview]))}
                 />
                 {/* 收藏/复制/连参考图常显半透明：只在 hover 才出现的话，触屏和没试过悬停的用户根本发现不了这三个出口。 */}
                 <div

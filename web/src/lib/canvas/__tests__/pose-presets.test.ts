@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import posesJson from "@/data/system-presets/poses.json";
 
-import { ALL_POSES, POSE_ANGLE_LABELS, POSE_SERIES_LIST, SAFE_POSE_COUNT } from "@/lib/canvas/pose-presets";
+import { ALL_POSES, POSE_ANGLE_LABELS, POSE_SERIES_LIST, SAFE_POSE_COUNT, getPoseImageUrl, getPoseThumbUrl } from "@/lib/canvas/pose-presets";
 
 type RawPose = { id: string; series: string; group?: string; name: string; angles?: string[]; nsfw?: boolean };
 
@@ -41,5 +41,21 @@ describe("姿态预设数据源", () => {
             for (const angle of pose.angles) expect(POSE_ANGLE_LABELS[angle], `${pose.id} ${angle}`).toBeTruthy();
             expect(pose.name, pose.id).toBeTruthy();
         }
+    });
+});
+
+/**
+ * CDN 根下只有 `thumbs/` 与 `img/` 两个目录，根路径取图会被 SPA fallback 命中，
+ * 返回 200 + 首页 HTML。前端一路都以为拿到了图，直到插入画布才留一张永远加载不出来的空节点。
+ * 这条断言把两个目录钉死，别再有人把 `img/` 当成可有可无的前缀删掉。
+ */
+describe("姿态图片地址", () => {
+    it("原图落在 img/、缩略图落在 thumbs/", () => {
+        expect(getPoseImageUrl("full_sexy_P001", "diag")).toBe("https://ai-pose-gallery.pages.dev/img/full_sexy_P001_diag.png");
+        expect(getPoseThumbUrl("full_sexy_P001", "diag")).toBe("https://ai-pose-gallery.pages.dev/thumbs/full_sexy_P001_diag.jpg");
+    });
+
+    it("自定义 CDN 基址末尾带斜杠也不会拼出双斜杠", () => {
+        expect(getPoseImageUrl("full_sexy_P001", "front", "https://cdn.example.com/")).toBe("https://cdn.example.com/img/full_sexy_P001_front.png");
     });
 });

@@ -20,6 +20,9 @@ const objectUrls = new Map<string, string>();
 /** projectId 传入时，素材会落在该项目目录下（projects/<id>/assets/images/…）；不传则落工作区全局。 */
 export async function uploadImage(input: string | Blob, projectId?: string): Promise<UploadedImage> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
+    // 预设资产的 CDN 对不存在的图会回 200 + `text/html`（SPA 首页），不校验就会把 HTML 当图片
+    // 压进盘里，画布上留一张永远加载不出来的空节点。宁可抛错让调用方提示，也不要静默落坏图。
+    if (!blob.size || (blob.type && !blob.type.startsWith("image/"))) throw new Error(i18n.t("common.imageReadFailed"));
     // 键 = 内容指纹：同一张图无论从画布、资产库还是 Agent 进来，都落到同一个键上，磁盘只留一份。
     const fingerprint = await fingerprintBlob(blob);
     const storageKey = projectId ? `image:${projectId}:${fingerprint}` : `image:${fingerprint}`;

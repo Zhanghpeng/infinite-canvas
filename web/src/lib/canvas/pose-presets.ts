@@ -65,9 +65,14 @@ export const ALL_POSES: PoseItem[] = dataset.assets.map((asset) => ({
 /** 敏感开关关闭时可见的姿势数量（面板角标与「显示敏感内容」开关的文案都用它）。 */
 export const SAFE_POSE_COUNT = ALL_POSES.filter((pose) => !pose.nsfw).length;
 
-/** 原图（PNG，插入节点 / 送生成用）。 */
+/**
+ * 原图（PNG，插入节点 / 送生成用）。
+ *
+ * 路径必须带 `img/` 段：CDN 根目录只有 `thumbs/` 与 `img/` 两个子目录，根下取图会被
+ * SPA 的 fallback 命中，返回 200 + `text/html` 的首页（450KB），前端一路静默存成坏图。
+ */
 export function getPoseImageUrl(poseId: string, angle: PoseAngleKey, cdnBase = POSE_CDN_BASE): string {
-    return `${cdnBase.replace(/\/+$/, "")}/${poseId}_${angle}.png`;
+    return `${cdnBase.replace(/\/+$/, "")}/img/${poseId}_${angle}.png`;
 }
 
 /** 缩略图（JPG，网格与悬停预览用，比原图小一个量级）。 */

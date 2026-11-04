@@ -304,9 +304,9 @@ export function loadSystemLibrary(id: SystemLibraryId): Promise<SystemLibrarySou
     if (existing) return existing;
 
     const task = (async () => {
-        // v3：姿势库改为与资产弹窗同源的 288 条（带 nsfw 标记）。旧 v2 缓存里没有
-        // nsfw 字段，命中后「显示敏感内容」开关永远不会出现，所以必须换键作废。
-        const cacheKey = `syslib:v3:${id}`;
+        // v4：姿势原图地址补上 `img/` 段（旧键里存的是根路径，取到的是 CDN 首页 HTML，
+        // 插入画布后是一张坏图）。不换键的话老缓存会继续用坏地址，修了也看不到效果。
+        const cacheKey = `syslib:v4:${id}`;
         const cached = await readCache<LibraryItem[]>(cacheKey);
         if (cached && cached.length) return { id, items: cached };
         const items = await buildLibrary(id);
