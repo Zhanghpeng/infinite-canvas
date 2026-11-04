@@ -20,6 +20,12 @@ The current release needs manual verification in these areas:
   - 关闭「敏感内容」开关时，双人互动、内衣、泳装等分类不出现在系列列表中；打开后出现，且默认不自动跳转。
   - 断网或 CDN 不可用时打开「系统预设」，验证展示加载失败与重试入口，不出现空白面板或崩溃。
 
+- 预设资产本地镜像脚本：
+  - 运行 `node scripts/fetch-system-presets.mjs --only=pose --no-full`，验证退出后 `web/public/system-presets/manifest.json` 已生成、`pose/thumbs` 下有图；重复运行应显示全部跳过（断点续传）。
+  - 中断一次后重跑，验证已下载的文件不重复下载、缺失的继续补齐，最后仍会重写 manifest。
+  - 打开画布素材库的姿态库，确认缩略图与插入结果都来自 `/system-presets/...`（DevTools Network 里不再请求 `ai-pose-gallery.pages.dev`）；删除 manifest 后刷新，取图回落到 CDN，功能不受影响。
+  - 运行 `node scripts/fetch-system-presets.mjs --dry-run`，验证打印的清单条数与所选类目对得上，不会真的写盘。
+
 - 预设资产索引同步脚本：
   - 运行 `node scripts/sync-system-presets.mjs`，验证三个数据文件重新生成后 `prettier --check` 通过、再次运行输出「无变化」。
   - 运行 `node scripts/sync-system-presets.mjs --check`，在数据与 CDN 一致时退出码为 0；手工改动任一数据文件后退出码为 1 并指出具体文件。

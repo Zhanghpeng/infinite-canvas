@@ -27,6 +27,14 @@ describe("presetImageUrl", () => {
         expect(presetImageUrl("portrait", "f009cba9893")).toBe("https://ai-portrait-gallery.pages.dev/img/thumb/f009cba9893.webp");
         expect(presetImageUrl("portrait", "f009cba9893", { tier: "full" })).toBe("https://ai-portrait-gallery.pages.dev/img/full/f009cba9893.png");
     });
+
+    it("给了本地清单就换成本地镜像地址，且与下载脚本的目录规则一致", () => {
+        const local = new Set(["pose/img/full_single_P001_diag.png", "costume-full/png/SPR-0001.png"]);
+        expect(presetImageUrl("pose", "full_single_P001", { tier: "full", angle: "diag" }, local)).toBe("/system-presets/pose/img/full_single_P001_diag.png");
+        expect(presetImageUrl("costume", "SPR-0001", { tier: "full" }, local)).toBe("/system-presets/costume-full/png/SPR-0001.png");
+        // 未命中的档位照旧走 CDN
+        expect(presetImageUrl("pose", "full_single_P001", { tier: "thumb", angle: "diag" }, local)).toBe("https://ai-pose-gallery.pages.dev/thumbs/full_single_P001_diag.jpg");
+    });
 });
 
 describe("filterPresetAssets", () => {

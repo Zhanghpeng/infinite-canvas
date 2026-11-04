@@ -4,7 +4,10 @@
  * 预设资产是平台内置、只读、通过公开 CDN 分发的参考素材，与用户自己的「我的素材」相对。
  * 图片二进制不入库：仓库只保存索引元数据（web/src/data/system-presets/*.json，
  * 由 scripts/sync-system-presets.mjs 从 CDN 索引生成），运行时按需从 CDN 取图。
+ * 需要离线可用时跑 scripts/fetch-system-presets.mjs 拉一份本地镜像，取址会自动优先同源。
  */
+
+import { preferLocalPreset } from "./preset-local";
 
 export type SystemPresetCategory = "pose" | "costume" | "portrait";
 
@@ -79,26 +82,54 @@ export const POSE_ANGLE_SHORT_LABELS: Record<PoseAngleKey, string> = {
 
 const join = (base: string, rest: string) => `${base.replace(/\/+$/, "")}/${rest.replace(/^\/+/, "")}`;
 
+type PresetImageOptions = { tier?: SystemPresetTier; angle?: PoseAngleKey; rendition?: PoseRendition };
+
 /**
- * 构造预设资产的图片地址。姿态按「id_机位」拼路径，服装与发型按 id 直取。
- * 各 CDN 的目录约定不同，集中在此处便于一处调整。
+ * 同一张图在本地副本里的相对路径（`web/public/system-presets/` 下的镜像目录）。
+ * 目录按 CDN 原样镜像，脚本下载与前端取址共用这一份规则。
  */
-export function presetImageUrl(category: SystemPresetCategory, assetId: string, options: { tier?: SystemPresetTier; angle?: PoseAngleKey; rendition?: PoseRendition } = {}): string {
+export function presetImageRel(category: SystemPresetCategory, assetId: string, options: PresetImageOptions = {}): string {
     const { tier = "thumb", angle, rendition = "line" } = options;
 
     if (category === "pose") {
-        const host = rendition === "depth" ? SYSTEM_PRESET_CDN.poseDepth : SYSTEM_PRESET_CDN.pose;
+        const dir = rendition === "depth" ? "pose-depth" : "pose";
         const file = angle ? `${assetId}_${angle}` : assetId;
-        return tier === "thumb" ? join(host, `thumbs/${file}.jpg`) : join(host, `img/${file}.png`);
+        return tier === "thumb" ? `${dir}/thumbs/${file}.jpg` : `${dir}/img/${file}.png`;
     }
 
     if (category === "costume") {
-        if (tier === "full") return join(SYSTEM_PRESET_CDN.costumeFull, `png/${assetId}.png`);
-        if (tier === "mid") return join(SYSTEM_PRESET_CDN.costume, `img/${assetId}.webp`);
-        return join(SYSTEM_PRESET_CDN.costume, `thumbs/${assetId}.webp`);
+        if (tier === "full") return `costume-full/png/${assetId}.png`;
+        if (tier === "mid") return `costume/img/${assetId}.webp`;
+        return `costume/thumbs/${assetId}.webp`;
     }
 
-    return tier === "thumb" ? join(SYSTEM_PRESET_CDN.portrait, `img/thumb/${assetId}.webp`) : join(SYSTEM_PRESET_CDN.portrait, `img/full/${assetId}.png`);
+    return tier === "thumb" ? `portrait/img/thumb/${assetId}.webp` : `portrait/img/full/${assetId}.png`;
+}
+
+/**
+ * 构造预设资产的图片地址。姿态按「id_机位」拼路径，服装与发型按 id 直取。
+ * 各 CDN 的目录约定不同，集中在此处便于一处调整。传入本地清单则优先同源副本。
+ */
+export function presetImageUrl(category: SystemPresetCategory, assetId: string, options: PresetImageOptions = {}, localPaths?: Set<string>): string {
+    const { tier = "thumb", angle, rendition = "line" } = options;
+
+    const remote = (() => {
+        if (category === "pose") {
+            const host = rendition === "depth" ? SYSTEM_PRESET_CDN.poseDepth : SYSTEM_PRESET_CDN.pose;
+            const file = angle ? `${assetId}_${angle}` : assetId;
+            return tier === "thumb" ? join(host, `thumbs/${file}.jpg`) : join(host, `img/${file}.png`);
+        }
+
+        if (category === "costume") {
+            if (tier === "full") return join(SYSTEM_PRESET_CDN.costumeFull, `png/${assetId}.png`);
+            if (tier === "mid") return join(SYSTEM_PRESET_CDN.costume, `img/${assetId}.webp`);
+            return join(SYSTEM_PRESET_CDN.costume, `thumbs/${assetId}.webp`);
+        }
+
+        return tier === "thumb" ? join(SYSTEM_PRESET_CDN.portrait, `img/thumb/${assetId}.webp`) : join(SYSTEM_PRESET_CDN.portrait, `img/full/${assetId}.png`);
+    })();
+
+    return localPaths ? preferLocalPreset(localPaths, presetImageRel(category, assetId, options), remote) : remote;
 }
 
 // JSON 导入的字段类型会被推断为 string[]，实际取值由同步脚本保证

@@ -4,6 +4,7 @@ import { Plus, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
+import { loadPresetLocalPaths } from "@/lib/assets/preset-local";
 import {
     POSE_ANGLE_LABELS,
     POSE_ANGLE_SHORT_LABELS,
@@ -93,6 +94,18 @@ export function SystemPresetGallery({ category, onCategoryChange, onInsert, vari
     const [includeSensitive, setIncludeSensitive] = useState(false);
     const [rendition, setRendition] = useState<PoseRendition>("line");
     const [page, setPage] = useState(1);
+    // 本地镜像清单：有就同源取图，没有（未拉取/线上未带）就继续走 CDN。
+    const [localPaths, setLocalPaths] = useState<Set<string>>(new Set());
+
+    useEffect(() => {
+        let cancelled = false;
+        loadPresetLocalPaths().then((paths) => {
+            if (!cancelled) setLocalPaths(paths);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -233,7 +246,7 @@ export function SystemPresetGallery({ category, onCategoryChange, onInsert, vari
                 {visibleAssets.length ? (
                     <div className={cn("grid gap-2 pb-1 pr-0.5", gridColumns)}>
                         {visibleAssets.map((asset) => (
-                            <PresetCard key={asset.id} asset={asset} category={category} rendition={rendition} palette={palette} onInsert={onInsert} />
+                            <PresetCard key={asset.id} asset={asset} category={category} rendition={rendition} palette={palette} localPaths={localPaths} onInsert={onInsert} />
                         ))}
                     </div>
                 ) : (
@@ -263,7 +276,7 @@ function ChipButton({ active, palette, children, onClick }: { active: boolean; p
     );
 }
 
-function PresetCard({ asset, category, rendition, palette, onInsert }: { asset: SystemPresetAsset; category: SystemPresetCategory; rendition: PoseRendition; palette: PresetPalette; onInsert: (payload: InsertAssetPayload) => void }) {
+function PresetCard({ asset, category, rendition, palette, localPaths, onInsert }: { asset: SystemPresetAsset; category: SystemPresetCategory; rendition: PoseRendition; palette: PresetPalette; localPaths: Set<string>; onInsert: (payload: InsertAssetPayload) => void }) {
     const { t } = useTranslation();
     const defaultAngle = defaultPoseAngle(asset.angles);
     const [angle, setAngle] = useState<PoseAngleKey>(defaultAngle);
@@ -272,17 +285,17 @@ function PresetCard({ asset, category, rendition, palette, onInsert }: { asset: 
         setAngle(defaultAngle);
     }, [defaultAngle]);
 
-    const thumbUrl = presetImageUrl(category, asset.id, { tier: "thumb", angle: asset.angles ? angle : undefined, rendition });
+    const thumbUrl = presetImageUrl(category, asset.id, { tier: "thumb", angle: asset.angles ? angle : undefined, rendition }, localPaths);
     const angleLabel = asset.angles ? POSE_ANGLE_LABELS[angle] : undefined;
 
     const payload = useMemo<InsertAssetPayload>(
         () => ({
             kind: "image",
-            dataUrl: presetImageUrl(category, asset.id, { tier: "full", angle: asset.angles ? angle : undefined, rendition }),
+            dataUrl: presetImageUrl(category, asset.id, { tier: "full", angle: asset.angles ? angle : undefined, rendition }, localPaths),
             title: presetInsertTitle(asset, angleLabel),
             promptText: asset.promptText,
         }),
-        [angle, angleLabel, asset, category, rendition],
+        [angle, angleLabel, asset, category, rendition, localPaths],
     );
 
     const handleDragStart = (event: React.DragEvent) => {

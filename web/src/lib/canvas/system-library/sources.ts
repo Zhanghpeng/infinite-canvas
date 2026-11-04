@@ -1,5 +1,7 @@
 import { ALL_POSES, POSE_ANGLE_LABELS, POSE_SERIES_LIST, SAFE_POSE_COUNT, getPoseImageUrl, getPoseThumbUrl } from "@/lib/canvas/pose-presets";
 
+import { loadPresetLocalPaths, preferLocalPreset, presetRelFromUrl } from "@/lib/assets/preset-local";
+
 import { readCache, writeCache } from "./cache";
 import { COSTUME_FACET_GROUP_BY_KEYWORD } from "./facet-map";
 import type { FacetGroup, LibraryItem, LibraryVariant, SystemLibraryId, SystemLibrarySource } from "./types";
@@ -130,7 +132,7 @@ async function fetchJson<T>(url: string): Promise<T> {
     }
 }
 
-function toCostumeItem(row: RawCostumeRow, alt?: RawCostumeRow): LibraryItem {
+function toCostumeItem(row: RawCostumeRow, local: Set<string>, alt?: RawCostumeRow): LibraryItem {
     const tags = Array.isArray(row.关键词) ? row.关键词 : [];
     const facets: Record<string, string[]> = { season: [row.分类] };
     for (const tag of tags) {
@@ -148,8 +150,8 @@ function toCostumeItem(row: RawCostumeRow, alt?: RawCostumeRow): LibraryItem {
         [...outfits.slice(0, 2), ...colors.slice(0, 1), ...materials.slice(0, 1)].slice(0, 3).join(" · ") ||
         tags.slice(0, 3).join(" · ") ||
         row.id;
-    const thumb = `${CDN.costume}/thumbs/${row.id}.webp`;
-    const preview = `${CDN.costume}/img/${row.id}.webp`;
+    const thumb = preferLocalPreset(local, `costume/thumbs/${row.id}.webp`, `${CDN.costume}/thumbs/${row.id}.webp`);
+    const preview = preferLocalPreset(local, `costume/img/${row.id}.webp`, `${CDN.costume}/img/${row.id}.webp`);
     return {
         key: `costume:${row.id}`,
         library: "costume",
@@ -164,23 +166,23 @@ function toCostumeItem(row: RawCostumeRow, alt?: RawCostumeRow): LibraryItem {
         variants: [],
         facets,
         search: (row.检索 || `${row.id} ${row.分类} ${tags.join(" ")} ${row.英文关键词}`).toLowerCase(),
-        altThumb: alt ? `${CDN.costumeAnime}/thumbs/${alt.id}.webp` : undefined,
-        altPreview: alt ? `${CDN.costumeAnime}/img/${alt.id}.webp` : undefined,
-        altImage: alt ? `${CDN.costumeAnime}/img/${alt.id}.webp` : undefined,
+        altThumb: alt ? preferLocalPreset(local, `costume-anime/thumbs/${alt.id}.webp`, `${CDN.costumeAnime}/thumbs/${alt.id}.webp`) : undefined,
+        altPreview: alt ? preferLocalPreset(local, `costume-anime/img/${alt.id}.webp`, `${CDN.costumeAnime}/img/${alt.id}.webp`) : undefined,
+        altImage: alt ? preferLocalPreset(local, `costume-anime/img/${alt.id}.webp`, `${CDN.costumeAnime}/img/${alt.id}.webp`) : undefined,
     };
 }
 
-async function loadCostume(): Promise<LibraryItem[]> {
+async function loadCostume(local: Set<string>): Promise<LibraryItem[]> {
     const [real, anime] = await Promise.all([
         fetchJson<RawCostumeRow[]>(`${INDEX_BASE}/data/costume-zh.json`),
         // 画风切换是加分项，拿不到就只保留写实版，不阻塞整个图库。
         fetchJson<RawCostumeRow[]>(`${INDEX_BASE}/costume-anime/data/costume-zh.json`).catch(() => [] as RawCostumeRow[]),
     ]);
     const animeById = new Map(anime.map((row) => [row.id, row]));
-    return real.map((row) => toCostumeItem(row, animeById.get(row.id)));
+    return real.map((row) => toCostumeItem(row, local, animeById.get(row.id)));
 }
 
-async function loadPortrait(): Promise<LibraryItem[]> {
+async function loadPortrait(local: Set<string>): Promise<LibraryItem[]> {
     const rows = await fetchJson<RawPortraitRow[]>(`${INDEX_BASE}/portrait/data/portrait-zh.json`);
     return rows.map((row) => ({
         key: `portrait:${row.id}`,
@@ -190,18 +192,19 @@ async function loadPortrait(): Promise<LibraryItem[]> {
         meta: `${row.类型} · ${row.发长}`,
         tags: [row.发长, row.发型].filter((text): text is string => Boolean(text)),
         terms: "",
-        thumb: row.缩略图,
+        thumb: preferLocalPreset(local, presetRelFromUrl("portrait", row.缩略图), row.缩略图),
         // 脸型只有 400×500 缩略图和 1122×1402 原图两档，悬停放大不做二次请求。
-        preview: row.缩略图,
-        image: row.原图,
+        preview: preferLocalPreset(local, presetRelFromUrl("portrait", row.缩略图), row.缩略图),
+        image: preferLocalPreset(local, presetRelFromUrl("portrait", row.原图), row.原图),
         variants: [],
         facets: { face: [row.类型], length: row.发长 ? [row.发长] : [] },
         search: (row.检索 || `${row.id} ${row.类型} ${row.发长} ${row.发型}`).toLowerCase(),
     }));
 }
 
-async function loadAnime(): Promise<LibraryItem[]> {
+async function loadAnime(local: Set<string>): Promise<LibraryItem[]> {
     const rows = await fetchJson<RawAnimeRow[]>(`${INDEX_BASE}/anime/data/anime-zh.json`);
+    const localize = (url: string) => preferLocalPreset(local, presetRelFromUrl("anime", url), url);
     // 发色变体（H001-black / -blonde …）挂在父级下做色点，不单独占卡片。
     const childrenByParent = new Map<string, RawAnimeRow[]>();
     for (const row of rows) {
@@ -216,8 +219,8 @@ async function loadAnime(): Promise<LibraryItem[]> {
         label,
         short: row.发色 ? label.replace("发", "") : undefined,
         swatch: row.发色 ? ANIME_COLOR_SWATCH[row.发色] : undefined,
-        thumb: row.缩略图,
-        image: row.原图,
+        thumb: localize(row.缩略图),
+        image: localize(row.原图),
     });
 
     return rows
@@ -232,7 +235,7 @@ async function loadAnime(): Promise<LibraryItem[]> {
                 }
             } else if (row.线稿) {
                 variants.push(toVariant(row, "彩图"));
-                variants.push({ key: `${row.id}-line`, label: "线稿", thumb: row.线稿, image: row.线稿 });
+                variants.push({ key: `${row.id}-line`, label: "线稿", thumb: localize(row.线稿), image: localize(row.线稿) });
             }
             return {
                 key: `anime:${row.id}`,
@@ -242,9 +245,9 @@ async function loadAnime(): Promise<LibraryItem[]> {
                 meta: `${row.类型} · ${row.分类}`,
                 tags: [row.分类, row.标签].filter((text): text is string => Boolean(text)),
                 terms: row.标签 || "",
-                thumb: row.缩略图,
-                preview: row.原图,
-                image: row.原图,
+                thumb: localize(row.缩略图),
+                preview: localize(row.原图),
+                image: localize(row.原图),
                 variants,
                 facets: { kind: [row.类型], category: row.分类 ? [row.分类] : [] },
                 search: (row.检索 || `${row.id} ${row.名称} ${row.分类} ${row.标签}`).toLowerCase(),
@@ -252,7 +255,7 @@ async function loadAnime(): Promise<LibraryItem[]> {
         });
 }
 
-function loadPose(): LibraryItem[] {
+function loadPose(local: Set<string>): LibraryItem[] {
     const seriesName = new Map(POSE_SERIES_LIST.map((series) => [series.id, series.name]));
     return ALL_POSES.map((pose) => {
         const series = seriesName.get(pose.series) || pose.series;
@@ -260,12 +263,12 @@ function loadPose(): LibraryItem[] {
             key: angle,
             label: POSE_ANGLE_LABELS[angle] || angle,
             short: (POSE_ANGLE_LABELS[angle] || angle).slice(0, 1),
-            // 网格用 CDN 的 thumbs jpg，插入节点才取 PNG 原图。
-            thumb: getPoseThumbUrl(pose.id, angle),
-            image: getPoseImageUrl(pose.id, angle),
+            // 网格用 thumbs jpg，插入节点才取 PNG 原图。
+            thumb: preferLocalPreset(local, `pose/thumbs/${pose.id}_${angle}.jpg`, getPoseThumbUrl(pose.id, angle)),
+            image: preferLocalPreset(local, `pose/img/${pose.id}_${angle}.png`, getPoseImageUrl(pose.id, angle)),
             // 深度图与姿势图共用 id 体系（`{组ID}_{视角}`），直接由 id 推导，不额外拉 1MB 索引。
-            altThumb: `${CDN.depth}/thumbs/${pose.id}_${angle}.jpg`,
-            altImage: `${CDN.depth}/img/${pose.id}_${angle}.png`,
+            altThumb: preferLocalPreset(local, `pose-depth/thumbs/${pose.id}_${angle}.jpg`, `${CDN.depth}/thumbs/${pose.id}_${angle}.jpg`),
+            altImage: preferLocalPreset(local, `pose-depth/img/${pose.id}_${angle}.png`, `${CDN.depth}/img/${pose.id}_${angle}.png`),
         }));
         const base = variants[0];
         return {
@@ -288,10 +291,12 @@ function loadPose(): LibraryItem[] {
 }
 
 async function buildLibrary(id: SystemLibraryId): Promise<LibraryItem[]> {
-    if (id === "pose") return loadPose();
-    if (id === "portrait") return loadPortrait();
-    if (id === "anime") return loadAnime();
-    return loadCostume();
+    // 本地清单只影响取址：有本地副本用同源，没有就继续走 CDN。
+    const local = await loadPresetLocalPaths();
+    if (id === "pose") return loadPose(local);
+    if (id === "portrait") return loadPortrait(local);
+    if (id === "anime") return loadAnime(local);
+    return loadCostume(local);
 }
 
 const inflight = new Map<SystemLibraryId, Promise<SystemLibrarySource>>();
@@ -304,9 +309,11 @@ export function loadSystemLibrary(id: SystemLibraryId): Promise<SystemLibrarySou
     if (existing) return existing;
 
     const task = (async () => {
-        // v4：姿势原图地址补上 `img/` 段（旧键里存的是根路径，取到的是 CDN 首页 HTML，
-        // 插入画布后是一张坏图）。不换键的话老缓存会继续用坏地址，修了也看不到效果。
-        const cacheKey = `syslib:v4:${id}`;
+        // v5：取址支持本地副本（命中同源 / 未命中回落 CDN）。缓存里存的是拼好的完整地址，
+        // 换了取址策略就必须换键，否则老缓存会一直用 CDN 地址，本地副本永远不生效。
+        // 键里带镜像文件数：补拉了新图（清单变化）时自动作废，不用等 7 天过期。
+        const local = await loadPresetLocalPaths();
+        const cacheKey = `syslib:v5:${local.size}:${id}`;
         const cached = await readCache<LibraryItem[]>(cacheKey);
         if (cached && cached.length) return { id, items: cached };
         const items = await buildLibrary(id);

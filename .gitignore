@@ -12,6 +12,8 @@ web/dist
 
 **/dist
 web/public/plugins
+# 系统预设资产的本地镜像（约 5.5GB，由 scripts/fetch-system-presets.mjs 生成）
+web/public/system-presets/
 *.zip
 plugins/canvas/*/dist
 plugins/canvas/*/node_modules
