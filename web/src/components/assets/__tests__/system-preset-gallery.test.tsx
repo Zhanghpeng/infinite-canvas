@@ -30,6 +30,15 @@ vi.mock("react-i18next", () => ({
     useTranslation: () => ({ t: (key: string, values?: Record<string, unknown>) => (values ? `${key}:${JSON.stringify(values)}` : key) }),
 }));
 
+// 本地镜像是否存在取决于是否跑过 scripts/fetch-system-presets.mjs，测试不能依赖磁盘状态。
+// 这里固定「清单为空」，断言的就是纯 CDN 地址拼接（`img/` 与 `thumbs/` 两段）；
+// 本地命中的换址规则由 preset-local 自己的单测覆盖。
+vi.mock("@/lib/assets/preset-local", () => ({
+    loadPresetLocalPaths: () => Promise.resolve(new Set<string>()),
+    preferLocalPreset: (_paths: Set<string>, _rel: string, remote: string) => remote,
+    presetRelFromUrl: (prefix: string, url: string) => `${prefix}${new URL(url).pathname}`,
+}));
+
 const { SystemPresetGallery } = await import("@/components/assets/system-preset-gallery");
 
 let root: Root;
