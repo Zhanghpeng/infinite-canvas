@@ -507,7 +507,7 @@
   },
   "120": {
     "inputs": {
-      "Number": "544"
+      "value": 544
     },
     "class_type": "Int",
     "_meta": {
@@ -516,7 +516,7 @@
   },
   "121": {
     "inputs": {
-      "Number": "960"
+      "value": 960
     },
     "class_type": "Int",
     "_meta": {

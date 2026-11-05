@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [修复] 修复内置 MiniMax H3 视频工作流提交时被 ComfyUI 拒绝的问题：这批工作流由 ComfyLiterals 环境导出，整数常量节点把输入名写成 `Number`，而当前 ComfyUI 里同名的 `Int` 节点（comfyui-logic）要求 `value`，提交时报「节点 120（Int）：缺少输入「value」」。已把 12 个内置/可下载工作流的字段名改为 `value`，并在提交前做一次同名节点的字段归一化，渠道里已保存的旧工作流副本也会被自动纠正。
+
 + [新增] 上游同步脚本 `scripts/sync-upstream.mjs`：fetch 带 `blob:limit` 只拉代码（28MB → 几百 KB，半小时 → 几秒），缺失的大文件优先用工作区的同内容文件算 hash 写回对象库（零网络），只有上游真改过的才联网；合并前用 `git merge-tree` 预演冲突，并用「双方都改过」的交集动态算出真正会打架的文件。
 + [新增] 基线校验脚本 `scripts/check-baseline.mjs`：把历史遗留的 tsc / vitest 失败存成快照，每次只跑一遍即可判断有无新增问题，替代原先「建 worktree 再跑第二遍 tsc 比对」的做法；新增项逐条列出并以非零退出码结束。附带修掉 Windows 下 CRLF 导致 tsc 错误行整批解析失败的坑。
 + [修复] 修复画布侧栏素材库插入姿势时拿到坏图的缺陷：姿势原图地址补上 CDN 的 `img/` 目录段，此前拼成根路径会被 SPA fallback 命中，返回 200 + 首页 HTML；同时上传前校验响应确为图片，缺图不再静默落成空节点，素材卡片缩略图取不到时回落写实版。
