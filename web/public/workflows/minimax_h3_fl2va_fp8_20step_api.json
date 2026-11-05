@@ -43,7 +43,7 @@
   },
   "123": {
     "inputs": {
-      "Number": ""
+      "value": 5
     },
     "class_type": "Float",
     "_meta": {

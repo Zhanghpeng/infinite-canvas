@@ -43,7 +43,7 @@
   },
   "47": {
     "inputs": {
-      "Number": ""
+      "value": 60
     },
     "class_type": "Float",
     "_meta": {

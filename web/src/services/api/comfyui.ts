@@ -1201,23 +1201,31 @@ export function translateComfyuiValidationError(errMsg: string): string {
     return errMsg;
 }
 
+/** comfyui-logic 注册的数值常量节点：class_type → 该节点「未设置」时的默认值。 */
+const CONST_NODE_DEFAULTS: Record<string, number> = { Int: 0, Float: 0 };
+
 /**
- * Int 常量节点的输入名在不同节点包里不一样：comfyui-logic 注册的 `Int` 用 `value`，
+ * 数值常量节点的输入名在不同节点包里不一样：comfyui-logic 注册的 `Int` / `Float` 用 `value`，
  * 而不少离线导出的工作流（源头是 ComfyLiterals）残留成 `Number`。换一套节点环境提交
  * 就会报 required_input_missing「value」，错误信息里完全看不出是字段名不匹配。
  * 提交前统一成 `value`：只在真的存在 Number 时改，且复制一份，不动调用方的对象。
+ * 空值也补成节点声明的默认值——空字符串过不了 FLOAT/INT 的类型校验。
  */
-function normalizeIntNodeInputs(workflow: ComfyuiWorkflowJson): ComfyuiWorkflowJson {
+function normalizeConstNodeInputs(workflow: ComfyuiWorkflowJson): ComfyuiWorkflowJson {
     let cloned: ComfyuiWorkflowJson | null = null;
     for (const [id, raw] of Object.entries(workflow)) {
         const node = raw as { class_type?: unknown; inputs?: Record<string, unknown> } | null;
-        if (!node || typeof node !== "object" || node.class_type !== "Int" || !node.inputs) continue;
+        if (!node || typeof node !== "object" || typeof node.class_type !== "string" || !node.inputs) continue;
+        if (!(node.class_type in CONST_NODE_DEFAULTS)) continue;
         if (!("Number" in node.inputs) || "value" in node.inputs) continue;
         cloned ??= structuredClone(workflow);
         const target = cloned[id] as { inputs?: Record<string, unknown> } | undefined;
         if (!target?.inputs) continue;
         const number = target.inputs.Number;
-        target.inputs.value = typeof number === "string" && /^-?\d+$/.test(number) ? Number(number) : number;
+        const text = typeof number === "string" ? number.trim() : number;
+        target.inputs.value = text === "" || text === null || text === undefined
+            ? CONST_NODE_DEFAULTS[node.class_type]
+            : typeof text === "string" && /^-?\d+(\.\d+)?$/.test(text) ? Number(text) : text;
         delete target.inputs.Number;
     }
     return cloned ?? workflow;
@@ -1232,7 +1240,7 @@ async function submitJobInternal(workflow: ComfyuiWorkflowJson, baseUrl: string,
     const response = await comfyuiFetch(url, {
         method: "POST",
         headers,
-        body: JSON.stringify({ prompt: normalizeIntNodeInputs(workflow), client_id: clientId }),
+        body: JSON.stringify({ prompt: normalizeConstNodeInputs(workflow), client_id: clientId }),
     }, baseUrl);
     if (!response.ok) {
         let errDetail = `${response.status}`;
