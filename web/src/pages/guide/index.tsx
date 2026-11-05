@@ -471,7 +471,7 @@ const WORKFLOWS: WorkflowItem[] = [
                     { category: "视频 VAE", folder: "models/vae/", files: ["minimax_h3_video_vae_fp16.safetensors"] },
                     { category: "音频 VAE", folder: "models/vae/", files: ["minimax_h3_audio_vae_fp32.safetensors"] },
                 ],
-                tips: "输入首尾两帧精准锚定运镜与动作插值；依赖 ComfyLiterals 节点。",
+                tips: "输入首尾两帧精准锚定运镜与动作插值；依赖 ComfyLiterals 节点。若本机 `minimax_h3_fl2va_pruned_fp8_scaled` 文件异常（出噪点或加载报量化配置错误），可下载 `minimax_h3_fl2va_pruned_int8_convrot.safetensors` 替代，系统内置工作流已默认使用该底模。",
             },
             {
                 id: "fp8_20",
@@ -493,7 +493,7 @@ const WORKFLOWS: WorkflowItem[] = [
                     { category: "视频 VAE", folder: "models/vae/", files: ["minimax_h3_video_vae_fp16.safetensors"] },
                     { category: "音频 VAE", folder: "models/vae/", files: ["minimax_h3_audio_vae_fp32.safetensors"] },
                 ],
-                tips: "标准 20 步首尾帧插值，音画同步输出。",
+                tips: "标准 20 步首尾帧插值，音画同步输出。fp8 底模异常时可换用 `minimax_h3_fl2va_pruned_int8_convrot.safetensors`（系统内置工作流已默认使用）。",
             },
             {
                 id: "turbo_8",

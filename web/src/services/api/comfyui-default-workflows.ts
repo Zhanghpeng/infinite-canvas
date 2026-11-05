@@ -115,14 +115,14 @@ export const DEFAULT_BUILTIN_COMFYUI_VIDEO_BF16_20STEP_WORKFLOW: ComfyuiWorkflow
 };
 
 export const DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_20STEP_WORKFLOW: ComfyuiWorkflow = {
-    name: "MiniMax H3 首尾帧 (FP8 20步)",
+    name: "MiniMax H3 首尾帧 (INT8 剪枝 20步)",
     json: frameVideoFp8Json as Record<string, unknown>,
     createdAt: 0,
     isBuiltin: true,
 };
 
 export const DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_PDMD_WORKFLOW: ComfyuiWorkflow = {
-    name: "MiniMax H3 首尾帧视频 (FP8 4步 PDMD)",
+    name: "MiniMax H3 首尾帧视频 (INT8 剪枝 4步 PDMD)",
     json: frameVideoFp84StepPdmdJson as Record<string, unknown>,
     createdAt: 0,
     isBuiltin: true,
@@ -372,23 +372,23 @@ export function getDefaultComfyWorkflowItems(channel?: { id?: string; name?: str
         },
         {
             id: `${prefix}-frame-video-minimax-h3-fp8-4step-pdmd`,
-            name: "MiniMax H3 首尾帧 (FP8 4步 PDMD)",
+            name: "MiniMax H3 首尾帧 (INT8 剪枝 4步 PDMD)",
             category: "frameVideo",
             json: DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_PDMD_WORKFLOW.json,
             createdAt: 0,
             isBuiltin: true,
             isDefault: true,
-            description: "MiniMax H3 首尾帧插值视频极速版 (FP8 4步 PDMD, 仅需 4 步极速出片)",
+            description: "MiniMax H3 首尾帧插值视频极速版 (INT8 旋转量化剪枝底模 + 4步 PDMD, 20.9GB)",
         },
         {
             id: `${prefix}-frame-video-minimax-h3-fp8`,
-            name: "MiniMax H3 首尾帧 (FP8 20步)",
+            name: "MiniMax H3 首尾帧 (INT8 剪枝 20步)",
             category: "frameVideo",
             json: DEFAULT_BUILTIN_COMFYUI_FRAME_VIDEO_20STEP_WORKFLOW.json,
             createdAt: 0,
             isBuiltin: true,
             isDefault: false,
-            description: "MiniMax H3 首尾帧插值视频 (FP8 Scaled, 适合消费级单卡)",
+            description: "MiniMax H3 首尾帧插值视频 (INT8 旋转量化剪枝底模, 20.9GB, 适合消费级单卡)",
         },
         {
             id: `${prefix}-omni-video-minimax-h3-int8-4step-pdmd`,

@@ -7,6 +7,11 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 首尾帧视频内置工作流改绑 INT8 剪枝底模后需回归：
+  - 在画布视频节点选择「MiniMax H3 首尾帧 (INT8 剪枝 4步 PDMD)」，确认模型下拉与执行都走 `minimax_h3_fl2va_pruned_int8_convrot.safetensors`，出片为正常画面而非整帧彩色噪点；
+  - 「INT8 剪枝 20步」变体同样确认能正常加载与出片；
+  - 渠道里已保存过旧 FP8 工作流副本的，重新选择一次模型或工作流后确认绑定已更新（旧副本不会自动改写）。
+
 - 同步上游 v0.24.0 后的本地功能回归（本次合并在提示词面板、节点加载态与节点派发路径上动过结构，需确认本地行为没被上游改写覆盖）：
   - 视频节点参考图槽位：给使用自定义工作流的视频节点只连 1 张图后生成，确认提交给 ComfyUI 的是这张图（`ref_image_0` 起连续占位），不再出现工作流 JSON 里录制的示例文件名；未填满槽位也能正常执行；
   - 分段节点重复生成：在已有产物的视频分段节点上点「重新生成」，确认仍能取到参考图（本节点连线 → `generationOriginNodeId` 源头节点连线 → 生成快照 三级兜底生效）；
