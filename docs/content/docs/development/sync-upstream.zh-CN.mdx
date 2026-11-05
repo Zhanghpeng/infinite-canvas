@@ -1,0 +1,174 @@
+---
+title: 同步上游
+description: 长期跟进 ZhuYichuan/infinite-canvas 的标准流程与加速手段
+---
+
+# 同步上游
+
+本项目 fork 自 [`ZhuYichuan/infinite-canvas`](https://github.com/ZhuYichuan/infinite-canvas)，需要长期跟上游走。上游节奏快、偶发大体积二进制资产，加上本机网络对 GitHub 不友好，早期一次同步能耗掉一整晚。
+
+这份文档记录**为什么要这么同步**，比记录命令更重要——踩过的坑都在最后一节。
+
+## 1. 先纠正两个常见误解
+
+### 「每次都要全量 clone，所以慢」
+
+不需要，也不是。
+
+`git fetch` 天生是增量的：只传本地缺失的对象。一次同步慢，不是因为它从头拉了整个仓库，而是因为**那一次的新增内容里有大二进制**。以 v0.24.0 为例，26 个提交里 28 个文件的代码改动只有几 MB，剩下 19MB 全是 20 个运镜演示 mp4。
+
+所以优化的方向不是「换成增量」，而是**别把二进制也当成代码来拉**。
+
+### 「建一个分支专门跟踪上游」
+
+`upstream/main` 这个 remote-tracking ref 本身就是跟踪分支。它的作用是「记住上游 main 现在指向哪个提交」，`git fetch upstream` 就是在更新它。再建一个 `refs/heads/upstream-track` 只是把同一个提交记两遍，不会更快，反而多一个要手动同步的东西。
+
+真正有用的是**合并前留一个可回退的锚点**。脚本会自动打 `backup/pre-sync-<时间>` 轻量标签，比开分支省事。
+
+需要额外分支的场景只有一种：想长期保留上游**原始快照**做 diff 展示。那时候用 `git branch upstream-snapshot upstream/main` 即可，按需创建，不必常驻。
+
+## 2. 三个真正解决问题的改动
+
+### 2.1 只拉代码：`--filter=blob:limit`
+
+```bash
+git fetch --no-tags --filter=blob:limit=100k upstream main
+```
+
+GitHub 支持 partial clone 的 blob 过滤。这条命令只拿 commit、tree 和 100KB 以下的小文件，**包体积从 28MB 降到几百 KB**，耗时从半小时降到几秒。
+
+`blob:limit` 写进了远端配置后，手敲 `git fetch upstream` 也会自动带上过滤：
+
+```bash
+git config remote.upstream.partialclonefilter blob:limit=102400
+```
+
+### 2.2 缺的大文件，先从本地拿
+
+这是整个方案最关键的一步。过滤之后，上游的大文件在本地对象库里是「缺失」状态，但**它们绝大多数就躺在工作区里，而且内容与上游完全一致**——上一个版本拉下来之后就没变过。
+
+```bash
+git hash-object -w web/public/presets/motions/10-oner.mp4
+```
+
+`hash-object -w` 会把工作区文件按 git blob 格式重新算 sha 并写回对象库。如果 sha 与上游要的一致，这一步就**以零网络代价补全了对象**。
+
+只有上游**真的改过**的二进制才会走网络，而这种改动在历史上极少。
+
+### 2.3 冲突解法只解一次：`git rerere`
+
+```bash
+git config rerere.enabled true
+git config rerere.autoupdate true
+```
+
+rerere 会记住每个冲突块的解法。下次同步遇到**文本完全相同**的冲突块时会自动套用，并把结果标记为「已解决」。长期同步同一个上游，冲突往往反复出现在同样的位置（比如 `CHANGELOG.md` 头部、i18n 词条），第二次起能省掉大半手工。
+
+它不是万能的：上游每次都改动同一段代码时帮不上。但成本为零，开着没坏处。
+
+## 3. 标准流程
+
+### 一条命令
+
+```bash
+node scripts/sync-upstream.mjs          # 预演：拉取 + 补对象 + 冲突预判，不动工作区
+node scripts/sync-upstream.mjs --apply  # 确认后真正合并
+```
+
+预演阶段会输出：
+
+- 上游新增多少提交、改了哪些文件
+- **哪些文件本地也改过**（这才是真会打架的地方，脚本用 `base...main` 与 `base...upstream/main` 求交集动态算，不靠人工维护黑名单）
+- `git merge-tree` 预演的冲突文件清单
+
+`git merge-tree --write-tree` 是无副作用的三方合并：它把结果算成一棵新 tree，不碰工作区也不碰 index。等于「先看看会怎样再决定」。
+
+### 合并之后
+
+```bash
+node scripts/check-baseline.mjs            # 只跑一遍 tsc，跟基线快照比集合
+node scripts/check-baseline.mjs --vitest   # 连单测一起（几分钟）
+```
+
+以前的做法是建 worktree 回到改动前再跑一遍 tsc 比对，两遍 tsc 把验证时间翻倍。现在把历史遗留问题存成快照，**只跑一遍**就能判断「有没有引入新问题」：
+
+```
+当前 81 / 基线 81（持平）
+✓ 没有新增问题
+```
+
+有新增时会把新增项逐条列出来，并以非零退出码结束，方便接进 CI。
+
+确认要接受当前结果（比如上游本身带来了一批错误）时用 `--update` 重建基线。
+
+### 可选参数
+
+| 参数 | 作用 |
+| --- | --- |
+| `--only-fetch` | 只 fetch，不检查不预演 |
+| `--branch=<名称>` | 跟踪上游的其它分支，默认 `main` |
+| `--into=<名称>` | 合并到哪个本地分支，默认当前分支 |
+| `--blob-limit=100k` | 调整过滤阈值；调到 `0` 等于不过滤 |
+| `--concurrency=6` | 网络补对象时的并发数 |
+
+## 4. 为什么上游远端要用 SSH
+
+`git remote -v` 里 `upstream` 应该是 SSH 地址：
+
+```bash
+git remote set-url upstream git@github.com:ZhuYichuan/infinite-canvas.git
+```
+
+不是偏好问题，是实测差异很大：
+
+| 通道 | 结果 |
+| --- | --- |
+| 系统代理 → HTTPS | `CONNECT tunnel failed 502`，完全不通 |
+| 直连 HTTPS（schannel） | 偶发 `server closed abruptly`，TLS 握手就断 |
+| 直连 HTTPS（openssl 后端） | 21 秒连不上 |
+| **SSH** | **3.3 秒握手成功** |
+
+SSH 唯一的缺点是**传大包会被限速**——这正是早期版本卡死 5 分钟的原因。但配合 `blob:limit` 之后，每次传输只有几十 KB，缺点就不存在了。
+
+脚本会自动清掉 `http_proxy` 等环境变量再执行 git 操作，避免代理把 SSH/直连搅乱。
+
+## 5. 踩坑记录
+
+这些都是真实撞过的，代码里都有对应处理，改动前请先读一遍。
+
+### 5.1 promisor 会让检查命令偷偷联网
+
+`fetch --filter` 会把远端标记为 promisor。之后**任何**触碰缺失对象的命令都会触发 lazy fetch 去联网——包括你想用来「检查缺什么」的 `cat-file --batch-check`。它不报错，只是卡在那里，最后因为代理 502 而 fatal 退出，看起来像「查个对象都要几分钟」。
+
+更麻烦的是 `GIT_NO_LAZY_FETCH=1` 在 2.55 上不生效。
+
+所以脚本的做法是：检查前先 `git config --unset remote.upstream.promisor`，并把 `pack/*.promisor` 标记文件移走（移到 `.git/promisor-disabled/`）；对象补齐后再把配置恢复回来，这样手敲 fetch 仍然自动过滤。
+
+### 5.2 中断的 fetch 会留下几十 MB 临时包
+
+`git fetch` 被打断时，已下载的部分留在 `.git/objects/pack/tmp_pack_*` 里，**git 永远不回收**。实测一次同步下来积了 12 个、共 127MB，`.git` 从 37MB 涨到 165MB。
+
+脚本每次 fetch 完会把这些临时包移到 `.git/promisor-disabled/`。定期清理也没坏处。
+
+### 5.3 Windows 下 tsc 输出是 CRLF
+
+`check-baseline` 早期版本把每条错误都正则解析成 0 条，原因就是：JS 正则里的 `.` **不匹配 `\r`**，而 Windows 下 tsc 每行以 `\r\n` 结尾，`(.*)$` 整批失配。
+
+所以解析前必须 `replace(/\r$/, "")`。这个坑很容易在 Windows 上重复踩到。
+
+### 5.4 别用 `grep -c` 判断 tsc 有没有报错
+
+空输入时 `grep -c` 返回 0，看起来像「零错误」。判断编译是否通过要用退出码或输出行数，不是计数。
+
+### 5.5 本地镜像与 public 目录
+
+`web/public/system-presets/` 是我们自己拉的 6.2GB 预设镜像（`scripts/fetch-system-presets.mjs`），已 gitignore，不在版本控制里。`web/public/presets/motions/` 是上游的 20MB 运镜视频，在版本控制里。
+
+两者都会在 `vite build` 时被整份复制进 `dist`，构建因此变慢、磁盘翻倍。要彻底解决得把它们挪出 `public`、改由部署侧挂载。
+
+## 6. 什么时候该跑一次
+
+- 上游发版后（看 [Releases](https://github.com/ZhuYichuan/infinite-canvas/releases)）
+- 需要上游某个新功能或 bug 修复时
+
+不需要定时跑。上游节奏快，但我们的改动集中在少数几个文件，同步频率越高单次冲突越少。

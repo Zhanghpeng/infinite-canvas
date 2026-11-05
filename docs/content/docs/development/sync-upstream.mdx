@@ -1,0 +1,159 @@
+---
+title: Syncing Upstream
+description: Standard workflow and speed-ups for following ZhuYichuan/infinite-canvas
+---
+
+# Syncing Upstream
+
+This project is a fork of [`ZhuYichuan/infinite-canvas`](https://github.com/ZhuYichuan/infinite-canvas). Upstream moves fast and occasionally ships large binary assets, so early syncs could burn an entire evening on this machine's network.
+
+This page records **why** the workflow looks like this — the commands matter less than the traps covered in the last section.
+
+## 1. Two common misconceptions
+
+### "Every sync re-clones everything, that's why it's slow"
+
+It does not, and it is not. `git fetch` is incremental by nature — it only transfers objects you are missing. A sync was slow because **that particular increment contained large binaries**. In v0.24.0, 26 commits touched 28 source files with a few MB of code; the remaining 19MB was 20 motion-preview mp4 files.
+
+The fix is not "switch to incremental" — it is **stop treating binaries as code**.
+
+### "Create a branch that tracks upstream"
+
+`upstream/main` is already that branch. It is a remote-tracking ref whose only job is remembering which commit upstream `main` points at; `git fetch upstream` updates it. Adding `refs/heads/upstream-track` stores the same commit twice, is not faster, and gives you one more thing to keep in sync.
+
+What is actually useful is **an anchor to roll back to before merging**. The script tags `backup/pre-sync-<time>` automatically.
+
+The only case for a dedicated branch is wanting a long-lived pristine upstream snapshot for diffing. Create it on demand then, not permanently.
+
+## 2. Three changes that actually help
+
+### 2.1 Fetch code only: `--filter=blob:limit`
+
+```bash
+git fetch --no-tags --filter=blob:limit=100k upstream main
+```
+
+GitHub supports partial-clone blob filters. This pulls commits, trees and files under 100KB only — **the pack drops from 28MB to a few hundred KB**, and runtime from tens of minutes to seconds.
+
+Once the filter is persisted on the remote, plain `git fetch upstream` applies it too:
+
+```bash
+git config remote.upstream.partialclonefilter blob:limit=102400
+```
+
+### 2.2 Recover large files from the worktree first
+
+This is the key trick. After filtering, upstream's large files are "missing" from the object database — but they are usually **sitting in the worktree, byte-identical to upstream**, because they have not changed since the previous sync.
+
+```bash
+git hash-object -w web/public/presets/motions/10-oner.mp4
+```
+
+`hash-object -w` recomputes the git blob sha and writes it back into the object database. If it matches what upstream wants, the object is restored **with zero network cost**.
+
+Only binaries that genuinely changed upstream hit the network — historically very rare.
+
+### 2.3 Resolve each conflict once: `git rerere`
+
+```bash
+git config rerere.enabled true
+git config rerere.autoupdate true
+```
+
+rerere records how each conflict block was resolved and replays it when the **exact same text** conflicts again. Syncing the same upstream repeatedly hits the same spots (CHANGELOG header, i18n entries), so from the second time on it saves most of the manual work.
+
+It is not magic — it cannot help when upstream rewrites the same lines every release. But it costs nothing.
+
+## 3. Standard workflow
+
+### One command
+
+```bash
+node scripts/sync-upstream.mjs          # dry run: fetch + restore objects + conflict preview
+node scripts/sync-upstream.mjs --apply  # merge for real
+```
+
+The dry run reports:
+
+- how many commits upstream added and which files changed
+- **which files we also touched** — computed dynamically as the intersection of `base...main` and `base...upstream/main`, no hand-maintained hot-file list
+- the conflict list from `git merge-tree`
+
+`git merge-tree --write-tree` performs a side-effect-free three-way merge: it computes the result as a new tree without touching the worktree or the index.
+
+### After merging
+
+```bash
+node scripts/check-baseline.mjs            # one tsc run, compared against a snapshot
+node scripts/check-baseline.mjs --vitest   # include unit tests (takes minutes)
+```
+
+Previously this meant creating a worktree at the pre-merge commit and running tsc a second time. Now known pre-existing problems live in a snapshot, so **a single run** answers "did we introduce anything new":
+
+```
+当前 81 / 基线 81（持平）
+✓ 没有新增问题
+```
+
+New entries are listed individually and the process exits non-zero, so it can gate CI. Use `--update` to accept the current result as the new baseline.
+
+### Options
+
+| Flag | Effect |
+| --- | --- |
+| `--only-fetch` | Fetch only, no inspection |
+| `--branch=<name>` | Track another upstream branch, defaults to `main` |
+| `--into=<name>` | Local branch to merge into, defaults to current |
+| `--blob-limit=100k` | Filter threshold; `0` disables filtering |
+| `--concurrency=6` | Parallelism when restoring objects over the network |
+
+## 4. Why the upstream remote uses SSH
+
+```bash
+git remote set-url upstream git@github.com:ZhuYichuan/infinite-canvas.git
+```
+
+Measured on this machine:
+
+| Channel | Result |
+| --- | --- |
+| System proxy → HTTPS | `CONNECT tunnel failed 502`, never works |
+| Direct HTTPS (schannel) | intermittent `server closed abruptly` during TLS handshake |
+| Direct HTTPS (openssl backend) | cannot connect after 21s |
+| **SSH** | **handshake in 3.3s** |
+
+SSH's only downside is throughput throttling on large packs — which is exactly what killed an early attempt after 5 minutes. With `blob:limit` the transfer is tens of KB, so that downside disappears.
+
+The script strips `http_proxy` and friends from the environment before invoking git.
+
+## 5. Traps
+
+### 5.1 promisor makes inspection commands hit the network
+
+`fetch --filter` marks the remote as a promisor. Afterwards **any** command touching a missing object triggers a lazy fetch — including the `cat-file --batch-check` you wanted to use to *find* the missing objects. It does not error; it just hangs, then dies on a proxy 502, looking like "listing objects takes minutes".
+
+`GIT_NO_LAZY_FETCH=1` does not help on git 2.55.
+
+So the script unsets `remote.upstream.promisor` and moves `pack/*.promisor` markers into `.git/promisor-disabled/` before inspecting, then restores the config afterwards so plain `git fetch` still filters.
+
+### 5.2 Interrupted fetches leave tens of MB behind
+
+When a fetch dies, the downloaded portion stays in `.git/objects/pack/tmp_pack_*` and **git never reclaims it**. One sync session left 12 files totalling 127MB; `.git` grew from 37MB to 165MB.
+
+The script moves them aside after each fetch.
+
+### 5.3 tsc emits CRLF on Windows
+
+An early `check-baseline` parsed zero errors out of 81. Cause: `.` in a JS regex **does not match `\r`**, and tsc ends every line with `\r\n`, so `(.*)$` fails for every line.
+
+Always `replace(/\r$/, "")` before matching.
+
+### 5.4 Never use `grep -c` to decide whether tsc passed
+
+On empty input `grep -c` returns 0, which reads as "zero errors". Use the exit code or the line count instead.
+
+### 5.5 Local mirrors and the public directory
+
+`web/public/system-presets/` holds a 6.2GB mirror we fetch ourselves (gitignored). `web/public/presets/motions/` holds upstream's 20MB of motion previews (tracked).
+
+Both get copied wholesale into `dist` by `vite build`, slowing builds and doubling disk usage. Moving them out of `public` and mounting them at deploy time is the real fix.

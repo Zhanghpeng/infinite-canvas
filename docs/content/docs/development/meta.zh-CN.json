@@ -4,6 +4,7 @@
   "defaultOpen": true,
   "pages": [
     "local-development",
+    "sync-upstream",
     "canvas-node-system",
     "comfyui-workflow-standard",
     "workflow-model-host-decoupling-spec",

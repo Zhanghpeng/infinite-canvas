@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [新增] 上游同步脚本 `scripts/sync-upstream.mjs`：fetch 带 `blob:limit` 只拉代码（28MB → 几百 KB，半小时 → 几秒），缺失的大文件优先用工作区的同内容文件算 hash 写回对象库（零网络），只有上游真改过的才联网；合并前用 `git merge-tree` 预演冲突，并用「双方都改过」的交集动态算出真正会打架的文件。
++ [新增] 基线校验脚本 `scripts/check-baseline.mjs`：把历史遗留的 tsc / vitest 失败存成快照，每次只跑一遍即可判断有无新增问题，替代原先「建 worktree 再跑第二遍 tsc 比对」的做法；新增项逐条列出并以非零退出码结束。附带修掉 Windows 下 CRLF 导致 tsc 错误行整批解析失败的坑。
 + [修复] 修复画布侧栏素材库插入姿势时拿到坏图的缺陷：姿势原图地址补上 CDN 的 `img/` 目录段，此前拼成根路径会被 SPA fallback 命中，返回 200 + 首页 HTML；同时上传前校验响应确为图片，缺图不再静默落成空节点，素材卡片缩略图取不到时回落写实版。
 + [新增] 预设资产本地镜像脚本 `scripts/fetch-system-presets.mjs`：支持按类目与档位下载、断点续传与失败清单，并在 `web/public/system-presets/` 生成 manifest；前端取图命中清单即走同源、未命中继续回落 CDN，解决境外 CDN 在国内整片超时导致素材库空图的问题。
 
