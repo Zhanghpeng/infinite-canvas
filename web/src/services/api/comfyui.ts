@@ -1231,6 +1231,43 @@ function normalizeConstNodeInputs(workflow: ComfyuiWorkflowJson): ComfyuiWorkflo
     return cloned ?? workflow;
 }
 
+/**
+ * 已知损坏、无法使用的模型文件 → 可用的等价替代。
+ *
+ * `minimax_h3_fl2va_pruned_fp8_scaled` 是「剪枝 + 转 fp8」的残次产物：882 个张量里
+ * 718 个权重全为 0，虽然能加载（量化元数据补齐后），但出片必然是整帧彩色噪点，文件不可修复。
+ * 渠道里保存的工作流快照、用户另存的工作流副本都会带着这个文件名，改仓库里的内置 JSON
+ * 覆盖不到它们，只能在提交时按文件名兜住。
+ */
+const BROKEN_MODEL_REPLACEMENTS: Record<string, string> = {
+    "minimax_h3_fl2va_pruned_fp8_scaled.safetensors": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+};
+
+/**
+ * 把工作流里指向已知损坏模型的输入值换成可用模型。
+ * 按「输入值」而不是节点类型匹配：同一个模型名可能出现在 `UNETLoader.unet_name`、
+ * `CheckpointLoader.model_name` 等不同字段里，按值匹配才不会漏。
+ * 和常量节点归一化一样只复制一份，不动调用方的对象。
+ */
+function replaceBrokenModelInputs(workflow: ComfyuiWorkflowJson): ComfyuiWorkflowJson {
+    let cloned: ComfyuiWorkflowJson | null = null;
+    for (const [id, raw] of Object.entries(workflow)) {
+        const node = raw as { inputs?: Record<string, unknown> } | null;
+        if (!node || typeof node !== "object" || !node.inputs) continue;
+        for (const [key, value] of Object.entries(node.inputs)) {
+            if (typeof value !== "string") continue;
+            const replacement = BROKEN_MODEL_REPLACEMENTS[value];
+            if (!replacement) continue;
+            cloned ??= structuredClone(workflow);
+            const target = cloned[id] as { inputs?: Record<string, unknown> } | undefined;
+            if (!target?.inputs) continue;
+            target.inputs[key] = replacement;
+            console.warn(`[ComfyUI] 节点 ${id}.${key} 指向已损坏的模型 ${value}，已自动替换为 ${replacement}`);
+        }
+    }
+    return cloned ?? workflow;
+}
+
 async function submitJobInternal(workflow: ComfyuiWorkflowJson, baseUrl: string, token?: string): Promise<string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -1240,7 +1277,10 @@ async function submitJobInternal(workflow: ComfyuiWorkflowJson, baseUrl: string,
     const response = await comfyuiFetch(url, {
         method: "POST",
         headers,
-        body: JSON.stringify({ prompt: normalizeConstNodeInputs(workflow), client_id: clientId }),
+        body: JSON.stringify({
+            prompt: replaceBrokenModelInputs(normalizeConstNodeInputs(workflow)),
+            client_id: clientId,
+        }),
     }, baseUrl);
     if (!response.ok) {
         let errDetail = `${response.status}`;

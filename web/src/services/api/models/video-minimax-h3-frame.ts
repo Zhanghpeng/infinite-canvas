@@ -21,7 +21,7 @@ const FRAME_SLOT_MAPPING = {
  */
 export const videoMinimaxH3FrameFp8PdmdProfile: WorkflowModelProfile = {
     id: "frame-video-minimax-h3-fp8-4step-pdmd",
-    name: "MiniMax H3 首尾帧 (FP8 4步 PDMD)",
+    name: "MiniMax H3 首尾帧 (INT8 剪枝 4步 PDMD)",
     capability: "video",
     protocol: "comfyui",
     category: "frameVideo",
@@ -54,7 +54,7 @@ export const videoMinimaxH3FrameFp8PdmdProfile: WorkflowModelProfile = {
         },
     },
     slotMapping: FRAME_SLOT_MAPPING,
-    description: "MiniMax H3 首尾帧插值视频极速版 (FP8 4步 PDMD)，支持 0~2 张参考图（首尾插值或纯提示词生成），4 步瞬间成片。",
+    description: "MiniMax H3 首尾帧插值视频极速版 (INT8 旋转量化剪枝底模 + 4步 PDMD)，支持 0~2 张参考图（首尾插值或纯提示词生成），4 步瞬间成片。",
     supportedTools: {
         faceRefine: true,
         depthVideo: true,
@@ -67,7 +67,7 @@ export const videoMinimaxH3FrameFp8PdmdProfile: WorkflowModelProfile = {
  */
 export const videoMinimaxH3FrameFp8Profile: WorkflowModelProfile = {
     id: "frame-video-minimax-h3-fp8",
-    name: "MiniMax H3 首尾帧 (FP8 20步)",
+    name: "MiniMax H3 首尾帧 (INT8 剪枝 20步)",
     capability: "video",
     protocol: "comfyui",
     category: "frameVideo",

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [修复] 提交前自动纠正指向已损坏底模的工作流：渠道里保存的工作流快照与另存副本会带着 `minimax_h3_fl2va_pruned_fp8_scaled.safetensors`（权重 718/882 全为 0，出片为整帧彩色噪点），改仓库里的内置 JSON 覆盖不到这些快照。现在提交时按输入值匹配并替换为 `minimax_h3_fl2va_pruned_int8_convrot.safetensors`，模型档案展示名同步标注「INT8 剪枝」。
+
 + [修复] 首尾帧内置工作流（`FP8 4步 PDMD` / `FP8 20步`）的默认底模改为 `minimax_h3_fl2va_pruned_int8_convrot.safetensors`：原 `minimax_h3_fl2va_pruned_fp8_scaled` 文件转换时写入不完整（882 个张量中 718 个权重全为 0、200 条量化配置 157 条为空），虽然补齐配置后能加载，但出片整帧为彩色噪点；改后工作流名称同步标注为「INT8 剪枝」，模型选择处不再指向坏文件。
 
 + [修复] 修复内置 MiniMax H3 视频工作流提交时被 ComfyUI 拒绝的问题：这批工作流由 ComfyLiterals 环境导出，整数与浮点常量节点把输入名写成 `Number`，而当前 ComfyUI 里同名的 `Int` / `Float` 节点（comfyui-logic）要求 `value`，提交时报「节点 120（Int）：缺少输入「value」」「节点 123（Float）：缺少输入「value」」。已把内置与可下载工作流的字段名改为 `value`（空值补默认时长），并在提交前做一次同名节点的字段归一化，渠道里已保存的旧工作流副本也会被自动纠正。
