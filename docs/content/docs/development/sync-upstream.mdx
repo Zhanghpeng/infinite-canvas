@@ -66,22 +66,78 @@ It is not magic — it cannot help when upstream rewrites the same lines every r
 
 ## 3. Standard workflow
 
-### One command
+A sync is a **three-step loop**, each step doing one thing:
 
 ```bash
-node scripts/sync-upstream.mjs          # dry run: fetch + restore objects + conflict preview
-node scripts/sync-upstream.mjs --apply  # merge for real
+node scripts/sync-upstream.mjs            # 1. dry run: fetch + restore objects + conflict preview
+node scripts/sync-upstream.mjs --apply    # 2. merge: backup tag → real merge → baseline check
+node scripts/sync-upstream.mjs --continue # 3. finish: commit the merge → baseline → push hint
 ```
 
-The dry run reports:
+Step 2 runs straight through to the baseline check when there are no conflicts; otherwise it stops mid-merge, and you resolve by group then run step 3.
+
+### 1. Dry run
+
+```bash
+node scripts/sync-upstream.mjs
+```
+
+Reports three things:
 
 - how many commits upstream added and which files changed
 - **which files we also touched** — computed dynamically as the intersection of `base...main` and `base...upstream/main`, no hand-maintained hot-file list
-- the conflict list from `git merge-tree`
+- the conflict list from `git merge-tree`, grouped by resolution order
 
 `git merge-tree --write-tree` performs a side-effect-free three-way merge: it computes the result as a new tree without touching the worktree or the index.
 
-### After merging
+### 2. Merge
+
+```bash
+node scripts/sync-upstream.mjs --apply
+```
+
+It tags the pre-merge commit as `backup/pre-sync-<date>-<time>` (the last 5 are kept), so a botched resolution can be rolled back wholesale:
+
+```bash
+git reset --hard backup/pre-sync-20261105-2250
+```
+
+On success the script runs the baseline check itself; pass `--no-verify` to skip it.
+
+### 3. Resolve conflicts
+
+Conflicts are grouped by **cost of getting them wrong**, each group with a one-line rule:
+
+```
+Core paths — keep local behaviour, absorb upstream's structural changes
+  web/src/services/api/comfyui.ts (2 hunks)
+UI — local interaction wins, align upstream props and component hierarchy
+  web/src/components/canvas/canvas-node-prompt-panel.tsx (5 hunks)
+Docs — union the content; verify index files (meta.json) by hand
+  docs/content/docs/development/meta.json
+```
+
+Order: core paths → UI → other → tests → docs → metadata. A wrong core-path resolution silently changes behaviour; a wrong doc resolution is just ugly.
+
+Conflict markers use the `zdiff3` style (the script sets `merge.conflictStyle`), which includes the base version so you can see both what upstream changed and what we had before.
+
+When done:
+
+```bash
+git add <files>
+node scripts/sync-upstream.mjs --continue
+```
+
+`--continue` refuses to commit until three checks pass: no unresolved files, no resolved-but-unstaged files, and there is actually a merge to commit. Then it commits with `git commit --no-edit`, runs the baseline, and prints the push command. Push when you are happy:
+
+```bash
+git push origin main
+# or let the script do it next time: --push
+```
+
+### Baseline check
+
+`--apply` and `--continue` run this automatically:
 
 ```bash
 node scripts/check-baseline.mjs            # one tsc run, compared against a snapshot
@@ -102,6 +158,9 @@ New entries are listed individually and the process exits non-zero, so it can ga
 | Flag | Effect |
 | --- | --- |
 | `--only-fetch` | Fetch only, no inspection |
+| `--continue` | Commit a resolved merge and verify it |
+| `--push` | Push to origin after the baseline passes; default is a hint only |
+| `--no-verify` | Skip the post-merge baseline check |
 | `--branch=<name>` | Track another upstream branch, defaults to `main` |
 | `--into=<name>` | Local branch to merge into, defaults to current |
 | `--blob-limit=100k` | Filter threshold; `0` disables filtering |

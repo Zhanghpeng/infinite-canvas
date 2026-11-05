@@ -12,13 +12,14 @@
  *   3. 只有上游真的改过、本地也没有的，才走网络单个下载
  *   4. 用 merge-tree 预演冲突，不改工作区
  *
- * 用法：
+ * 用法（正常情况只需要前两条）：
  *   node scripts/sync-upstream.mjs              预演（fetch + 补对象 + 冲突预判，不动工作区）
- *   node scripts/sync-upstream.mjs --apply      执行合并
+ *   node scripts/sync-upstream.mjs --apply      执行合并，成功后自动跑基线
+ *   node scripts/sync-upstream.mjs --continue   冲突解决完，提交合并并校验
  *   node scripts/sync-upstream.mjs --only-fetch 只发 fetch
- *   可选：--remote=upstream  --branch=main  --blob-limit=100k
+ *   可选：--remote=upstream --branch=main --blob-limit=100k --push --no-verify
  *
- * 设计取舍见 docs/content/docs/guide/sync-upstream.mdx
+ * 设计取舍见 docs/content/docs/development/sync-upstream.zh-CN.mdx
  */
 
 import { spawnSync } from "node:child_process";
@@ -47,7 +48,12 @@ const INTO = flag("into", null);
 const BLOB_LIMIT = flag("blob-limit", "100k");
 const ONLY_FETCH = Boolean(flag("only-fetch", false));
 const APPLY = Boolean(flag("apply", false));
+const RESUME = Boolean(flag("continue", false));
+const NO_VERIFY = Boolean(flag("no-verify", false));
+const PUSH = Boolean(flag("push", false));
 const CONCURRENCY = Number(flag("concurrency", 6));
+/** 备份标签只留最近几个，避免每次同步都积一个没人回看的锚点。 */
+const KEEP_BACKUPS = 5;
 
 // ── 输出 ────────────────────────────────────────────────────────────────────
 const C = process.stdout.isTTY
@@ -64,8 +70,11 @@ if (argv.includes("--help") || argv.includes("-h")) {
 
 默认只预演（拉取 + 补对象 + 冲突预判），不改工作区。
 
-  --apply              确认后真正执行合并
+  --apply              确认后真正执行合并，成功后自动跑基线
+  --continue           冲突解决完（已 git add），提交合并并校验
   --only-fetch         只 fetch
+  --push               校验通过后推送到 origin（默认只提示，不自动推）
+  --no-verify          跳过合并后的基线校验
   --branch=<名称>      要跟踪的上游分支，默认 main
   --into=<名称>        合并到哪个本地分支，默认当前分支
   --remote=<名称>      远端名，默认 upstream
@@ -139,6 +148,14 @@ function preflight() {
         process.exit(1);
     }
     ok(`远端 ${REMOTE} → ${url}`);
+
+    // 冲突块里带上 base，就能看出「上游改了什么、我们改了什么」，
+    // 比默认只给两边内容的 diff3/merge 样式好判断。一次设置长期生效。
+    const style = git(["config", "--get", "merge.conflictStyle"], { allowFail: true }).out;
+    if (style !== "zdiff3") {
+        git(["config", "merge.conflictStyle", "zdiff3"], { allowFail: true });
+        ok("冲突样式设为 zdiff3（块内含 base）");
+    }
     return { url, head };
 }
 
@@ -347,9 +364,20 @@ async function restoreBlobs(missing, repo) {
 function previewMerge(base, head) {
     step("冲突预演（merge-tree，不改工作区）");
     const res = git(["merge-tree", "--write-tree", "--name-only", LOCAL_BRANCH, head], { allowFail: true });
-    // 输出首行是合并后的 tree，其余是冲突文件；退出码 1 表示有冲突
+    // 输出首行是合并后的 tree，其余是冲突文件；退出码 1 表示有冲突。
+    // 但 git 会把「Auto-merging xxx」「CONFLICT (content): Merge conflict in xxx」
+    // 这类提示也混进同一路输出，它们不是文件名，必须滤掉，
+    // 否则预演结果会凭空多出几条（路径本身允许有空格，所以只按前缀与固定措辞过滤）。
+    const noise = /^(Auto-merging|CONFLICT|Merge|error:|warning:)\b/;
     const lines = res.out.split("\n").filter(Boolean);
-    const conflicts = lines.slice(1).map((line) => line.trim()).filter(Boolean);
+    const conflicts = [
+        ...new Set(
+            lines
+                .slice(1)
+                .map((line) => line.trim())
+                .filter((line) => line && !noise.test(line) && !line.includes(" Merge conflict in ")),
+        ),
+    ];
     return conflicts;
 }
 
@@ -372,9 +400,170 @@ function countConflictMarkers(files) {
     return result;
 }
 
+// ── 冲突分组：告诉人先解哪个，比只给一串路径有用 ──────────────────────────
+/**
+ * 冲突不是平权的。核心链路解错了会静默改变行为，文档解错了只是难看。
+ * 这里按「解错的代价」排序，并给每组一句处理原则——都是前几次同步的真实结论。
+ */
+const GROUPS = [
+    {
+        name: "核心链路",
+        test: (p) => /^(web\/src\/(lib|services|server)|canvas-agent|canvas-proxy)\//.test(p),
+        hint: "以本地行为为准，吸收上游的结构性改动（重命名、参数变化、新增分支）",
+    },
+    {
+        name: "界面",
+        test: (p) => /^web\/src\//.test(p),
+        hint: "交互与视觉以本地为准，对齐上游的 props 与组件层级",
+    },
+    {
+        name: "其他",
+        // 兜底组要显式排除后面几类，否则会把它们整批吃掉
+        test: (p) =>
+            !/(^|\/)(__tests__|tests?)\//.test(p) &&
+            !/\.(test|spec)\.[cm]?[jt]sx?$/.test(p) &&
+            !/^(docs|website)\//.test(p) &&
+            !/^(CHANGELOG\.md|VERSION|README\.md|AGENTS\.md)$/.test(p),
+        hint: "逐个看 diff，别整块选一边",
+    },
+    {
+        name: "测试",
+        test: (p) => /(^|\/)(__tests__|tests?)\//.test(p) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(p),
+        hint: "以覆盖本地行为为准，不要为了让测试通过就退回上游版本",
+    },
+    {
+        name: "文档",
+        test: (p) => /^(docs|website)\//.test(p),
+        hint: "内容取并集；目录索引（meta.json）手工核对，别直接合并",
+    },
+    {
+        name: "元数据",
+        test: (p) => /^(CHANGELOG\.md|VERSION|README\.md|AGENTS\.md)$/.test(p),
+        hint: "CHANGELOG 双方条目都保留，VERSION 取上游",
+    },
+];
+
+function groupConflicts(files, markers) {
+    const assigned = new Set();
+    const buckets = [];
+    for (const group of GROUPS) {
+        const hits = files.filter((p) => !assigned.has(p) && group.test(p));
+        for (const p of hits) assigned.add(p);
+        if (hits.length) buckets.push({ ...group, files: hits });
+    }
+    for (const bucket of buckets) {
+        log(`    ${C.bold}${bucket.name}${C.reset} ${C.dim}— ${bucket.hint}${C.reset}`);
+        for (const file of bucket.files) {
+            const blocks = markers?.get(file);
+            log(`      ${C.red}${file}${C.reset}${blocks ? ` ${C.dim}（${blocks} 处）${C.reset}` : ""}`);
+        }
+    }
+    return buckets;
+}
+
+function unmergedFiles() {
+    return git(["diff", "--name-only", "--diff-filter=U"]).out.split("\n").filter(Boolean);
+}
+
+function pendingMerge() {
+    return git(["rev-parse", "-q", "--verify", "MERGE_HEAD"], { allowFail: true }).out || null;
+}
+
+// ── 备份锚点 ──────────────────────────────────────────────────────────────
+/** 合并前打一个轻量标签。冲突解乱了能一键回到同步前，比记住 sha 实在。 */
+function backupTag() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const name = `backup/pre-sync-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+    const res = git(["tag", name], { allowFail: true });
+    if (!res.ok) return null;
+    const tags = git(["tag", "--list", "backup/pre-sync-*", "--sort=creatordate"]).out.split("\n").filter(Boolean);
+    for (const old of tags.slice(0, Math.max(0, tags.length - KEEP_BACKUPS))) {
+        git(["tag", "-d", old], { allowFail: true });
+    }
+    return name;
+}
+
+// ── 收尾：基线 + 推送 ─────────────────────────────────────────────────────
+function runBaseline() {
+    step("基线校验（tsc 快照比对）");
+    if (NO_VERIFY) {
+        warn("已跳过（--no-verify）");
+        return true;
+    }
+    const res = spawnSync(process.execPath, [join(ROOT, "scripts/check-baseline.mjs")], { cwd: ROOT, stdio: "inherit" });
+    if (res.status === 0) return true;
+    fail("基线有新增问题，先处理再推。确认可接受时：node scripts/check-baseline.mjs --update");
+    return false;
+}
+
+function pushToFork(passed) {
+    const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]).out;
+    if (!passed) {
+        log(`\n${C.dim}基线未通过，不推送。${C.reset}`);
+        return;
+    }
+    if (!PUSH) {
+        log(`\n${C.bold}下一步${C.reset}：git push origin ${branch}`);
+        log(`${C.dim}确认没问题后手动推；加 --push 可以让脚本在下次自动推${C.reset}`);
+        return;
+    }
+    step(`推送到 origin/${branch}`);
+    const res = git(["push", "origin", branch], { allowFail: true, env: directEnv() });
+    if (res.ok) ok("已推送");
+    else fail(`推送失败：${res.err || res.out}`);
+}
+
+
 // ── 主流程 ─────────────────────────────────────────────────────────────────
+/** 冲突解完之后接着走：提交合并 → 基线 → 推送提示。 */
+async function resumeMerge(started) {
+    if (!pendingMerge()) {
+        fail("当前没有进行中的合并。");
+        log(`  ${C.dim}要开始新一轮同步，先跑预演：node scripts/sync-upstream.mjs${C.reset}`);
+        process.exit(1);
+    }
+
+    step("继续未完成的合并");
+    const unmerged = unmergedFiles();
+    if (unmerged.length) {
+        warn(`还有 ${unmerged.length} 个文件没解决：`);
+        groupConflicts(unmerged, countConflictMarkers(unmerged));
+        log(`\n解完再跑一次：${C.bold}node scripts/sync-upstream.mjs --continue${C.reset}`);
+        process.exit(1);
+    }
+
+    // 解完忘了 add 是最常见的一步，单独提示一下
+    const unstaged = git(["diff", "--name-only"]).out.split("\n").filter(Boolean);
+    if (unstaged.length) {
+        warn(`这些文件已解决但还没暂存：`);
+        for (const file of unstaged) log(`      ${C.yellow}${file}${C.reset}`);
+        log(`\n先 ${C.bold}git add${C.reset} 再重跑 --continue。`);
+        process.exit(1);
+    }
+
+    const staged = git(["diff", "--cached", "--name-only"]).out.split("\n").filter(Boolean);
+    if (!staged.length) {
+        warn("没有待提交的合并结果，可能已经提交过了。");
+    } else {
+        const res = git(["commit", "--no-edit"], { allowFail: true });
+        if (!res.ok) {
+            fail(`提交失败：${res.err || res.out}`);
+            process.exit(1);
+        }
+        ok(`合并已提交（${staged.length} 个文件）`);
+    }
+    ok(`当前 HEAD ${git(["rev-parse", "--short", "HEAD"]).out}`);
+
+    const passed = runBaseline();
+    pushToFork(passed);
+    log(`\n${C.dim}耗时 ${((Date.now() - started) / 1000).toFixed(1)}s${C.reset}`);
+}
+
 async function main() {
     const started = Date.now();
+    if (RESUME) return resumeMerge(started);
+
     const { url } = preflight();
     const repo = parseOwnerRepo(url);
 
@@ -425,8 +614,8 @@ async function main() {
 
     const conflicts = previewMerge(base, head);
     if (conflicts.length) {
-        warn(`预演结果：${conflicts.length} 个文件会冲突`);
-        for (const file of conflicts) log(`      ${C.red}${file}${C.reset}`);
+        warn(`预演结果：${conflicts.length} 个文件会冲突，按这个顺序解：`);
+        groupConflicts(conflicts, null);
     } else {
         ok("预演结果：可以干净合并");
     }
@@ -439,24 +628,23 @@ async function main() {
     }
 
     step("执行合并");
+    const tag = backupTag();
+    if (tag) log(`  ${C.dim}备份锚点 ${tag}（解乱了：git reset --hard ${tag}）${C.reset}`);
     const merge = git(["merge", "--no-edit", head], { allowFail: true });
     if (merge.ok) {
-        ok("合并成功，没有冲突");
-        log(`\n${C.green}下一步${C.reset}: node scripts/check-baseline.mjs  # 确认没引入新问题`);
+        ok(`合并完成（${count} 个上游提交）`);
+        const passed = runBaseline();
+        pushToFork(passed);
         return;
     }
-    const unmerged = git(["diff", "--name-only", "--diff-filter=U"]).out.split("\n").filter(Boolean);
+    const unmerged = unmergedFiles();
     if (!unmerged.length) {
         fail(`合并失败：${merge.err || merge.out}`);
         process.exit(1);
     }
-    warn(`${unmerged.length} 个文件有冲突，已停在合并中：`);
-    const markers = countConflictMarkers(unmerged);
-    for (const file of unmerged) {
-        const blocks = markers.get(file);
-        log(`      ${C.red}${file}${C.reset}${blocks ? ` ${C.dim}（${blocks} 处冲突）${C.reset}` : ""}`);
-    }
-    log(`\n解决后：git add <文件> && git commit`);
+    warn(`${unmerged.length} 个文件有冲突，已停在合并中，按下面的顺序解：`);
+    groupConflicts(unmerged, countConflictMarkers(unmerged));
+    log(`\n解决后：${C.bold}git add <文件> && node scripts/sync-upstream.mjs --continue${C.reset}`);
     log(`${C.dim}已开启 rerere：同样的冲突下次会自动套用这次的解法${C.reset}`);
     log(`${C.dim}想放弃：git merge --abort${C.reset}`);
 }

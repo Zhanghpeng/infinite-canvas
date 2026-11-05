@@ -68,22 +68,84 @@ rerere 会记住每个冲突块的解法。下次同步遇到**文本完全相�
 
 ## 3. 标准流程
 
-### 一条命令
+整个同步是**三步闭环**，每步都只做一件清楚的事：
 
 ```bash
-node scripts/sync-upstream.mjs          # 预演：拉取 + 补对象 + 冲突预判，不动工作区
-node scripts/sync-upstream.mjs --apply  # 确认后真正合并
+node scripts/sync-upstream.mjs            # ① 预演：拉取 + 补对象 + 冲突预判，不动工作区
+node scripts/sync-upstream.mjs --apply    # ② 合并：打备份锚点 → 真合并 → 自动跑基线
+node scripts/sync-upstream.mjs --continue # ③ 收尾：冲突解完提交合并 → 基线 → 提示推送
 ```
 
-预演阶段会输出：
+第 ② 步如果没有冲突就直接走完基线校验并给出推送命令；有冲突则停在合并状态，按分组顺序解决后进第 ③ 步。
+
+### ① 预演
+
+```bash
+node scripts/sync-upstream.mjs
+```
+
+输出三件事：
 
 - 上游新增多少提交、改了哪些文件
 - **哪些文件本地也改过**（这才是真会打架的地方，脚本用 `base...main` 与 `base...upstream/main` 求交集动态算，不靠人工维护黑名单）
-- `git merge-tree` 预演的冲突文件清单
+- `git merge-tree` 预演的冲突文件清单，按解决顺序分组
 
 `git merge-tree --write-tree` 是无副作用的三方合并：它把结果算成一棵新 tree，不碰工作区也不碰 index。等于「先看看会怎样再决定」。
 
-### 合并之后
+### ② 合并
+
+```bash
+node scripts/sync-upstream.mjs --apply
+```
+
+合并前会自动打一个 `backup/pre-sync-<日期>-<时刻>` 轻量标签（只保留最近 5 个）。解乱了可以整段回退：
+
+```bash
+git reset --hard backup/pre-sync-20261105-2250
+```
+
+合并成功后不需要再手动跑 tsc，脚本直接接基线校验；想跳过加 `--no-verify`。
+
+### ③ 解决冲突
+
+冲突文件不会平铺给你，脚本按「解错的代价」分组，并给每组一句处理原则：
+
+```
+核心链路 — 以本地行为为准，吸收上游的结构性改动（重命名、参数变化、新增分支）
+  web/src/services/api/comfyui.ts （2 处）
+界面 — 交互与视觉以本地为准，对齐上游的 props 与组件层级
+  web/src/components/canvas/canvas-node-prompt-panel.tsx （5 处）
+文档 — 内容取并集；目录索引（meta.json）手工核对，别直接合并
+  docs/content/docs/development/meta.json
+```
+
+顺序是：核心链路 → 界面 → 其他 → 测试 → 文档 → 元数据。核心链路解错会静默改变行为，文档解错只是难看，所以先解前者。
+
+冲突块用 `zdiff3` 样式（脚本自动配置 `merge.conflictStyle`），块里带 base 版本，能同时看到「上游改了什么、我们原来是什么」，比只给两边内容的默认样式好判断。
+
+解完：
+
+```bash
+git add <文件>
+node scripts/sync-upstream.mjs --continue
+```
+
+`--continue` 会先检查三件事，少一样都不提交：
+
+1. 是否还有未解决冲突文件
+2. 是否解完忘了 `git add`（最常见的漏步）
+3. 是否有待提交的合并结果
+
+都通过后用 `git commit --no-edit` 提交合并，接着跑基线，最后给出推送命令。确认没问题再推：
+
+```bash
+git push origin main
+# 或者让脚本在下次自己推：--push
+```
+
+### 基线校验
+
+`--apply` / `--continue` 会自动跑一遍：
 
 ```bash
 node scripts/check-baseline.mjs            # 只跑一遍 tsc，跟基线快照比集合
@@ -106,6 +168,9 @@ node scripts/check-baseline.mjs --vitest   # 连单测一起（几分钟）
 | 参数 | 作用 |
 | --- | --- |
 | `--only-fetch` | 只 fetch，不检查不预演 |
+| `--continue` | 冲突解完后提交合并并校验 |
+| `--push` | 校验通过后推送 origin，默认只提示 |
+| `--no-verify` | 跳过合并后的基线校验 |
 | `--branch=<名称>` | 跟踪上游的其它分支，默认 `main` |
 | `--into=<名称>` | 合并到哪个本地分支，默认当前分支 |
 | `--blob-limit=100k` | 调整过滤阈值；调到 `0` 等于不过滤 |
