@@ -22,3 +22,4 @@ web/public/plugins
 .scratch/
 .collab-cache/
 web/.collab-cache/
+web/vitest-report.json

@@ -15,7 +15,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -99,6 +99,7 @@ function runVitest() {
         return null;
     }
     const report = JSON.parse(readFileSync(reportPath, "utf8"));
+    rmSync(reportPath, { force: true }); // 临时报告，别留在工作区里
     const failed = [];
     for (const file of report.testResults || []) {
         for (const test of file.assertionResults || []) {
