@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowUp, LoaderCircle, Maximize2, Minimize2, RefreshCw, Sparkles, Square } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, AtSign, LoaderCircle, Maximize2, Minimize2, RefreshCw, Sparkles, Square } from "lucide-react";
 import { Button, Modal, Segmented, Select, Tooltip, message } from "antd";
 import { useTranslation } from "react-i18next";
 
@@ -9,8 +9,8 @@ import { AudioModelPicker } from "@/components/audio-model-picker";
 import { VideoModelPicker } from "@/components/video-model-picker";
 import { ImageModelPicker } from "@/components/image-model-picker";
 import { TextModelPicker } from "@/components/text-model-picker";
-import { decodeChannelModel, defaultConfig, encodeChannelModel, findWorkflow, getDefaultWorkflow, isModelSupportedByHost, resolveModelChannel, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
-import { BUILTIN_VIDEO_WORKFLOW_MODELS, evaluateModelAvailability, getModelProfile, imageQwen21Profile, textQwen35Profile } from "@/services/api/models";
+import { decodeChannelModel, defaultConfig, encodeChannelModel, findWorkflow, isModelSupportedByHost, resolveModelChannel, resolveModelForCapability, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { BUILTIN_VIDEO_WORKFLOW_MODELS, evaluateModelAvailability, getModelProfile, imageQwen21Profile, resolveVideoModelIdForMode, textQwen35Profile } from "@/services/api/models";
 import { getNodeResourceCounts } from "@/lib/canvas/canvas-node-geometry";
 import { resolveExecutionWorkflow } from "@/lib/canvas/workflow-resolution";
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -28,7 +28,7 @@ import { voiceAssetUrl, voiceAudioUrl, type CanvasVoice } from "@/lib/canvas/voi
 import { setAudioEdgeMode, type CanvasAudioEdgeMode } from "@/lib/canvas/canvas-audio-channels";
 import { uploadMediaFile } from "@/services/file-storage";
 import { CanvasNodeType, type CanvasGenerationIntent, type CanvasGenerationMode, type CanvasNodeData, type CanvasNodeMetadata } from "@/types/canvas";
-import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { getCanvasAllCategorizedResources, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasVoicePicker } from "./canvas-voice-picker";
 import { CanvasExecutionWorkflowBadge } from "./canvas-execution-workflow-badge";
 import { CanvasNodeReferenceBar } from "./canvas-node-reference-bar";
@@ -47,6 +47,7 @@ type CanvasNodePromptPanelProps = {
     nodes: CanvasNodeData[];
     connectedNodes?: CanvasNodeData[];
     onDisconnectReference?: (fromNodeId: string, toNodeId: string) => void;
+    onConnectReference?: (fromNodeId: string, toNodeId: string) => boolean | Promise<boolean>;
     onStartReferenceSelection?: (nodeId: string) => void;
     onReorderReferences?: (toNodeId: string, orderedSourceNodeIds: string[]) => void;
     onLocateNode?: (nodeId: string) => void;
@@ -73,6 +74,7 @@ export function CanvasNodePromptPanel({
     mentionReferences = [],
     connectedNodes = [],
     onDisconnectReference,
+    onConnectReference,
     onStartReferenceSelection,
     onReorderReferences,
     onLocateNode,
@@ -125,6 +127,12 @@ export function CanvasNodePromptPanel({
     const voiceEmoMode = node.metadata?.voiceEmoMode === "speaker" ? "speaker" : "text";
     const [expanded, setExpanded] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const triggerMentionRef = useRef<(() => void) | null>(null);
+
+    const connectedNodeIds = useMemo(() => new Set(connectedNodes.map((n) => n.id)), [connectedNodes]);
+    const categorizedResources = useMemo(() => {
+        return getCanvasAllCategorizedResources(node.id, nodes, connectedNodeIds);
+    }, [node.id, nodes, connectedNodeIds]);
 
     const connectedResources = useMemo(() => {
         let images = 0;
@@ -330,7 +338,7 @@ export function CanvasNodePromptPanel({
         ? t("canvas.promptPanel.depthVideoPrompt")
         : mode === "text" && connectedResources.images > 0
         ? "输入看图指令（留空默认执行生图提示词反推）..."
-        : t(`canvas.promptPanel.${mode === "image" && hasImageContent ? "editImage" : mode === "text" && hasTextContent ? "editText" : mode}`);
+        : t("canvas.promptPanel.mentionPlaceholder", "@搜索主体、图片、视频");
 
     const submit = (intent: CanvasGenerationIntent = canRepeat ? "repeat" : "new") => {
         if (isGenerating || isOptimizingPrompt) return;
@@ -429,7 +437,10 @@ export function CanvasNodePromptPanel({
                             nodes={nodes}
                             connectedNodes={connectedNodes}
                             onDisconnect={onDisconnectReference}
-                            onStartSelection={onStartReferenceSelection}
+                            // 参考栏的「+」改为唤起 @ 资源菜单，和输入框里的 @ 共用同一个召唤面板。
+                            onStartSelection={() => {
+                                triggerMentionRef.current?.();
+                            }}
                             onReorder={onReorderReferences}
                             onLocateNode={onLocateNode}
                             onAudioEdgeModeChange={handleAudioEdgeModeChange}
@@ -463,11 +474,14 @@ export function CanvasNodePromptPanel({
                         </div>
                     )}
                 </>
-
             )}
             <CanvasPromptChipInput
                 value={prompt}
                 references={hasSavedToolResult ? [] : mentionReferences}
+                categorizedResources={categorizedResources}
+                showMotionPresets={mode === "video"}
+                onConnectResource={(sourceNodeId) => (onConnectReference ? onConnectReference(sourceNodeId, node.id) : true)}
+                triggerMentionRef={triggerMentionRef}
                 onChange={updatePrompt}
                 onSubmit={submit}
                 className={cn("thin-scrollbar w-full cursor-text resize-none rounded-xl px-3 py-2 text-sm leading-5 outline-none", isVoiceNode ? "h-32" : "h-40")}
@@ -505,7 +519,6 @@ export function CanvasNodePromptPanel({
                     <Tooltip title={t("canvas.promptPanel.expandEditor")}>
                         <Button type="text" className="!h-8 !w-8 !min-w-8 shrink-0 !rounded-full !bg-transparent !p-0" style={{ color: theme.node.text }} icon={<Maximize2 className="size-3.5" />} onClick={openExpandedEditor} aria-label={t("canvas.promptPanel.expandEditor")} />
                     </Tooltip>
-                    <CanvasPromptLibrary onSelect={updatePrompt} />
                     {mode === "image" ? (
                         <>
                             <ImageModelPicker
@@ -564,8 +577,8 @@ export function CanvasNodePromptPanel({
                                         channelId: nextChannelId,
                                         modelId: nextModelId,
                                         videoMode: nextVideoMode,
-                                        // 二级选中的就是该渠道配置里的那一条流，直接钉住；没选（或点了回转）
-                                        // 就跟随配置里标为默认的那条。
+                                        // 二级里选中的就是该渠道配置里的那一条流，直接钉住；没选（或点了回转）
+                                        // 就传 undefined，交给 modelId 派生，避免旧绑定把新模型跳过。
                                         workflowId: workflow?.id,
                                     });
                                 }}
@@ -580,7 +593,7 @@ export function CanvasNodePromptPanel({
                                 }}
                                 config={config}
                                 buttonClassName="!h-10 min-w-0 !max-w-[160px] !justify-start !rounded-full !px-3"
-                                onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value, config))}
+                                onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value, config, node.metadata?.modelId))}
                                 onOpenChange={handleSettingsOpenChange}
                             />
                         </>
@@ -720,6 +733,17 @@ export function CanvasNodePromptPanel({
                     {/* 四个节点的选择器二级已经是工作流名本身，徽标只保留「是否跟随配置默认」
                          这一个状态信号，不再重复流名；解除钉住的入口在选择器右侧回转图标。 */}
                     {!agentMode ? <CanvasExecutionWorkflowBadge node={node} mode={mode} imageCount={connectedResources.images} /> : null}
+                    <Tooltip title={t("canvas.promptPanel.mentionResource", "召唤/引用画布资源 (@)")}>
+                        <Button
+                            type="text"
+                            className="!h-8 !w-8 !min-w-8 shrink-0 !rounded-full !bg-transparent !p-0"
+                            style={{ color: theme.node.text }}
+                            icon={<AtSign className="size-3.5" />}
+                            onClick={() => triggerMentionRef.current?.()}
+                            aria-label="召唤/引用画布资源"
+                        />
+                    </Tooltip>
+                    <CanvasPromptLibrary onSelect={updatePrompt} />
                 </div>
                 {isOptimizingPrompt ? (
                     <Button type="primary" danger className="ml-auto !h-10 shrink-0 !rounded-full !px-3" onClick={() => onCancelOptimizePrompt?.()} aria-label={t("canvas.promptAssistant.cancel")}>
@@ -884,6 +908,9 @@ export function CanvasNodePromptPanel({
                     <CanvasPromptChipInput
                         value={prompt}
                         references={hasSavedToolResult ? [] : mentionReferences}
+                        categorizedResources={categorizedResources}
+                        showMotionPresets={mode === "video"}
+                        onConnectResource={(sourceNodeId) => (onConnectReference ? onConnectReference(sourceNodeId, node.id) : true)}
                         onChange={updatePrompt}
                         containerClassName={isFullscreen ? "flex-1 min-h-0 flex flex-col" : ""}
                         className={cn(
@@ -947,29 +974,31 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
     };
 }
 
-function videoConfigPatch(key: keyof AiConfig, value: string, config?: AiConfig) {
+function videoConfigPatch(key: keyof AiConfig, value: string, config?: AiConfig, currentModelId?: string) {
     if (key === "videoSeconds") return { seconds: value };
     if (key === "videoGenerateAudio") return { generateAudio: value };
     if (key === "videoWatermark") return { watermark: value };
     if (key === "videoMode") {
         const patch: Record<string, unknown> = {
             videoMode: value,
-            modelId: value === "frame" ? "frame-video-minimax-h3-fp8-4step-pdmd" : "omni-video-minimax-h3-fp8-4step-pdmd",
+            modelId: resolveVideoModelIdForMode(
+                currentModelId || config?.videoModel || config?.model,
+                value === "frame" ? "frame" : "omni",
+            ),
         };
         if (config) {
             const channel = resolveModelChannel(config, config.model || config.videoModel);
             if (value === "frame") {
                 const frameModel = channel.models.find((m) => m.name === "ComfyUI Frame Video" || m.name.toLowerCase().includes("frame") || m.name.includes("首尾帧"));
                 if (frameModel) patch.model = encodeChannelModel(channel.id, frameModel.name);
-                const defaultFrameWf = getDefaultWorkflow(channel, "frameVideo");
-                if (defaultFrameWf) patch.workflowId = defaultFrameWf.id;
             } else if (value === "omni") {
                 const omniModel = channel.models.find((m) => m.name === "ComfyUI Video" || (!m.name.toLowerCase().includes("frame") && !m.name.includes("首尾帧") && m.capability === "video"));
                 if (omniModel) patch.model = encodeChannelModel(channel.id, omniModel.name);
-                const defaultOmniWf = getDefaultWorkflow(channel, "omniVideo");
-                if (defaultOmniWf) patch.workflowId = defaultOmniWf.id;
             }
         }
+        // 清空节点级工作流绑定：执行时 workflowId 优先于 modelId 派生，
+        // 若保留旧的类别默认工作流，切换后的模型（如 INT8 量化版）会被静默跳过。
+        patch.workflowId = undefined;
         return patch;
     }
     return { [key]: value };

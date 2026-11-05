@@ -14,7 +14,7 @@ import type { CanvasNodeContext, CanvasPluginHost } from "@/types/canvas-plugin"
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasVideoPlayer } from "./canvas-video-player";
 import { useTranslation } from "react-i18next";
-import { formatNodeLoadingText } from "@/lib/canvas/canvas-generation-helpers";
+import { formatNodeLoadingText, formatProgressCaption } from "@/lib/canvas/canvas-generation-helpers";
 import { formatTimecode } from "@/lib/canvas/video-timeline";
 import { CanvasGenerationError } from "./canvas-generation-error";
 
@@ -664,6 +664,23 @@ function GroupNodeContent({ node, theme, groupSummary, isLocked, scale, onToggle
     );
 }
 
+function GenerationProgress({ theme, pct, caption }: { theme: NodeContentRendererProps["theme"]; pct?: number; caption?: string }) {
+    if (typeof pct !== "number") return null;
+    const width = Math.max(0, Math.min(100, pct));
+    return (
+        <div className="flex w-24 flex-col items-center gap-1.5">
+            <div className="h-[3px] w-full overflow-hidden rounded-full" style={{ background: theme.node.stroke }}>
+                <div className="h-full rounded-full transition-[width] duration-300 ease-out" style={{ width: `${width}%`, background: theme.node.activeStroke }} />
+            </div>
+            {caption ? (
+                <span className="text-[10px] tracking-[0.1em]" style={{ color: theme.node.activeStroke }}>
+                    {caption}
+                </span>
+            ) : null}
+        </div>
+    );
+}
+
 function LoadingContent({ theme, node }: Pick<NodeContentRendererProps, "theme"> & { node?: CanvasNodeData }) {
     const { t } = useTranslation();
     // 分段任务的段节点一提交就全铺在画布上，轮到谁才真正开始跑。
@@ -679,6 +696,7 @@ function LoadingContent({ theme, node }: Pick<NodeContentRendererProps, "theme">
             ) : (
                 <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
             )}
+            <GenerationProgress theme={theme} pct={node?.metadata?.progressPct} caption={formatProgressCaption(node?.metadata)} />
             {segment ? <span className="rounded-full bg-indigo-600/80 px-2 py-0.5 text-[10px] font-medium text-white">{t("canvas.videoTimeline.node.segmentBadge", { index: segment.index + 1 })}</span> : null}
             <span className="text-[10px] tracking-[0.2em]">{loadingText}</span>
         </div>
@@ -844,6 +862,7 @@ function TextSlotStatus({ text }: { text: CanvasNodeText }) {
             ) : (
                 <span className="text-xs">{t("apiErrors.noContent")}</span>
             )}
+            {loading ? <GenerationProgress theme={theme} pct={text.progressPct} caption={formatProgressCaption(text)} /> : null}
             {loading ? <span className="text-[10px] tracking-[0.2em]">{loadingText}</span> : null}
         </div>
     );
@@ -1106,6 +1125,7 @@ function ImageSlotStatus({ image }: { image?: CanvasNodeImage }) {
             ) : loading ? (
                 <>
                     <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
+                    <GenerationProgress theme={theme} pct={image?.progressPct} caption={formatProgressCaption(image)} />
                     <span className="text-[10px] tracking-[0.2em]">{loadingText}</span>
                 </>
             ) : (
@@ -1186,73 +1206,165 @@ function ConnectionHandleDot({
     onClick?: (event: React.MouseEvent) => void;
 }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [isHovered, setIsHovered] = useState(false);
+    const [stickyOffset, setStickyOffset] = useState<{ x: number; y: number } | null>(null);
+    const isDraggingRef = useRef(false);
+    const dragStartPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
     const safeScale = scale > 0 ? scale : 1;
+    const isRight = side === "right";
+    const dragThreshold = isRight ? 46 : 38;
 
-    const handleMouseDown = (event: React.MouseEvent) => {
-        dragStartPosRef.current = { x: event.clientX, y: event.clientY };
-        onMouseDown(event);
-    };
+    // 鼠标在触点感应范围悬浮移动时，触点磁吸粘连跟随鼠标移动（仅向外侧延伸，禁止向节点内部移动）
+    const handlePointerMove = (event: React.PointerEvent) => {
+        if (isDraggingRef.current) return;
+        const container = containerRef.current;
+        if (!container) return;
 
-    const handleClick = (event: React.MouseEvent) => {
-        event.stopPropagation();
-        if (dragStartPosRef.current) {
-            const dx = Math.abs(event.clientX - dragStartPosRef.current.x);
-            const dy = Math.abs(event.clientY - dragStartPosRef.current.y);
-            if (dx > 4 || dy > 4) return;
+        const rect = container.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const dx = event.clientX - centerX;
+        const dy = event.clientY - centerY;
+
+        // 向节点内部移动时立即解除粘连并回弹原位（右触点禁止向左内移，左触点禁止向右内移）
+        const isInward = isRight ? dx <= 0 : dx >= 0;
+        if (isInward) {
+            setStickyOffset(null);
+            return;
         }
-        onClick?.(event);
+
+        const distance = Math.hypot(dx, dy);
+
+        if (distance > 0) {
+            // 仅向节点外侧粘连跟随
+            const maxFollow = isRight ? 28 : 18;
+            const pull = Math.min(distance * 0.7, maxFollow);
+            setStickyOffset({
+                x: (dx / distance) * pull,
+                y: (dy / distance) * pull,
+            });
+        }
     };
 
-    if (side === "right") {
-        return (
-            <div
-                data-connection-handle
-                className={`absolute z-30 flex size-12 cursor-crosshair items-center justify-center transition-opacity duration-150 ${
-                    visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
-                }`}
-                style={{
-                    left: "100%",
-                    top: "50%",
-                    transform: `translate(-50%, -50%) scale(${1 / safeScale})`,
-                    transformOrigin: "center center",
-                }}
-                onMouseDown={handleMouseDown}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={handleClick}
-                title="点击快捷创建 / 拖拽连线"
-                aria-label="连接触点"
-            >
-                <div
-                    className="flex size-6.5 items-center justify-center rounded-full border shadow-sm transition-all hover:scale-125 hover:shadow-md"
-                    style={{
-                        background: theme.node.panel,
-                        borderColor: theme.node.activeStroke || theme.node.stroke,
-                        color: theme.node.text,
-                    }}
-                >
-                    <Plus className="size-3.5 stroke-[2.5]" />
-                </div>
-            </div>
-        );
-    }
+    // 鼠标离开且没有发生拖拽时，触点平滑弹回原位
+    const handlePointerLeave = () => {
+        setIsHovered(false);
+        if (!isDraggingRef.current) {
+            setStickyOffset(null);
+        }
+    };
+
+    // 鼠标按下进入拖拽连线流程
+    const handlePointerDown = (event: React.PointerEvent) => {
+        event.stopPropagation();
+        if (event.button !== 0) return;
+
+        dragStartPosRef.current = { x: event.clientX, y: event.clientY };
+        isDraggingRef.current = true;
+
+        const onWindowPointerMove = (moveEvent: PointerEvent) => {
+            if (!isDraggingRef.current) return;
+            const dx = moveEvent.clientX - dragStartPosRef.current.x;
+            const dy = moveEvent.clientY - dragStartPosRef.current.y;
+
+            // 拖拽时若向节点内部移动，也禁止向内拉伸，保持在原位
+            const isInward = isRight ? dx <= 0 : dx >= 0;
+            if (isInward) {
+                setStickyOffset(null);
+                return;
+            }
+
+            const distance = Math.hypot(dx, dy);
+
+            if (distance < dragThreshold) {
+                // 拖拽拉伸
+                setStickyOffset({ x: dx * 0.65, y: dy * 0.65 });
+            } else {
+                // 达到拖拽阈值：触点弹回原位并抽出连线
+                isDraggingRef.current = false;
+                setStickyOffset(null);
+                window.removeEventListener("pointermove", onWindowPointerMove);
+                window.removeEventListener("pointerup", onWindowPointerUp);
+                onMouseDown(moveEvent as unknown as React.MouseEvent);
+            }
+        };
+
+        const onWindowPointerUp = (upEvent: PointerEvent) => {
+            if (!isDraggingRef.current) return;
+            isDraggingRef.current = false;
+            window.removeEventListener("pointermove", onWindowPointerMove);
+            window.removeEventListener("pointerup", onWindowPointerUp);
+
+            const dx = Math.abs(upEvent.clientX - dragStartPosRef.current.x);
+            const dy = Math.abs(upEvent.clientY - dragStartPosRef.current.y);
+            setStickyOffset(null);
+
+            // 未达到阈值松开时触发点击
+            if (dx < dragThreshold && dy < dragThreshold) {
+                onClick?.(upEvent as unknown as React.MouseEvent);
+            }
+        };
+
+        window.addEventListener("pointermove", onWindowPointerMove);
+        window.addEventListener("pointerup", onWindowPointerUp);
+    };
+
+    const isVisible = visible || isHovered || Boolean(stickyOffset);
+    const containerSize = isRight ? "size-20" : "size-14";
+    const bridgeClass = isRight ? "w-8 -left-8" : "w-6 -right-6";
 
     return (
         <div
+            ref={containerRef}
             data-connection-handle
-            className={`absolute z-30 flex size-12 cursor-crosshair items-center justify-center transition-opacity duration-150 ${
-                visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+            className={`absolute z-30 flex ${containerSize} cursor-crosshair items-center justify-center transition-opacity duration-150 ${
+                isVisible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
             }`}
             style={{
-                left: "0%",
+                left: isRight ? "calc(100% + 12px)" : "-12px",
                 top: "50%",
                 transform: `translate(-50%, -50%) scale(${1 / safeScale})`,
                 transformOrigin: "center center",
             }}
-            onMouseDown={onMouseDown}
-            onPointerDown={(e) => e.stopPropagation()}
+            onMouseEnter={() => setIsHovered(true)}
+            onPointerMove={handlePointerMove}
+            onPointerLeave={handlePointerLeave}
+            onPointerDown={handlePointerDown}
+            title={isRight ? "点击快捷创建 / 拖拽连线" : "拖拽连线"}
+            aria-label="连接触点"
         >
-            <div className="size-3 rounded-full border-2 transition-all hover:scale-125" style={{ background: theme.node.panel, borderColor: theme.node.muted }} />
+            <div className={`pointer-events-auto absolute top-0 h-full ${bridgeClass}`} />
+            {isRight ? (
+                <div
+                    className={`flex size-6.5 items-center justify-center rounded-full border shadow-sm ${
+                        isHovered || stickyOffset ? "scale-125 shadow-md" : ""
+                    }`}
+                    style={{
+                        background: theme.node.panel,
+                        borderColor: theme.node.activeStroke || theme.node.stroke,
+                        color: theme.node.text,
+                        transform: stickyOffset ? `translate(${stickyOffset.x}px, ${stickyOffset.y}px)` : "translate(0, 0)",
+                        transition: stickyOffset
+                            ? "transform 40ms ease-out"
+                            : "transform 240ms cubic-bezier(0.34, 1.56, 0.64, 1), scale 150ms ease",
+                    }}
+                >
+                    <Plus className="size-3.5 stroke-[2.5]" />
+                </div>
+            ) : (
+                <div
+                    className={`size-3 rounded-full border-2 ${isHovered || stickyOffset ? "scale-125" : ""}`}
+                    style={{
+                        background: theme.node.panel,
+                        borderColor: theme.node.muted,
+                        transform: stickyOffset ? `translate(${stickyOffset.x}px, ${stickyOffset.y}px)` : "translate(0, 0)",
+                        transition: stickyOffset
+                            ? "transform 40ms ease-out"
+                            : "transform 240ms cubic-bezier(0.34, 1.56, 0.64, 1), scale 150ms ease",
+                    }}
+                />
+            )}
         </div>
     );
 }

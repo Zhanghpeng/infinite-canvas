@@ -13,6 +13,10 @@ import {
     DEFAULT_COMFYUI_VIDEO_WORKFLOW,
     getWorkflowForModelProfile,
 } from "./comfyui-default-workflows";
+import {
+    buildProgressTopology,
+    ComfyuiProgressChannel,
+} from "./comfyui-progress-channel";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -696,6 +700,84 @@ export class ComfyuiError extends Error {
     }
 }
 
+/**
+ * 单个参考素材（图片 / 视频 / 音频）的上传上限，50 MB。
+ *
+ * ComfyUI 的 `--max-upload-size`（aiohttp `client_max_size`）默认只有 100 MB，
+ * 超限时服务端在读取请求体阶段直接返回 413；而这条 413 响应没有经过 CORS 中间件，
+ * 浏览器不允许 JS 读取，`fetch` 只会抛一个无细节的 TypeError，导致前端把
+ * 「素材过大」误报成「服务未启动 / CORS / 网络不通」。因此必须在上传前拦住。
+ * 取 50 MB（服务端默认值的 1/2）留出余量，兼容服务端被调小上限的情况。
+ */
+export const MAX_COMFYUI_ASSET_BYTES = 50 * 1024 * 1024;
+
+export type ComfyuiAssetKind = "image" | "video" | "audio" | "file";
+
+/** Thrown when a reference asset exceeds the per-file upload limit. */
+export class ComfyuiAssetTooLargeError extends ComfyuiError {
+    readonly filename: string;
+    readonly sizeBytes: number;
+    readonly limitBytes: number;
+    readonly kind: ComfyuiAssetKind;
+    readonly rejectedByServer: boolean;
+
+    constructor(params: {
+        filename: string;
+        sizeBytes: number;
+        limitBytes?: number;
+        kind?: ComfyuiAssetKind;
+        rejectedByServer?: boolean;
+    }) {
+        const filename = params.filename || "未命名素材";
+        const limitBytes = params.limitBytes ?? MAX_COMFYUI_ASSET_BYTES;
+        const kind = params.kind ?? comfyuiAssetKindFromFilename(filename);
+        const sizeText = formatComfyuiAssetSize(params.sizeBytes);
+        const limitText = formatComfyuiAssetSize(limitBytes);
+        const label = COMFYUI_ASSET_KIND_LABELS[kind];
+        const subject = `${label}「${filename}」大小 ${sizeText}`;
+        const advice = `${COMFYUI_ASSET_KIND_ADVICE[kind]}；若确需上传大文件，请在 ComfyUI 启动时用 --max-upload-size 调大服务端上限（单位 MB，默认 100）`;
+        super(
+            params.rejectedByServer
+                ? `ComfyUI 拒绝上传${subject}，超过服务端允许的上传大小。${advice}`
+                : `${subject}，超过本应用单文件上限 ${limitText}，已取消上传。${advice}`,
+        );
+        this.name = "ComfyuiAssetTooLargeError";
+        this.filename = filename;
+        this.sizeBytes = params.sizeBytes;
+        this.limitBytes = limitBytes;
+        this.kind = kind;
+        this.rejectedByServer = params.rejectedByServer ?? false;
+    }
+}
+
+const COMFYUI_ASSET_KIND_LABELS: Record<ComfyuiAssetKind, string> = {
+    image: "参考图片",
+    video: "参考视频",
+    audio: "参考音频",
+    file: "参考素材",
+};
+
+const COMFYUI_ASSET_KIND_ADVICE: Record<ComfyuiAssetKind, string> = {
+    image: "请先缩小图片分辨率或转成 JPEG 再上传",
+    video: "请先降低视频的分辨率、码率或时长再上传",
+    audio: "请换用时长或码率更低的音频文件",
+    file: "请换用更小的文件",
+};
+
+function comfyuiAssetKindFromFilename(filename: string): ComfyuiAssetKind {
+    const ext = filename.toLowerCase().split(".").pop() ?? "";
+    if (["mp4", "mov", "webm", "mkv", "avi", "m4v"].includes(ext)) return "video";
+    if (["mp3", "wav", "flac", "m4a", "aac", "ogg", "opus"].includes(ext)) return "audio";
+    if (["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif", "tif", "tiff"].includes(ext)) return "image";
+    return "file";
+}
+
+function formatComfyuiAssetSize(bytes: number) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 type ComfyuiNodeErrors = Record<string, {
     class_type?: string;
     errors?: { type?: string; message?: string; details?: string; extra_info?: { input_name?: string; input_config?: unknown; received_value?: unknown } }[];
@@ -868,7 +950,7 @@ function describeComfyuiEndpoint(url: string, method = "GET") {
 }
 
 function addComfyuiChannelContext(error: unknown, channelName: string): unknown {
-    if (!(error instanceof ComfyuiNetworkError || error instanceof ComfyuiApiError)) return error;
+    if (!(error instanceof ComfyuiNetworkError || error instanceof ComfyuiApiError || error instanceof ComfyuiAssetTooLargeError)) return error;
     const name = channelName || "未命名渠道";
     if (error.channelName === name) return error;
     // 批量轮询可能把同一异常交给多个订阅，渠道上下文必须各自独立。
@@ -897,8 +979,88 @@ async function comfyuiFetch(url: string, init?: RequestInit, baseUrl = url): Pro
     }
 }
 
+/**
+ * 在不做 base64 解码的前提下估算 data URL 的二进制体积。
+ * 非 base64 或非 data URL 返回 undefined，交由 blob.size 判定。
+ */
+function estimateComfyuiDataUrlBytes(dataUrl: string): number | undefined {
+    if (!dataUrl.startsWith("data:")) return undefined;
+    const commaIndex = dataUrl.indexOf(",");
+    if (commaIndex < 0) return undefined;
+    if (!dataUrl.slice(5, commaIndex).toLowerCase().includes("base64")) return undefined;
+    const payloadLength = dataUrl.length - commaIndex - 1;
+    const padding = dataUrl.endsWith("==") ? 2 : dataUrl.endsWith("=") ? 1 : 0;
+    return Math.max(0, Math.floor((payloadLength * 3) / 4) - padding);
+}
+
 function normalizeBaseUrl(baseUrl: string) {
     return baseUrl.trim().replace(/\/+$/, "");
+}
+
+const COMFYUI_CLIENT_ID_STORAGE_PREFIX = "infinite-canvas:comfyui-client-id:";
+const comfyClientIdCache = new Map<string, string>();
+
+/**
+ * 按 baseUrl 取稳定的 clientId。
+ * 提交任务与进度 WebSocket 必须共用同一个值：ComfyUI 把执行进度定向推送给
+ * 提交 prompt 时携带的 client_id，若每次提交都换新值，进度连接在下一个任务
+ * 开始执行时就会失效。持久化到 localStorage 以便刷新页面后重新接上。
+ */
+export function getComfyuiClientId(baseUrl: string): string {
+    const key = normalizeBaseUrl(baseUrl);
+    const cached = comfyClientIdCache.get(key);
+    if (cached) return cached;
+
+    let stored: string | null = null;
+    try {
+        stored = window.localStorage?.getItem(COMFYUI_CLIENT_ID_STORAGE_PREFIX + key) ?? null;
+    } catch {
+        stored = null;
+    }
+
+    const clientId = stored || nanoid();
+    comfyClientIdCache.set(key, clientId);
+
+    if (!stored) {
+        try {
+            window.localStorage?.setItem(COMFYUI_CLIENT_ID_STORAGE_PREFIX + key, clientId);
+        } catch {
+            // 隐私模式下写入会抛错：内存缓存已生效，不影响本次会话
+        }
+    }
+
+    return clientId;
+}
+
+/** 仅供测试：清空内存中的 clientId 缓存，模拟页面重载。 */
+export function resetComfyuiClientIds() {
+    comfyClientIdCache.clear();
+}
+
+const progressChannels = new Map<string, ComfyuiProgressChannel>();
+
+/** 按 baseUrl 取进度通道单例（同一 clientId 只能有一条活连接）。 */
+export function getProgressChannel(baseUrl: string): ComfyuiProgressChannel {
+    const normalized = normalizeBaseUrl(baseUrl);
+    let channel = progressChannels.get(normalized);
+    if (!channel) {
+        channel = new ComfyuiProgressChannel({ baseUrl: normalized, clientId: getComfyuiClientId(normalized) });
+        progressChannels.set(normalized, channel);
+    }
+    return channel;
+}
+
+export function resetComfyuiProgressChannels() {
+    for (const channel of progressChannels.values()) {
+        channel.dispose();
+    }
+    progressChannels.clear();
+}
+
+/** 登记任务拓扑，让进度通道能算出百分比与节点标签。 */
+function registerProgressTask(jobId: string, baseUrl: string, workflow: ComfyuiWorkflowJson) {
+    if (!jobId || !workflow) return;
+    getProgressChannel(baseUrl).registerTask(jobId, buildProgressTopology(workflow));
 }
 
 const comfyHostOsCache = new Map<string, "windows" | "linux">();
@@ -1042,7 +1204,7 @@ export function translateComfyuiValidationError(errMsg: string): string {
 async function submitJobInternal(workflow: ComfyuiWorkflowJson, baseUrl: string, token?: string): Promise<string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
-    const clientId = nanoid();
+    const clientId = getComfyuiClientId(baseUrl);
     const url = `${normalizeBaseUrl(baseUrl)}/prompt`;
     const request = { url, method: "POST" };
     const response = await comfyuiFetch(url, {
@@ -1073,6 +1235,7 @@ async function submitJobInternal(workflow: ComfyuiWorkflowJson, baseUrl: string,
         throw new ComfyuiApiError(`ComfyUI 工作流校验报错: ${friendly}`, undefined, request);
     }
     if (typeof data?.prompt_id !== "string") throw new ComfyuiApiError("ComfyUI /prompt 响应未返回 prompt_id", undefined, request);
+    registerProgressTask(data.prompt_id, baseUrl, workflow);
     return data.prompt_id;
 }
 
@@ -1545,6 +1708,8 @@ interface TrackedJobEntry {
     status: "pending" | "running" | "checking_history" | "unknown";
     queuePosition?: number;
     subscriptions: TrackedJobSubscription[];
+    progress?: { progressPct?: number; nodeLabel?: string; nodeClassType?: string; nodeStep?: number; nodeSteps?: number };
+    unsubscribeProgress?: () => void;
 }
 
 /**
@@ -1554,13 +1719,17 @@ interface TrackedJobEntry {
  */
 export class ComfyuiJobBatchPoller {
     readonly baseUrl: string;
+    private readonly progressChannel: ComfyuiProgressChannel | null;
     private jobs = new Map<string, TrackedJobEntry>();
     private isRunning = false;
     private hasRunningJobs = false;
     private consecutiveNetworkErrors = 0;
+    private wakeLoop: (() => void) | null = null;
+    private wakePending = false;
 
-    constructor(baseUrl: string) {
+    constructor(baseUrl: string, progressChannel?: ComfyuiProgressChannel | null) {
         this.baseUrl = normalizeBaseUrl(baseUrl);
+        this.progressChannel = progressChannel ?? getProgressChannel(this.baseUrl);
     }
 
     poll(
@@ -1616,7 +1785,9 @@ export class ComfyuiJobBatchPoller {
             if (entry.status === "pending" && entry.queuePosition !== undefined) {
                 onProgress?.("pending", { queuePosition: entry.queuePosition });
             } else if (entry.status === "running") {
-                onProgress?.("running");
+                const detail = this.progressDetail(entry.progress);
+                if (detail) onProgress?.("running", { ...detail });
+                else onProgress?.("running");
             }
 
             this.ensureLoop();
@@ -1634,8 +1805,78 @@ export class ComfyuiJobBatchPoller {
             entry.subscriptions.splice(idx, 1);
         }
         if (entry.subscriptions.length === 0) {
-            this.jobs.delete(jobId);
+            this.dropEntry(entry);
         }
+    }
+
+    /** 任务出队：先停掉进程通道订阅，再从调度表里摘掉。 */
+    private dropEntry(entry: TrackedJobEntry) {
+        this.jobs.delete(entry.jobId);
+        this.releaseProgress(entry);
+    }
+
+    private releaseProgress(entry: TrackedJobEntry) {
+        entry.unsubscribeProgress?.();
+        entry.unsubscribeProgress = undefined;
+        this.progressChannel?.forgetTask(entry.jobId);
+    }
+
+    /** 把通道快照翻译成调用方可消费的 detail：只带真正已知的字段。 */
+    private progressDetail(progress?: TrackedJobEntry["progress"]): Record<string, unknown> | undefined {
+        if (!progress || typeof progress.progressPct !== "number") return undefined;
+        return {
+            progressPct: progress.progressPct,
+            ...(progress.nodeClassType ? { progressNodeClassType: progress.nodeClassType } : {}),
+            ...(typeof progress.nodeStep === "number" ? { progressNodeStep: progress.nodeStep } : {}),
+            ...(typeof progress.nodeSteps === "number" ? { progressNodeSteps: progress.nodeSteps } : {}),
+        };
+    }
+
+    /** 任务开始执行后接入进度通道：排队阶段没有进度，不建连。 */
+    private startProgress(entry: TrackedJobEntry) {
+        if (entry.unsubscribeProgress || !this.progressChannel) return;
+        if (!this.progressChannel.hasTask(entry.jobId)) return;
+        entry.unsubscribeProgress = this.progressChannel.subscribe(
+            entry.jobId,
+            (snapshot) => {
+                entry.progress = { ...snapshot };
+                const detail = this.progressDetail(entry.progress);
+                if (this.jobs.get(entry.jobId) !== entry) return;
+                for (const sub of entry.subscriptions) {
+                    if (detail) sub.onProgress?.("running", { ...detail });
+                    else sub.onProgress?.("running");
+                }
+            },
+            // executing: null 意味着服务端已把该任务写入 history，不必再等一个轮询节拍
+            { onExecutionEnd: () => this.wake() },
+        );
+    }
+
+    private sleep(ms: number) {
+        if (this.wakePending) {
+            this.wakePending = false;
+            return Promise.resolve();
+        }
+        return new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+                this.wakeLoop = null;
+                resolve();
+            }, ms);
+            this.wakeLoop = () => {
+                clearTimeout(timer);
+                this.wakeLoop = null;
+                resolve();
+            };
+        });
+    }
+
+    private wake() {
+        if (this.wakeLoop) {
+            this.wakeLoop();
+            return;
+        }
+        // tick 正在执行中：记下来，等这一轮结束后的 sleep 立即返回，不再等满一个节拍
+        this.wakePending = true;
     }
 
     private ensureLoop() {
@@ -1649,7 +1890,7 @@ export class ComfyuiJobBatchPoller {
             await this.tick();
             if (!this.isRunning || this.jobs.size === 0) break;
             const interval = this.hasRunningJobs ? JOB_POLL_INTERVAL_RUNNING_MS : JOB_POLL_INTERVAL_PENDING_MS;
-            await new Promise((resolve) => setTimeout(resolve, interval));
+            await this.sleep(interval);
         }
         this.isRunning = false;
     }
@@ -1759,8 +2000,11 @@ export class ComfyuiJobBatchPoller {
                 entry.unseenTicks = 0;
                 entry.status = "running";
                 entry.queuePosition = undefined;
+                this.startProgress(entry);
+                const detail = this.progressDetail(entry.progress);
                 for (const sub of entry.subscriptions) {
-                    sub.onProgress?.("running");
+                    if (detail) sub.onProgress?.("running", { ...detail });
+                    else sub.onProgress?.("running");
                 }
             } else {
                 entry.unseenTicks++;
@@ -1788,7 +2032,7 @@ export class ComfyuiJobBatchPoller {
                 const jobEntry = data?.[entry.jobId];
 
                 if (jobEntry) {
-                    this.jobs.delete(entry.jobId);
+                    this.dropEntry(entry);
                     if (isComfyuiJobInterrupted(jobEntry)) {
                         for (const sub of entry.subscriptions) {
                             if (sub.signal && sub.onAbort) sub.signal.removeEventListener("abort", sub.onAbort);
@@ -1816,7 +2060,7 @@ export class ComfyuiJobBatchPoller {
                 } else {
                     const isLost = entry.seenInQueue ? entry.unseenTicks >= 2 : entry.unseenTicks >= 3;
                     if (isLost) {
-                        this.jobs.delete(entry.jobId);
+                        this.dropEntry(entry);
                         for (const sub of entry.subscriptions) {
                             if (sub.signal && sub.onAbort) sub.signal.removeEventListener("abort", sub.onAbort);
                             sub.reject(new ComfyuiJobLostError(entry.jobId));
@@ -1827,7 +2071,7 @@ export class ComfyuiJobBatchPoller {
                 if (error instanceof ComfyuiNetworkError) {
                     continue;
                 }
-                this.jobs.delete(entry.jobId);
+                this.dropEntry(entry);
                 for (const sub of entry.subscriptions) {
                     if (sub.signal && sub.onAbort) sub.signal.removeEventListener("abort", sub.onAbort);
                     sub.reject(error);
@@ -1840,10 +2084,13 @@ export class ComfyuiJobBatchPoller {
         this.isRunning = false;
         this.hasRunningJobs = false;
         this.consecutiveNetworkErrors = 0;
+        this.wakeLoop = null;
+        this.wakePending = false;
         for (const entry of this.jobs.values()) {
             for (const sub of entry.subscriptions) {
                 if (sub.signal && sub.onAbort) sub.signal.removeEventListener("abort", sub.onAbort);
             }
+            this.releaseProgress(entry);
         }
         this.jobs.clear();
     }
@@ -1866,6 +2113,7 @@ export function resetComfyuiBatchPollers() {
         poller.clear();
     }
     batchPollers.clear();
+    resetComfyuiProgressChannels();
 }
 
 export function pollJobRaw(
@@ -2339,8 +2587,17 @@ export async function uploadComfyuiAsset(
     filename = "image.png",
     signal?: AbortSignal,
 ): Promise<string> {
+    // data URL 体积可在解码前估算，避免为了一张超大图先构造上百 MB 的 Blob。
+    const estimatedBytes = estimateComfyuiDataUrlBytes(dataUrl);
+    if (estimatedBytes !== undefined && estimatedBytes > MAX_COMFYUI_ASSET_BYTES) {
+        throw new ComfyuiAssetTooLargeError({ filename, sizeBytes: estimatedBytes });
+    }
+
     const res = await fetch(dataUrl);
     const blob = await res.blob();
+    if (blob.size > MAX_COMFYUI_ASSET_BYTES) {
+        throw new ComfyuiAssetTooLargeError({ filename, sizeBytes: blob.size });
+    }
     const form = new FormData();
     const safeFilename = `${nanoid(8)}_${filename.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
     form.append("image", blob, safeFilename);
@@ -2358,6 +2615,9 @@ export async function uploadComfyuiAsset(
         body: form,
         signal,
     }, baseUrl);
+    if (uploadRes.status === 413) {
+        throw new ComfyuiAssetTooLargeError({ filename, sizeBytes: blob.size, rejectedByServer: true });
+    }
     if (!uploadRes.ok) {
         throw new ComfyuiApiError("ComfyUI 参考资源上传失败", uploadRes.status, request);
     }

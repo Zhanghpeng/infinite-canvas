@@ -10,7 +10,9 @@ import { cn } from "@/lib/utils";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { isImeComposing, isPlainEnterKey } from "@/lib/keyboard-event";
 import { useThemeStore } from "@/stores/use-theme-store";
-import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import type { CanvasResourceReference, CategorizedCanvasResources } from "@/lib/canvas/canvas-resource-references";
+import { getMotionPreset, type CanvasMotionPreset } from "@/lib/canvas/canvas-motion-presets";
+import { CanvasResourceMentionMenu } from "./canvas-resource-mention-menu";
 
 type Props = {
     value: string;
@@ -23,6 +25,10 @@ type Props = {
     placeholder?: string;
     allowClear?: boolean;
     onClear?: () => void;
+    categorizedResources?: CategorizedCanvasResources;
+    showMotionPresets?: boolean;
+    onConnectResource?: (sourceNodeId: string) => boolean | Promise<boolean>;
+    triggerMentionRef?: React.MutableRefObject<(() => void) | null>;
 };
 
 type MentionState = {
@@ -32,13 +38,29 @@ type MentionState = {
 
 type Token =
     | { type: "text"; value: string }
-    | { type: "reference"; nodeId: string };
+    | { type: "reference"; nodeId: string }
+    | { type: "motion"; motionId: string };
 
 // Prompt-panel contentEditable input: @ references embed thumbnail chips instead of plain label text.
 // Display labels stay localized, while the persisted value uses stable `@[node:<nodeId>]` tokens, so
 // serialization is independent of locale or label changes. Nodes that are missing or disconnected
 // keep their raw token as plain text instead of being dropped.
-export function CanvasPromptChipInput({ value, references, onChange, onSubmit, className, containerClassName, style, placeholder, allowClear = true, onClear }: Props) {
+export function CanvasPromptChipInput({
+    value,
+    references,
+    onChange,
+    onSubmit,
+    className,
+    containerClassName,
+    style,
+    placeholder,
+    allowClear = true,
+    onClear,
+    categorizedResources,
+    showMotionPresets = true,
+    onConnectResource,
+    triggerMentionRef,
+}: Props) {
     const { t } = useTranslation();
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const editorRef = useRef<HTMLDivElement>(null);
@@ -58,9 +80,27 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
     const candidates = useMemo(() => {
         if (!mention) return [];
         const query = mention.query.trim().toLowerCase();
+        if (categorizedResources) {
+            if (query) {
+                const allItems = [
+                    ...categorizedResources.images,
+                    ...categorizedResources.videos,
+                    ...categorizedResources.audios,
+                    ...categorizedResources.texts,
+                    ...categorizedResources.subjects,
+                ];
+                const seen = new Set<string>();
+                return allItems.filter((item) => {
+                    if (seen.has(item.nodeId)) return false;
+                    seen.add(item.nodeId);
+                    return `${item.label} ${item.title} ${item.kind} ${item.text || ""}`.toLowerCase().includes(query);
+                });
+            }
+            return categorizedResources.possible;
+        }
         if (!query) return activeReferences;
         return activeReferences.filter((item) => `${item.label} ${item.title} ${item.kind} ${item.text || ""}`.toLowerCase().includes(query));
-    }, [mention, activeReferences]);
+    }, [mention, categorizedResources, activeReferences]);
 
     // Rebuild the DOM from value when unfocused, or when a focused value is an external change rather than an emitted echo.
     useEffect(() => {
@@ -76,12 +116,38 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                 editor.append(document.createTextNode(token.value));
                 return;
             }
+            if (token.type === "motion") {
+                const motion = getMotionPreset(token.motionId);
+                if (motion) editor.append(createMotionChip(motion, theme));
+                else editor.append(document.createTextNode(`@[motion:${token.motionId}]`));
+                return;
+            }
             const reference = referenceByNodeId.get(token.nodeId);
             if (reference) editor.append(createReferenceChip(reference, theme, setImagePreview));
             else editor.append(document.createTextNode(`@[node:${token.nodeId}]`));
         });
         lastEmittedRef.current = value;
     }, [tokens, referenceByNodeId, theme, value]);
+
+    // 绑定外部命令式唤起 @ 菜单的 ref
+    useEffect(() => {
+        if (!triggerMentionRef) return;
+        triggerMentionRef.current = () => {
+            const editor = editorRef.current;
+            if (!editor) return;
+            editor.focus();
+            const selection = window.getSelection();
+            if (!selection?.rangeCount || !editor.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+                placeCaretAtEnd(editor);
+            }
+            const activeSel = window.getSelection();
+            if (activeSel?.rangeCount && editor.contains(activeSel.getRangeAt(0).commonAncestorContainer)) {
+                savedRangeRef.current = activeSel.getRangeAt(0).cloneRange();
+            }
+            setMention({ query: "", rect: caretRect() });
+            setActiveIndex(0);
+        };
+    }, [triggerMentionRef]);
 
     const emit = (next: string) => {
         lastEmittedRef.current = next;
@@ -98,7 +164,7 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
     const syncMention = () => {
         const text = textBeforeCaret();
         const match = /@([^\s@]*)$/.exec(text);
-        if (!match || !activeReferences.length) {
+        if (!match || (!categorizedResources && !activeReferences.length)) {
             closeMention();
             return;
         }
@@ -117,6 +183,14 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
     };
 
     const insertReference = (reference: CanvasResourceReference) => {
+        if (!reference.connected && onConnectResource) {
+            const success = onConnectResource(reference.nodeId);
+            if (success === false) {
+                closeMention();
+                return;
+            }
+        }
+
         const editor = editorRef.current;
         if (!editor) return;
         const selection = window.getSelection();
@@ -131,6 +205,44 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
 
         removeActiveMention(range);
         const chip = createReferenceChip(reference, theme, setImagePreview);
+        const space = document.createTextNode(" ");
+        const activeRange = selection?.rangeCount && editor.contains(selection.getRangeAt(0).commonAncestorContainer)
+            ? selection.getRangeAt(0)
+            : range && editor.contains(range.commonAncestorContainer)
+            ? range
+            : null;
+
+        if (activeRange) {
+            activeRange.insertNode(space);
+            activeRange.insertNode(chip);
+            activeRange.setStartAfter(space);
+            activeRange.collapse(true);
+            selection?.removeAllRanges();
+            selection?.addRange(activeRange);
+        } else {
+            editor.append(chip, space);
+            placeCaretAtEnd(editor);
+        }
+        closeMention();
+        emit(serializeEditor(editor));
+        editor.focus();
+    };
+
+    const insertMotionPreset = (motion: CanvasMotionPreset) => {
+        const editor = editorRef.current;
+        if (!editor) return;
+        const selection = window.getSelection();
+        let range: Range | null = null;
+        if (selection?.rangeCount && editor.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+            range = selection.getRangeAt(0);
+        } else if (savedRangeRef.current && editor.contains(savedRangeRef.current.commonAncestorContainer)) {
+            range = savedRangeRef.current;
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+        }
+
+        removeActiveMention(range);
+        const chip = createMotionChip(motion, theme);
         const space = document.createTextNode(" ");
         const activeRange = selection?.rangeCount && editor.contains(selection.getRangeAt(0).commonAncestorContainer)
             ? selection.getRangeAt(0)
@@ -260,7 +372,19 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                     </button>
                 </Popconfirm>
             ) : null}
-            {mention && candidates.length ? (
+            {mention && categorizedResources ? (
+                <CanvasResourceMentionMenu
+                    rect={mention.rect}
+                    query={mention.query}
+                    categorized={categorizedResources}
+                    theme={theme}
+                    activeIndex={activeIndex}
+                    showMotionPresets={showMotionPresets}
+                    onSelect={insertReference}
+                    onSelectMotion={insertMotionPreset}
+                    onClose={closeMention}
+                />
+            ) : mention && candidates.length ? (
                 <MentionMenu rect={mention.rect} references={candidates} activeIndex={Math.min(activeIndex, candidates.length - 1)} theme={theme} onSelect={insertReference} />
             ) : null}
             {imagePreview ? <Image src={imagePreview} alt={i18n.t("canvas.composer.imagePreview")} style={{ display: "none" }} preview={{ visible: true, src: imagePreview, onVisibleChange: (visible) => !visible && setImagePreview(null) }} /> : null}
@@ -378,6 +502,31 @@ function createReferenceChip(reference: CanvasResourceReference, theme: (typeof 
     return wrapper;
 }
 
+function createMotionChip(motion: CanvasMotionPreset, theme: (typeof canvasThemes)[keyof typeof canvasThemes]) {
+    const wrapper = document.createElement("span");
+    wrapper.contentEditable = "false";
+    wrapper.dataset.motionId = motion.id;
+    wrapper.className = "mx-px inline-flex h-6 max-w-44 select-none items-center gap-1.5 overflow-hidden rounded-md border px-2 text-xs leading-none align-middle";
+    Object.assign(wrapper.style, {
+        background: theme.toolbar.panel,
+        borderColor: theme.toolbar.border,
+        color: theme.node.text,
+    } as CSSProperties);
+    wrapper.title = `${motion.name}：${motion.prompt}`;
+
+    const iconSpan = document.createElement("span");
+    iconSpan.className = "shrink-0 opacity-70 text-sky-400";
+    iconSpan.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>`;
+
+    const textSpan = document.createElement("span");
+    textSpan.className = "truncate font-medium";
+    textSpan.textContent = motion.name;
+
+    wrapper.appendChild(iconSpan);
+    wrapper.appendChild(textSpan);
+    return wrapper;
+}
+
 function serializeEditor(editor: HTMLElement) {
     return serializeNodes(editor.childNodes).replace(/﻿/g, "");
 }
@@ -388,7 +537,9 @@ function serializeNodes(nodes: NodeListOf<ChildNode>) {
         if (node.nodeType === Node.TEXT_NODE) result += node.textContent || "";
         if (!(node instanceof HTMLElement)) return;
         const refNodeId = node.dataset.refNodeId;
+        const motionId = node.dataset.motionId;
         if (refNodeId) result += `@[node:${refNodeId}]`;
+        else if (motionId) result += `@[motion:${motionId}]`;
         else if (node.tagName === "BR") result += "\n";
         else result += serializeNodes(node.childNodes);
     });
@@ -448,7 +599,7 @@ function adjacentReferenceNode(range: Range, key: string) {
 function findReferenceSibling(node: Node, previous: boolean, includeSelf = false): HTMLElement | null {
     let current: Node | null = includeSelf ? node : previous ? node.previousSibling : node.nextSibling;
     while (current && current.nodeType === Node.TEXT_NODE && !(current.textContent || "").trim()) current = previous ? current.previousSibling : current.nextSibling;
-    return current instanceof HTMLElement && current.dataset.refNodeId ? current : null;
+    return current instanceof HTMLElement && (Boolean(current.dataset.refNodeId) || Boolean(current.dataset.motionId)) ? current : null;
 }
 
 function textBeforeCaret() {
@@ -487,14 +638,18 @@ function placeCaretAtEnd(element: HTMLElement) {
     selection?.addRange(range);
 }
 
-// Split value into text fragments and stable `@[node:<nodeId>]` reference tokens.
+// Split value into text fragments and stable `@[node:<nodeId>]` or `@[motion:<motionId>]` reference tokens.
 function parseTokens(value: string): Token[] {
     const tokens: Token[] = [];
     let lastIndex = 0;
-    for (const match of value.matchAll(/@\[node:([^\]]+)\]/g)) {
+    for (const match of value.matchAll(/@\[(node|motion):([^\]]+)\]/g)) {
         if (match.index === undefined) continue;
         if (match.index > lastIndex) tokens.push({ type: "text", value: value.slice(lastIndex, match.index) });
-        tokens.push({ type: "reference", nodeId: match[1] });
+        if (match[1] === "motion") {
+            tokens.push({ type: "motion", motionId: match[2] });
+        } else {
+            tokens.push({ type: "reference", nodeId: match[2] });
+        }
         lastIndex = match.index + match[0].length;
     }
     if (lastIndex < value.length) tokens.push({ type: "text", value: value.slice(lastIndex) });

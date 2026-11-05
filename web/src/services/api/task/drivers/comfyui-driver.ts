@@ -231,11 +231,19 @@ export class ComfyuiTaskDriver implements TaskLifecycleDriver {
             }
 
             if (status === "running") {
-                options.onProgress({
-                    jobId,
-                    phase: "running",
-                    raw: detail,
-                });
+                const runningSnapshot: TaskSnapshot = { jobId, phase: "running", raw: detail };
+                if (typeof detail?.progressPct === "number") {
+                    runningSnapshot.progressPct = detail.progressPct;
+                }
+                const classType = typeof detail?.progressNodeClassType === "string" ? detail.progressNodeClassType : undefined;
+                if (classType) {
+                    runningSnapshot.progressNode = {
+                        classType,
+                        ...(typeof detail?.progressNodeStep === "number" ? { step: detail.progressNodeStep } : {}),
+                        ...(typeof detail?.progressNodeSteps === "number" ? { steps: detail.progressNodeSteps } : {}),
+                    };
+                }
+                options.onProgress(runningSnapshot);
                 return;
             }
 

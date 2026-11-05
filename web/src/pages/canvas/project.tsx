@@ -95,6 +95,7 @@ import {
     snapNodesIntoGroup,
     syncGroupMembershipAfterTransform,
     ungroupCanvasGroup,
+    validateInputConnection,
 } from "@/lib/canvas/canvas-node-geometry";
 import {
     audioExtension,
@@ -120,6 +121,7 @@ import {
     snapshotVideoToolInputs,
     shouldMarkGenerationSourceStatus,
     updateNodeGenerationProgress,
+    type NodeGenerationProgressDetail,
 } from "@/lib/canvas/canvas-generation-helpers";
 import { getNodeDefinition, isBuiltinNodeType as isBuiltinType, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
 import { registerBuiltinNodes } from "@/components/canvas/nodes/builtin-nodes";
@@ -442,6 +444,7 @@ function InfiniteCanvasPage() {
     const nodesRef = useRef(nodes);
     const connectionsRef = useRef(connections);
     const selectedNodeIdsRef = useRef(selectedNodeIds);
+    const selectedConnectionIdRef = useRef(selectedConnectionId);
     const viewportRef = useRef(viewport);
     const focusAnimRef = useRef<number | null>(null);
     const generateNodeRef = useRef<((nodeId: string, mode: CanvasNodeGenerationMode, prompt: string, intent?: CanvasGenerationIntent) => Promise<void>) | null>(null);
@@ -811,11 +814,12 @@ function InfiniteCanvasPage() {
         nodesRef.current = nodes;
         connectionsRef.current = connections;
         selectedNodeIdsRef.current = selectedNodeIds;
+        selectedConnectionIdRef.current = selectedConnectionId;
         viewportRef.current = viewport;
         connectingParamsRef.current = connectingParams;
         connectionTargetNodeIdRef.current = connectionTargetNodeId;
         pendingConnectionCreateRef.current = pendingConnectionCreate;
-    }, [nodes, connections, selectedNodeIds, viewport, connectingParams, connectionTargetNodeId, pendingConnectionCreate]);
+    }, [nodes, connections, selectedNodeIds, selectedConnectionId, viewport, connectingParams, connectionTargetNodeId, pendingConnectionCreate]);
 
     useLayoutEffect(() => {
         selectionBoxRef.current = selectionBox;
@@ -1427,6 +1431,7 @@ function InfiniteCanvasPage() {
 
     const deleteConnection = useCallback((connectionId: string) => {
         if (isViewerRef.current) return;
+        connectionsRef.current = connectionsRef.current.filter((conn) => conn.id !== connectionId);
         setConnections((prev) => prev.filter((conn) => conn.id !== connectionId));
         setSelectedConnectionId((current) => (current === connectionId ? null : current));
         setContextMenu((current) => (current?.type === "connection" && current.connectionId === connectionId ? null : current));
@@ -1436,6 +1441,36 @@ function InfiniteCanvasPage() {
         if (isViewerRef.current) return;
         setConnections((prev) => prev.filter((connection) => connection.fromNodeId !== fromNodeId || connection.toNodeId !== toNodeId));
     }, []);
+
+    const connectNodeReference = useCallback(
+        (fromNodeId: string, toNodeId: string): boolean => {
+            if (isViewerRef.current) return false;
+            if (fromNodeId === toNodeId) return false;
+            if (connectionsRef.current.some((c) => c.fromNodeId === fromNodeId && c.toNodeId === toNodeId)) {
+                return true;
+            }
+            const rejection = getConnectionRejectionDetail(fromNodeId, toNodeId, nodesRef.current, connectionsRef.current);
+            if (rejection) {
+                message.warning(rejection.defaultMessage);
+                return false;
+            }
+            const validated = validateInputConnection(fromNodeId, toNodeId, nodesRef.current, connectionsRef.current);
+            if (!validated) {
+                message.warning(t("canvas.projectPage.configConnection", { defaultValue: "连接不兼容或无法连接" }));
+                return false;
+            }
+            const newConn: CanvasConnection = {
+                id: nanoid(),
+                fromNodeId: validated.fromNodeId,
+                toNodeId: validated.toNodeId,
+                kind: "input",
+            };
+            connectionsRef.current = [...connectionsRef.current, newConn];
+            setConnections((prev) => [...prev, newConn]);
+            return true;
+        },
+        [message, t],
+    );
 
     const reorderNodeReferences = useCallback((toNodeId: string, orderedSourceNodeIds: string[]) => {
         if (isViewerRef.current) return;
@@ -5521,14 +5556,8 @@ function InfiniteCanvasPage() {
                     const fullPrompt = (builtinPanel.promptPrefix || "") + scene;
                     const context = await hydrateNodeGenerationContext(buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, fullPrompt));
                     const refs = context.referenceImages;
-                    const onProgress = (status: string, detail?: { jobId?: string; queuePosition?: number }) => {
-                        if (status === "submitted" && detail?.jobId) {
-                            setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, jobId: detail.jobId } } : node)));
-                        } else if (status === "pending" && typeof detail?.queuePosition === "number") {
-                            setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, queuePosition: detail.queuePosition } } : node)));
-                        } else if (status === "running") {
-                            setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, queuePosition: undefined } } : node)));
-                        }
+                    const onProgress = (status: string, detail?: NodeGenerationProgressDetail) => {
+                        setNodes((prev) => updateNodeGenerationProgress(prev, nodeId, status, detail));
                     };
                     const image = refs.length
                         ? await requestEdit({ ...generationConfig, count: "1" }, context.prompt, refs, undefined, { signal: controller.signal, seed: nextSeed, onProgress }).then((items) => items[0])
@@ -5726,7 +5755,7 @@ function InfiniteCanvasPage() {
                         imageIds.map(async (imageId, index) => {
                             const slotSeed = (nextSeed + index) % 9007199254740991;
                             try {
-                                const handleBatchProgress = (status: string, detail?: { jobId?: string; queuePosition?: number; message?: string }) => {
+                                const handleBatchProgress = (status: string, detail?: NodeGenerationProgressDetail) => {
                                     setNodes((prev) => updateNodeGenerationProgress(prev, rootId, status, detail, imageId));
                                 };
                                 const image = referenceImages.length
@@ -5916,13 +5945,7 @@ function InfiniteCanvasPage() {
                                 referenceAudios: generationContext.referenceAudios,
                                 seed: nextSeed,
                                 onProgress: (status, detail) => {
-                                    if (status === "submitted" && detail?.jobId) {
-                                        setNodes((prev) => prev.map((node) => (node.id === videoId ? { ...node, metadata: { ...node.metadata, jobId: detail.jobId } } : node)));
-                                    } else if (status === "pending" && typeof detail?.queuePosition === "number") {
-                                        setNodes((prev) => prev.map((node) => (node.id === videoId ? { ...node, metadata: { ...node.metadata, queuePosition: detail.queuePosition } } : node)));
-                                    } else if (status === "running") {
-                                        setNodes((prev) => prev.map((node) => (node.id === videoId ? { ...node, metadata: { ...node.metadata, queuePosition: undefined } } : node)));
-                                    }
+                                    setNodes((prev) => updateNodeGenerationProgress(prev, videoId, status, detail));
                                 },
                             }),
                         );
@@ -6211,22 +6234,22 @@ function InfiniteCanvasPage() {
                                     maxLength: sourceNode?.metadata?.maxLength,
                                     thinking: sourceNode?.metadata?.thinking,
                                     onProgress: (status, detail) => {
-                                        if (status === "submitted" && detail?.jobId) {
-                                            setNodes((prev) =>
-                                                prev.map((n) =>
-                                                    n.id === rootId
-                                                        ? {
-                                                              ...n,
-                                                              metadata: {
-                                                                  ...n.metadata,
-                                                                  ...(textCount === 1 ? { jobId: detail.jobId, isTimeout: undefined } : {}),
-                                                                  texts: n.metadata?.texts?.map((item) => (item.id === textId ? { ...item, jobId: detail.jobId, isTimeout: undefined } : item)),
-                                                              },
-                                                          }
-                                                        : n,
-                                                ),
+                                        setNodes((prev) => {
+                                            const next = updateNodeGenerationProgress(prev, rootId, status, detail, textId);
+                                            if (status !== "submitted" || !detail?.jobId) return next;
+                                            return next.map((n) =>
+                                                n.id === rootId
+                                                    ? {
+                                                          ...n,
+                                                          metadata: {
+                                                              ...n.metadata,
+                                                              ...(textCount === 1 ? { jobId: detail.jobId, isTimeout: undefined } : {}),
+                                                              texts: n.metadata?.texts?.map((item) => (item.id === textId ? { ...item, jobId: detail.jobId, isTimeout: undefined } : item)),
+                                                          },
+                                                      }
+                                                    : n,
                                             );
-                                        }
+                                        });
                                     },
                                 },
                             );
@@ -6531,7 +6554,7 @@ function InfiniteCanvasPage() {
                 } else {
                     const referenceImages = context.referenceImages;
                     const useEdit = saved.generationType === "edit" || referenceImages.length > 0;
-                    const handleRetryProgress = (status: string, detail?: { jobId?: string; queuePosition?: number; message?: string }) => {
+                    const handleRetryProgress = (status: string, detail?: NodeGenerationProgressDetail) => {
                         setNodes((prev) => updateNodeGenerationProgress(prev, node.id, status, detail, imageId));
                     };
                     const image = useEdit
@@ -6801,6 +6824,7 @@ function InfiniteCanvasPage() {
                     onGenerate={handleGenerateNode}
                     onStop={confirmStopGeneration}
                     onDisconnectReference={disconnectNodeReference}
+                    onConnectReference={connectNodeReference}
                     onStartReferenceSelection={startNodeReferenceSelection}
                     onReorderReferences={reorderNodeReferences}
                     onLocateNode={focusNode}
@@ -6828,7 +6852,7 @@ function InfiniteCanvasPage() {
                     }}
                 />
             ),
-        [cancelPromptAssistant, configInputsById, confirmStopGeneration, connectedNodesByNodeId, disconnectNodeReference, focusNode, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, handlePromptAssistantChange, mentionReferencesByNodeId, nodes, promptAssistantConfigOf, promptAssistantNodeId, renderPluginPanel, reorderNodeReferences, runTextNodeSkill, runningNodeIds, startNodeReferenceSelection, t],
+        [cancelPromptAssistant, configInputsById, confirmStopGeneration, connectNodeReference, connectedNodesByNodeId, disconnectNodeReference, focusNode, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, handlePromptAssistantChange, mentionReferencesByNodeId, nodes, promptAssistantConfigOf, promptAssistantNodeId, renderPluginPanel, reorderNodeReferences, runTextNodeSkill, runningNodeIds, startNodeReferenceSelection, t],
     );
 
     const renderNodeContentPanel = useCallback(
@@ -6935,12 +6959,17 @@ function InfiniteCanvasPage() {
                                         connection={connection}
                                         from={from}
                                         to={to}
+                                        viewport={viewport}
                                         active={selectedConnectionId === connection.id || relatedHighlight.connectionIds.has(connection.id)}
+                                        isSelected={selectedConnectionId === connection.id}
                                         invalid={invalidConnectionIds.has(connection.id)}
-                                        onSelect={() => {
+                                        onSelect={(event) => {
                                             setSelectedConnectionId(connection.id);
                                             setSelectedNodeIds(new Set());
                                             setContextMenu(null);
+                                        }}
+                                        onDisconnect={() => {
+                                            deleteConnection(connection.id);
                                         }}
                                         onContextMenu={(event) => {
                                             setSelectedConnectionId(connection.id);

@@ -6,6 +6,7 @@ import { CanvasNodeType, type CanvasConnection, type CanvasGenerationReferenceSn
 import { getGenerationResourceNodes, getGroupResourceNodes } from "@/lib/canvas/canvas-resource-references";
 import { resolveAudioEdgeMode, supportsAudioEdgeModes } from "@/lib/canvas/canvas-audio-channels";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
+import { compileMotionTokens } from "@/lib/canvas/canvas-motion-presets";
 
 /** 只登记不上工作流的配音轨：成片对白，用户在剪辑软件里合。 */
 export type NodeGenerationAudioTrack = {
@@ -108,7 +109,7 @@ export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData
     }
 
     nextPrompt += cleanPrompt.slice(lastIndex);
-    const resolvedPrompt = nextPrompt.trim();
+    const resolvedPrompt = compileMotionTokens(nextPrompt.trim());
 
     const textResources = resourceInputs.filter((input) => input.type === "text" && Boolean(input.text));
     const unconsumedTexts = textResources
@@ -222,7 +223,7 @@ function buildComposerGenerationContext(inputs: NodeGenerationInput[], nodes: Ca
 
     if (!hasToken) {
         return {
-            prompt: prompt.trim(),
+            prompt: compileMotionTokens(prompt.trim()),
             generationReferences: [],
             referenceImages: [],
             referenceVideos: [],
@@ -236,7 +237,7 @@ function buildComposerGenerationContext(inputs: NodeGenerationInput[], nodes: Ca
     }
 
     return {
-        prompt: nextPrompt.trim(),
+        prompt: compileMotionTokens(nextPrompt.trim()),
         generationReferences: snapshotGenerationInputs([...snapshotInputs.values()]),
         referenceImages,
         referenceVideos,

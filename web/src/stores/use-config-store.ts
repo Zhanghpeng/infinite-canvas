@@ -187,9 +187,25 @@ export const COMFYUI_CLOUD_DEFAULT_MODELS: ChannelModel[] = COMFYUI_BUILTIN_DEFA
 export const COMFYUI_DEFAULT_MODELS: ChannelModel[] = COMFYUI_BUILTIN_DEFAULT_MODELS;
 
 /**
- * 默认主机支持的视频模型 ID 清单（开箱即用支持全部 4 款 MiniMax H3 FP8 模型）
+ * 默认主机支持的视频模型 ID 清单（开箱即用支持 4 款 MiniMax H3 FP8 + 4 款 INT8 量化模型）
  */
 export const DEFAULT_SUPPORTED_VIDEO_MODEL_IDS: string[] = [
+    "omni-video-minimax-h3-fp8-4step-pdmd",
+    "omni-video-minimax-h3-fp8",
+    "frame-video-minimax-h3-fp8-4step-pdmd",
+    "frame-video-minimax-h3-fp8",
+    "omni-video-minimax-h3-int8-4step-pdmd",
+    "frame-video-minimax-h3-int8-4step-pdmd",
+    "omni-video-minimax-h3-int8-6step-pika",
+    "frame-video-minimax-h3-int8-6step-pika",
+];
+
+/**
+ * 历史默认视频模型集合（INT8 量化模型未纳入默认清单前的版本）。
+ * 用于识别「该主机的支持模型清单来自旧版默认值」，从而自动补齐后续新增的内置模型，
+ * 避免旧配置永久看不到新模型（该字段无任何 UI 编辑入口）。
+ */
+export const LEGACY_DEFAULT_SUPPORTED_VIDEO_MODEL_IDS: string[] = [
     "omni-video-minimax-h3-fp8-4step-pdmd",
     "omni-video-minimax-h3-fp8",
     "frame-video-minimax-h3-fp8-4step-pdmd",
@@ -847,6 +863,27 @@ function mergeBuiltinWorkflows(existingWorkflows: ComfyWorkflowItem[] | undefine
     return result;
 }
 
+/**
+ * 内置视频模型支持清单演进（与 mergeBuiltinWorkflows 同构）：
+ * 仅当主机清单看上去来自旧版默认值——包含全部旧默认视频模型、且包含至少一个非视频内置模型——
+ * 才把新增的内置视频模型补到末尾；显式裁剪的视频子集与空数组不被污染。
+ */
+function mergeBuiltinSupportedModelIds(existing: string[] | undefined): string[] {
+    if (!Array.isArray(existing) || existing.length === 0) {
+        return Array.isArray(existing) ? existing : [];
+    }
+    const isLegacyDefaultDerived =
+        LEGACY_DEFAULT_SUPPORTED_VIDEO_MODEL_IDS.every((id) => existing.includes(id)) &&
+        existing.some((id) => DEFAULT_SUPPORTED_IMAGE_MODEL_IDS.includes(id) || id.startsWith("image-") || id.startsWith("text-") || id.startsWith("audio-"));
+    if (!isLegacyDefaultDerived) return existing;
+
+    const result = [...existing];
+    for (const id of DEFAULT_SUPPORTED_VIDEO_MODEL_IDS) {
+        if (!result.includes(id)) result.push(id);
+    }
+    return result;
+}
+
 export function createModelChannel(channel?: Partial<ModelChannel>, options?: { preprovisionComfyuiModels?: boolean }): ModelChannel {
     const isCloud = isCloudChannel(channel);
     const workflows = getDefaultComfyuiWorkflows(channel);
@@ -862,7 +899,9 @@ export function createModelChannel(channel?: Partial<ModelChannel>, options?: { 
         models: models.length ? models : options?.preprovisionComfyuiModels !== false ? [...defaultModels] : [],
         comfyuiProxyUrl: channel?.comfyuiProxyUrl !== undefined ? channel.comfyuiProxyUrl : isCloud ? "" : "http://127.0.0.1:8188",
         comfyuiProxyToken: channel?.comfyuiProxyToken !== undefined ? channel.comfyuiProxyToken : "",
-        supportedModelIds: channel?.supportedModelIds !== undefined ? channel.supportedModelIds : [...DEFAULT_SUPPORTED_MODEL_IDS],
+        supportedModelIds: channel?.supportedModelIds !== undefined
+            ? mergeBuiltinSupportedModelIds(channel.supportedModelIds)
+            : [...DEFAULT_SUPPORTED_MODEL_IDS],
         workflows: mergeBuiltinWorkflows(channel?.workflows, defaultWorkflowItems),
         comfyuiT2iWorkflow: channel?.comfyuiT2iWorkflow !== undefined ? channel.comfyuiT2iWorkflow : workflows.t2i,
         comfyuiI2iWorkflow: channel?.comfyuiI2iWorkflow !== undefined ? channel.comfyuiI2iWorkflow : workflows.i2i,
